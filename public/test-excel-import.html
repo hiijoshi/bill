@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Excel Import Test</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            padding: 20px; 
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 2px solid #ccc;
+            border-radius: 8px;
+            background-color: #f9f9f9;
+        }
+        .success { color: green; font-weight: bold; }
+        .error { color: red; font-weight: bold; }
+        .file-info { 
+            margin: 10px 0; 
+            padding: 10px; 
+            background-color: #e3f2fd;
+            border-radius: 4px;
+        }
+        button {
+            margin: 5px;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover { background-color: #0056b3; }
+        .button:disabled { 
+            background-color: #6c757d; 
+            cursor: not-allowed; 
+            opacity: 0.6;
+        }
+    </style>
+</head>
+<body>
+    <h1>Excel Import Test</h1>
+    
+    <div class="test-section">
+        <h2>Test Excel Import Functionality</h2>
+        
+        <button onclick="testDownload()">📥 Test Download Template</button>
+        <button onclick="testFileSelect()">📁 Test File Selection</button>
+        <button onclick="testImport()">📤 Test Import Process</button>
+        
+        <div id="test-results"></div>
+    </div>
+
+    <script>
+        // Mock data for testing
+        const mockExcelData = [
+            {
+                'Bill Number': 'PUR-1001',
+                'Bill Date': '2024-01-15',
+                'Farmer Name': 'Test Farmer 1',
+                'Product Name': 'Wheat',
+                'Weight': 1000,
+                'Rate': 25
+                'Payable Amount': 25000
+            },
+            {
+                'Bill Number': 'PUR-1002',
+                'Bill Date': '2024-01-16',
+                'Farmer Name': 'Test Farmer 2',
+                'Product Name': 'Rice',
+                'Weight': 500,
+                'Rate': 30,
+                'Payable Amount': 15000
+            }
+        ];
+
+        function createMockFile() {
+            const data = new Blob([mockExcelData[0], mockExcelData[1]].map(row => 
+                Object.keys(row).map(key => `${key},${row[key]}`).join('\n')
+            ).join('\n'), 
+                { type: 'text/csv;charset=utf-8' }
+            );
+            return new File(['test.xlsx'], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        }
+
+        async function testDownload() {
+            console.log('📥 Testing Download Template...');
+            
+            try {
+                const response = await fetch('/api/purchase-bills/template?companyId=TEST');
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'purchase-bills-template.xlsx';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    
+                    document.getElementById('test-results').innerHTML += 
+                        '<div class="success">✅ Download Template: SUCCESS</div>';
+                } else {
+                    document.getElementById('test-results').innerHTML += 
+                        '<div class="error">❌ Download Template: FAILED</div>';
+                }
+            } catch (error) {
+                console.error('Download error:', error);
+                document.getElementById('test-results').innerHTML += 
+                    '<div class="error">❌ Download Error: ' + error.message + '</div>';
+            }
+        }
+
+        async function testFileSelect() {
+            console.log('📁 Testing File Selection...');
+            
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.xlsx,.xls';
+            input.onchange = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const fileName = file.name;
+                    const fileSize = (file.size / 1024).toFixed(2) + ' KB';
+                    
+                    document.getElementById('test-results').innerHTML += 
+                        '<div class="file-info">📁 File Selected: ' + fileName + ' | Size: ' + fileSize + '</div>';
+                } else {
+                    document.getElementById('test-results').innerHTML += 
+                        '<div class="error">❌ No file selected</div>';
+                }
+            };
+            
+            document.body.appendChild(input);
+            input.click();
+        }
+
+        async function testImport() {
+            console.log('📤 Testing Import Process...');
+            
+            const input = document.querySelector('input[type="file"]');
+            if (!input || !input.files[0]) {
+                document.getElementById('test-results').innerHTML += 
+                        '<div class="error">❌ No file selected for import</div>';
+                return;
+            }
+            
+            const file = input.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            document.getElementById('test-results').innerHTML += 
+                        '<div class="file-info">📤 Importing: ' + file.name + '...</div>';
+            
+            try {
+                const response = await fetch('/api/purchase-bills/import?companyId=TEST', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    document.getElementById('test-results').innerHTML += 
+                        '<div class="success">✅ Import SUCCESS: ' + result.imported + ' bills imported</div>';
+                        
+                    if (result.errors > 0) {
+                        document.getElementById('test-results').innerHTML += 
+                            '<div class="error">Errors: ' + result.errors + '</div>';
+                    }
+                } else {
+                    document.getElementById('test-results').innerHTML += 
+                        '<div class="error">❌ Import FAILED: ' + (result.error || 'Unknown error') + '</div>';
+                }
+            } catch (error) {
+                console.error('Import error:', error);
+                document.getElementById('test-results').innerHTML += 
+                        '<div class="error">❌ Import Error: ' + error.message + '</div>';
+            }
+        }
+
+        // Clear results on load
+        window.onload = function() {
+            document.getElementById('test-results').innerHTML = 
+                '<h2>Test Results</h2>' +
+                '<div class="test-section">' +
+                    '<button onclick="testDownload()">📥 Test Download Template</button>' +
+                    '<button onclick="testFileSelect()">📁 Test File Selection</button>' +
+                    '<button onclick="testImport()">📤 Test Import Process</button>' +
+                    '<div id="test-results"></div>' +
+                '</div>';
+        };
+    </script>
+</body>
+</html>

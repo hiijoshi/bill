@@ -1,0 +1,78 @@
+{
+  "banks": [
+    {
+      "id": "f1358c21-f3b3-4f08-9eee-8e6a0ea10086",
+      "companyId": "cmm997iel00026l9r1uajahfk",
+      "name": "bob",
+      "branch": "manasa",
+      "ifscCode": "BARB0131243",
+      "accountNumber": "436589096845698",
+      "address": "manasa",
+      "phone": "8655309645",
+      "isActive": true,
+      "createdAt": "2026-03-09T14:43:54.599Z",
+      "updatedAt": "2026-03-09T14:43:54.599Z"
+    }
+  ],
+  "markas": [
+    {
+      "markaNumber": "MK-101",
+      "description": "Soyabean first quality",
+      "isActive": true,
+      "id": "9db523df-8913-438b-a386-75d19903f0cb",
+      "companyId": "cmm3fobzs0001103qepdl0qan",
+      "createdAt": "2026-02-27T04:25:10.204Z",
+      "updatedAt": "2026-02-27T04:25:10.204Z"
+    },
+    {
+      "markaNumber": "MK-102",
+      "description": "Wheat standard quality",
+      "isActive": true,
+      "id": "605b846b-567a-4881-b7b4-6ef8a45a1dc5",
+      "companyId": "cmm3fobzs0001103qepdl0qan",
+      "createdAt": "2026-02-27T04:25:10.204Z",
+      "updatedAt": "2026-02-27T04:25:10.204Z"
+    },
+    {
+      "markaNumber": "MK-103",
+      "description": "Chana premium",
+      "isActive": true,
+      "id": "9766bba2-457d-4f4a-8910-1db3f9be2350",
+      "companyId": "cmm3fobzs0001103qepdl0qan",
+      "createdAt": "2026-02-27T04:25:10.204Z",
+      "updatedAt": "2026-02-27T04:25:10.204Z"
+    }
+  ],
+  "paymentModes": [
+    {
+      "id": "d8d6fb78-d18c-498e-a7be-b995cb6618d8",
+      "companyId": "cmm997iel00026l9r1uajahfk",
+      "name": "cash",
+      "code": "C",
+      "description": "none",
+      "isActive": true,
+      "createdAt": "2026-03-03T05:25:49.497Z",
+      "updatedAt": "2026-03-09T14:23:56.543Z"
+    },
+    {
+      "id": "669213ae-e695-471d-be70-0150fa5719dd",
+      "companyId": "cmm997iel00026l9r1uajahfk",
+      "name": "online",
+      "code": "O",
+      "description": null,
+      "isActive": true,
+      "createdAt": "2026-03-09T14:24:10.171Z",
+      "updatedAt": "2026-03-09T14:24:10.171Z"
+    },
+    {
+      "id": "b3e37a17-56a3-4f4d-b7c6-09b33d32c7e5",
+      "companyId": "cmm997iel00026l9r1uajahfk",
+      "name": "cheque",
+      "code": "CQ",
+      "description": null,
+      "isActive": true,
+      "createdAt": "2026-03-09T14:24:28.893Z",
+      "updatedAt": "2026-03-09T14:24:28.893Z"
+    }
+  ]
+}

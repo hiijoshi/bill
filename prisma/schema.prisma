@@ -1,0 +1,438 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Trader {
+  id        String   @id @default(cuid())
+  name      String
+  locked    Boolean  @default(false)
+  deletedAt DateTime?
+  // relations
+  users     User[]
+  companies Company[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([deletedAt], map: "idx_traders_deleted_at")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  traderId  String
+  trader    Trader   @relation(fields: [traderId], references: [id], onDelete: Cascade)
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  userId    String
+  password  String
+  name      String?
+  role      String?  // super_admin/trader_admin/company_admin/company_user
+  locked    Boolean  @default(false)
+  deletedAt DateTime?
+  // relations
+  permissions UserPermission[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([traderId, userId])
+  @@index([companyId], map: "idx_users_company_id")
+  @@index([deletedAt], map: "idx_users_deleted_at")
+}
+
+model Company {
+  id            String   @id @default(cuid())
+  traderId      String?  
+  trader        Trader?  @relation(fields: [traderId], references: [id], onDelete: SetNull)
+  name          String
+  address       String?
+  phone         String?
+  mandiAccountNumber String?
+  // relations
+  parties       Party[]
+  farmers       Farmer[]
+  suppliers     Supplier[]
+  products      Product[]
+  users         User[]
+  units         Unit[]
+  salesItemMasters SalesItemMaster[]
+  purchaseBills PurchaseBill[]
+  salesBills    SalesBill[]
+  specialPurchaseBills SpecialPurchaseBill[]
+  stockLedger   StockLedger[]
+  payments      Payment[]
+  transports    Transport[]
+  userPermissions UserPermission[]
+  locked        Boolean  @default(false)
+  deletedAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([traderId], map: "idx_companies_trader_id")
+  @@index([name], map: "idx_companies_name")
+  @@index([deletedAt], map: "idx_companies_deleted_at")
+}
+
+model UserPermission {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  module    String
+  canRead   Boolean  @default(false)
+  canWrite  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, companyId, module], map: "uniq_user_company_module_permission")
+  @@index([companyId, module], map: "idx_permissions_company_module")
+  @@index([userId], map: "idx_permissions_user_id")
+}
+
+model Party {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  type      String   // farmer/buyer
+  name      String
+  address   String?
+  phone1    String?
+  phone2    String?
+  ifscCode  String?
+  bankName  String?
+  accountNo String?
+  // relations
+  salesBills SalesBill[]
+  payments Payment[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Farmer {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name      String
+  address   String?
+  phone1    String?
+  phone2    String?
+  ifscCode  String?
+  bankName  String?
+  accountNo String?
+  krashakAnubandhNumber String? // Farmer registration number
+  // relations
+  purchaseBills PurchaseBill[]
+  payments Payment[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Supplier {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name      String
+  address   String?
+  phone1    String?
+  phone2    String?
+  ifscCode  String?
+  bankName  String?
+  accountNo String?
+  gstNumber String?
+  // relations
+  specialPurchaseBills SpecialPurchaseBill[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Unit {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name        String
+  symbol      String
+  kgEquivalent Float   @default(1)
+  isUniversal Boolean  @default(false)
+  description String?
+  // relations
+  products    Product[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([companyId, symbol])
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name          String
+  unitId        String
+  unit          Unit     @relation(fields: [unitId], references: [id])
+  hsnCode       String?
+  gstRate       Float?
+  sellingPrice  Float?
+  description   String?
+  isActive      Boolean  @default(true)
+  // relations
+  purchaseItems PurchaseItem[]
+  salesItems    SalesItem[]
+  salesItemMasters SalesItemMaster[]
+  specialPurchaseItems SpecialPurchaseItem[]
+  stockLedger   StockLedger[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([companyId, name])
+}
+
+model PurchaseBill {
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  billNo        String
+  billDate      DateTime
+  farmerId      String
+  farmer        Farmer   @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+  farmerNameSnapshot String?
+  farmerAddressSnapshot String?
+  farmerContactSnapshot String?
+  krashakAnubandhSnapshot String?
+  companyNameSnapshot String?
+  mandiAccountNumberSnapshot String?
+  totalAmount   Float
+  paidAmount    Float    @default(0)
+  balanceAmount Float    @default(0)
+  status        String   // unpaid/partial/paid
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  // relations
+  purchaseItems PurchaseItem[]
+
+  @@index([companyId, billDate], map: "idx_purchase_bills_company_date")
+}
+
+model PurchaseItem {
+  id             String   @id @default(cuid())
+  purchaseBillId String
+  purchaseBill   PurchaseBill @relation(fields: [purchaseBillId], references: [id], onDelete: Cascade)
+  productId      String
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productNameSnapshot String?
+  qty            Float
+  rate           Float
+  hammali        Float?
+  bags           Int?
+  markaNo        String?
+  amount         Float
+  userUnitName   String?
+  kgEquivalent   Float?
+  totalWeightQt  Float?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model SpecialPurchaseBill {
+  id                  String   @id @default(cuid())
+  companyId           String
+  company             Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  supplierInvoiceNo   String
+  billDate            DateTime
+  supplierId          String
+  supplier            Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  totalAmount         Float
+  paidAmount          Float    @default(0)
+  balanceAmount       Float    @default(0)
+  status              String   // unpaid/partial/paid
+  createdBy           String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  // relations
+  specialPurchaseItems SpecialPurchaseItem[]
+}
+
+model SpecialPurchaseItem {
+  id                    String   @id @default(cuid())
+  specialPurchaseBillId String
+  specialPurchaseBill   SpecialPurchaseBill @relation(fields: [specialPurchaseBillId], references: [id], onDelete: Cascade)
+  productId             String
+  product               Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  noOfBags              Int?
+  weight                Float
+  rate                  Float
+  netAmount             Float
+  otherAmount           Float?
+  grossAmount           Float
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model SalesBill {
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  billNo        String
+  billDate      DateTime
+  partyId       String
+  party         Party    @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  totalAmount   Float
+  receivedAmount Float   @default(0)
+  balanceAmount Float    @default(0)
+  status        String   // unpaid/partial/paid
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  // relations
+  salesItems    SalesItem[]
+  transportBills TransportBill[]
+
+  @@index([companyId, billDate], map: "idx_sales_bills_company_date")
+}
+
+model SalesItem {
+  id          String   @id @default(cuid())
+  salesBillId String
+  salesBill   SalesBill @relation(fields: [salesBillId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  weight      Float
+  bags        Int?
+  rate        Float
+  amount      Float
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model SalesItemMaster {
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  salesItemName String   // Custom name for sales item display
+  hsnCode       String?
+  gstRate       Float?
+  sellingPrice  Float?
+  description   String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([companyId, productId])
+}
+
+model StockLedger {
+  id         String   @id @default(cuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  entryDate  DateTime
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  type       String   // purchase/sales/adjustment
+  qtyIn      Float    @default(0)
+  qtyOut     Float    @default(0)
+  refTable   String   // purchase_bills/sales_bills/stock_adjustments
+  refId      String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([productId, entryDate], map: "idx_stock_ledger_product_date")
+}
+
+model Payment {
+  id         String   @id @default(cuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  partyId    String?
+  party      Party?   @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  farmerId   String?
+  farmer     Farmer?  @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+  billType   String   // purchase/sales
+  billId     String
+  billDate    DateTime
+  payDate     DateTime
+  amount      Float
+  mode        String   // cash/online/bank
+  cashAmount  Float?
+  cashPaymentDate DateTime?
+  onlinePayAmount Float?
+  onlinePaymentDate DateTime?
+  ifscCode    String?
+  beneficiaryBankAccount String?
+  bankNameSnapshot String?
+  bankBranchSnapshot String?
+  asFlag      String?  @default("A")
+  status      String   @default("pending")
+  txnRef      String?
+  note        String?
+  deletedAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([billType, billId], map: "idx_payments_bill_type")
+  @@index([companyId, payDate], map: "idx_payments_company_date")
+  @@index([deletedAt], map: "idx_payments_deleted_at")
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  createdAt      DateTime @default(now())
+  actorId        String
+  actorRole      String
+  actorIp        String?
+  actorUserAgent String?
+  action         String
+  resourceType   String
+  resourceId     String
+  scope          String?
+  before         String?
+  after          String?
+  diff           String?
+  requestId      String?
+  notes          String?
+
+  @@index([createdAt], map: "idx_audit_logs_created_at")
+  @@index([actorId], map: "idx_audit_logs_actor_id")
+  @@index([resourceType, resourceId], map: "idx_audit_logs_resource")
+}
+
+model Transport {
+  id              String   @id @default(cuid())
+  companyId       String
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  transporterName String
+  vehicleNumber   String?
+  driverName      String?
+  driverPhone     String?
+  vehicleType     String?
+  description     String?
+  capacity        Float?
+  freightRate     Float?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model TransportBill {
+  id            String   @id @default(cuid())
+  salesBillId   String
+  salesBill     SalesBill @relation(fields: [salesBillId], references: [id], onDelete: Cascade)
+  transportName String?
+  lorryNo      String?
+  freightPerQt  Float?
+  freightAmount Float?
+  advance       Float?    @default(0)
+  toPay         Float?    @default(0)
+  otherAmount   Float?    @default(0)
+  insuranceAmount Float?  @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
