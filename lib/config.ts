@@ -35,7 +35,8 @@ const envSchema = z.object({
   SUPER_ADMIN_REFRESH_EXPIRES_IN: z.string().optional(),
   AUDIT_LOGGING_ENABLED: z.string().optional(),
   LOG_SERVICE_URL: z.string().optional(),
-  LOG_SERVICE_TOKEN: z.string().optional()
+  LOG_SERVICE_TOKEN: z.string().optional(),
+  SUPER_ADMIN_REMOTE_ACCESS: z.string().optional()
 })
 
 // Parse the current process.env according to the schema. An error will be thrown if the

@@ -40,6 +40,47 @@ async function checkRateLimit(identifier: string, windowMs: number, maxRequests:
   return { blocked: false }
 }
 
+function parseOrigin(value: string | null | undefined) {
+  if (!value) return null
+  try {
+    return new URL(value)
+  } catch {
+    return null
+  }
+}
+
+function resolveCorsOrigin(request: NextRequest) {
+  const requestOrigin = parseOrigin(request.headers.get('origin'))
+  const allowedOrigins = (env.ALLOWED_ORIGINS?.split(',') || [])
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+  const fallbackOrigin = allowedOrigins[0] || 'http://localhost:3000'
+
+  if (!requestOrigin) {
+    return fallbackOrigin
+  }
+
+  const requestHost = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+  if (requestOrigin.host === requestHost) {
+    return requestOrigin.origin
+  }
+
+  for (const allowedOriginValue of allowedOrigins) {
+    const allowedOrigin = parseOrigin(allowedOriginValue)
+    if (!allowedOrigin) continue
+
+    if (
+      requestOrigin.origin === allowedOrigin.origin ||
+      requestOrigin.hostname === allowedOrigin.hostname ||
+      requestOrigin.hostname.endsWith(`.${allowedOrigin.hostname}`)
+    ) {
+      return requestOrigin.origin
+    }
+  }
+
+  return fallbackOrigin
+}
+
 export async function POST(request: NextRequest) {
   const ipAddress = getRequestIp(request)
   const userAgent = request.headers.get('user-agent') || 'unknown'
@@ -103,12 +144,11 @@ export async function POST(request: NextRequest) {
   }
 
   // Set CORS headers
-  const allowedOrigins = env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000']
-  
   try {
+    const corsOrigin = resolveCorsOrigin(request)
     const headers = {
       'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': allowedOrigins[0],
+      'Access-Control-Allow-Origin': corsOrigin,
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
       'Vary': 'Origin'
@@ -387,19 +427,18 @@ export async function POST(request: NextRequest) {
       status: 500,
       headers: {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': allowedOrigins[0],
+        'Access-Control-Allow-Origin': resolveCorsOrigin(request),
         'Vary': 'Origin'
       }
     })
   }
 }
 
-export async function OPTIONS() {
-  const allowedOrigins = env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000']
+export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, {
     status: 200,
     headers: {
-      'Access-Control-Allow-Origin': allowedOrigins[0],
+      'Access-Control-Allow-Origin': resolveCorsOrigin(request),
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization'
     }

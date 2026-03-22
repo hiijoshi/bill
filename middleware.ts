@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { verifyToken } from '@/lib/auth'
 import { env } from '@/lib/config'
-import { resolveCorsOrigin } from '@/lib/cors'
 import { prisma } from '@/lib/prisma'
 import { normalizeAppRole } from '@/lib/api-security'
 import { getCompanyCookieNameCandidates, getSessionCookieNameCandidates } from '@/lib/session-cookies'
@@ -134,6 +133,47 @@ function isLockBypassApiRoute(pathname: string): boolean {
 
 function isBusinessAppRoute(pathname: string): boolean {
   return businessAppRoutePrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
+}
+
+function parseOrigin(value: string | null | undefined) {
+  if (!value) return null
+  try {
+    return new URL(value)
+  } catch {
+    return null
+  }
+}
+
+function resolveCorsOrigin(request: NextRequest) {
+  const requestOrigin = parseOrigin(request.headers.get('origin'))
+  const allowedOrigins = (env.ALLOWED_ORIGINS?.split(',') || [])
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+  const fallbackOrigin = allowedOrigins[0] || 'http://localhost:3000'
+
+  if (!requestOrigin) {
+    return fallbackOrigin
+  }
+
+  const requestHost = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+  if (requestOrigin.host === requestHost) {
+    return requestOrigin.origin
+  }
+
+  for (const allowedOriginValue of allowedOrigins) {
+    const allowedOrigin = parseOrigin(allowedOriginValue)
+    if (!allowedOrigin) continue
+
+    if (
+      requestOrigin.origin === allowedOrigin.origin ||
+      requestOrigin.hostname === allowedOrigin.hostname ||
+      requestOrigin.hostname.endsWith(`.${allowedOrigin.hostname}`)
+    ) {
+      return requestOrigin.origin
+    }
+  }
+
+  return fallbackOrigin
 }
 
 async function ensureCompanyScope(

@@ -10,8 +10,26 @@ const SUPER_ADMIN_ACCESS_EXPIRES_IN: Parameters<typeof generateToken>[1] =
 const SUPER_ADMIN_REFRESH_EXPIRES_IN: Parameters<typeof generateRefreshToken>[1] =
   (env.SUPER_ADMIN_REFRESH_EXPIRES_IN || '8h') as Parameters<typeof generateRefreshToken>[1]
 
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase().split(':')[0]
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '[::1]' || normalized === '::1'
+}
+
+function isRemoteSuperAdminEnabled(): boolean {
+  const flag = String(env.SUPER_ADMIN_REMOTE_ACCESS || '').trim().toLowerCase()
+  return !['0', 'false', 'no', 'off'].includes(flag)
+}
+
 export async function POST(request: NextRequest) {
   try {
+    const requestHost = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+    if (env.NODE_ENV === 'production' && !isRemoteSuperAdminEnabled() && !isLoopbackHost(requestHost)) {
+      return NextResponse.json(
+        { error: 'Super admin remote access is disabled. Remove SUPER_ADMIN_REMOTE_ACCESS or set it to true to allow deployed login.' },
+        { status: 403 }
+      )
+    }
+
     const body = await request.json().catch(() => ({}))
     const userId = typeof body?.userId === 'string' ? body.userId.trim() : ''
     const password = typeof body?.password === 'string' ? body.password : ''
