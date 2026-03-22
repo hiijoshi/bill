@@ -7,8 +7,8 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  url       = env("postgresql://REDACTED")
-  directUrl = env("postgresql://REDACTED")
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ... the rest of your models remain the same
