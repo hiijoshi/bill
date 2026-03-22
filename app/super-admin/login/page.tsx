@@ -7,7 +7,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Shield, User, Lock, AlertCircle } from 'lucide-react'
-import { markSuperAdminTabUnlocked } from '@/lib/super-admin-tab'
 
 export default function SuperAdminLogin() {
   return (
@@ -29,6 +28,7 @@ function SuperAdminLoginContent() {
   useEffect(() => {
     const queryUserId = searchParams.get('userId')?.trim() || ''
     const hasPasswordParam = searchParams.has('password')
+    const restriction = searchParams.get('restricted')
 
     if (hasPasswordParam) {
       const safeParams = new URLSearchParams()
@@ -40,6 +40,9 @@ function SuperAdminLoginContent() {
     setUserId(queryUserId)
     setPassword('')
     setSecondSecret('')
+    if (restriction === 'remote-disabled') {
+      setError('Remote super admin access is disabled. Enable SUPER_ADMIN_REMOTE_ACCESS=true in production.')
+    }
   }, [router, searchParams])
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -64,7 +67,6 @@ function SuperAdminLoginContent() {
         throw new Error(err.error || 'Login failed')
       }
 
-      markSuperAdminTabUnlocked()
       router.push('/super-admin/crud')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')

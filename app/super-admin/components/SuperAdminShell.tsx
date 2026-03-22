@@ -7,7 +7,6 @@ import HeaderAccountPanel from '@/components/account/HeaderAccountPanel'
 import { LayoutDashboard, Store, Building2, Users, ShieldCheck, Settings2, ArrowLeft, ScrollText, PanelLeftClose, PanelLeftOpen, LogOut, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useEffect, useState } from 'react'
-import { clearSuperAdminTabUnlocked, isSuperAdminTabUnlocked } from '@/lib/super-admin-tab'
 
 type SuperAdminShellProps = {
   title: string
@@ -33,25 +32,9 @@ export default function SuperAdminShell({ title, subtitle, children }: SuperAdmi
   const [currentUserId, setCurrentUserId] = useState('')
   const [currentUserName, setCurrentUserName] = useState('')
   const [currentUserRole, setCurrentUserRole] = useState('')
-  const [tabUnlocked, setTabUnlocked] = useState(false)
   const liveSyncMs = Math.max(30000, Number(process.env.NEXT_PUBLIC_LIVE_SYNC_MS || 60000))
 
   useEffect(() => {
-    if (!isSuperAdminTabUnlocked()) {
-      router.replace('/super-admin/login?tab=unlock')
-      return
-    }
-    const frameId = window.requestAnimationFrame(() => {
-      setTabUnlocked(true)
-    })
-
-    return () => {
-      window.cancelAnimationFrame(frameId)
-    }
-  }, [router])
-
-  useEffect(() => {
-    if (!tabUnlocked) return
     let cancelled = false
     let timerId: ReturnType<typeof setInterval> | null = null
 
@@ -79,7 +62,7 @@ export default function SuperAdminShell({ title, subtitle, children }: SuperAdmi
       cancelled = true
       if (timerId) clearInterval(timerId)
     }
-  }, [liveSyncMs, tabUnlocked])
+  }, [liveSyncMs])
 
   const handleBack = () => {
     if (typeof window !== 'undefined' && window.history.length > 1) {
@@ -90,7 +73,6 @@ export default function SuperAdminShell({ title, subtitle, children }: SuperAdmi
   }
 
   const handleLogout = async () => {
-    clearSuperAdminTabUnlocked()
     try {
       await fetch('/api/super-admin/logout', { method: 'POST' })
     } catch {
@@ -98,10 +80,6 @@ export default function SuperAdminShell({ title, subtitle, children }: SuperAdmi
     }
 
     router.push('/super-admin/login')
-  }
-
-  if (!tabUnlocked) {
-    return <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-600">Verifying super admin tab...</div>
   }
 
   return (

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { verifyToken } from '@/lib/auth'
 import { env } from '@/lib/config'
+import { resolveCorsOrigin } from '@/lib/cors'
 import { prisma } from '@/lib/prisma'
 import { normalizeAppRole } from '@/lib/api-security'
 import { getCompanyCookieNameCandidates, getSessionCookieNameCandidates } from '@/lib/session-cookies'
@@ -53,7 +54,15 @@ function isLoopbackHost(host: string): boolean {
   return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '[::1]' || normalized === '::1'
 }
 
+function isRemoteSuperAdminEnabled(): boolean {
+  const flag = String(env.SUPER_ADMIN_REMOTE_ACCESS || '').trim().toLowerCase()
+  return !['0', 'false', 'no', 'off'].includes(flag)
+}
+
 function isLocalSuperAdminAccessAllowed(request: NextRequest): boolean {
+  if (isRemoteSuperAdminEnabled()) {
+    return true
+  }
   return env.NODE_ENV !== 'production' && isLoopbackHost(getRequestHost(request))
 }
 
@@ -203,13 +212,20 @@ export async function middleware(request: NextRequest) {
   const isApiRoute = pathname.startsWith('/api/')
   const isSuperAdminApiRoute = pathname.startsWith('/api/super-admin/')
   const isSuperAdminPageRoute = !isApiRoute && pathname.startsWith('/super-admin')
+  const isSuperAdminLoginPage = pathname === '/super-admin/login'
+  const isSuperAdminLoginApi = pathname === '/api/super-admin/auth'
   const requestId = request.headers.get('x-request-id') || crypto.randomUUID()
 
   if ((isSuperAdminApiRoute || isSuperAdminPageRoute) && !isLocalSuperAdminAccessAllowed(request)) {
-    if (isSuperAdminApiRoute) {
+    if (isSuperAdminLoginPage || isSuperAdminLoginApi) {
+      // Allow the login surface to render and return a clear message instead of bouncing to "/".
+    } else if (isSuperAdminApiRoute) {
       return NextResponse.json({ error: 'Super admin is restricted to local development access' }, { status: 404 })
+    } else {
+      const redirectUrl = new URL('/super-admin/login', request.url)
+      redirectUrl.searchParams.set('restricted', 'remote-disabled')
+      return NextResponse.redirect(redirectUrl)
     }
-    return NextResponse.redirect(new URL('/', request.url))
   }
 
   if (!isApiRoute && (pathname === '/login' || pathname === '/super-admin/login')) {
@@ -279,7 +295,7 @@ export async function middleware(request: NextRequest) {
         {
           status: 401,
           headers: {
-            'Access-Control-Allow-Origin': env.ALLOWED_ORIGINS?.split(',')?.[0] || 'http://localhost:3000',
+            'Access-Control-Allow-Origin': resolveCorsOrigin(request),
             Vary: 'Origin'
           }
         }
@@ -292,7 +308,7 @@ export async function middleware(request: NextRequest) {
         {
           status: 401,
           headers: {
-            'Access-Control-Allow-Origin': env.ALLOWED_ORIGINS?.split(',')?.[0] || 'http://localhost:3000',
+            'Access-Control-Allow-Origin': resolveCorsOrigin(request),
             Vary: 'Origin'
           }
         }
