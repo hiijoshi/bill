@@ -9,8 +9,8 @@ const JWT_SECRET = env.JWT_SECRET
 const REFRESH_SECRET = env.REFRESH_SECRET || env.JWT_SECRET
 
 
-const JWT_EXPIRES_IN = '12h' // Extended access token to reduce repeated logins
-const REFRESH_EXPIRES_IN = '30d' // Long-lived refresh token
+const JWT_EXPIRES_IN = '30d' // Long-lived access token to avoid premature logout on normal usage
+const REFRESH_EXPIRES_IN = '90d' // Sliding refresh window for reliable long-running sessions
 
 type DecodedAuthPayload = jwt.JwtPayload & {
   userId?: string
@@ -80,20 +80,26 @@ export function normalizeRole(role?: string | null): string | undefined {
   return role.toLowerCase().replace(/\s+/g, '_')
 }
 
-export function generateToken(payload: Omit<AuthUser, 'id'>): string {
+export function generateToken(
+  payload: Omit<AuthUser, 'id'>,
+  expiresIn: jwt.SignOptions['expiresIn'] = JWT_EXPIRES_IN
+): string {
   const normalized: Omit<AuthUser, 'id'> = {
     ...payload,
     role: normalizeRole(payload.role)
   }
-  return jwt.sign(normalized, JWT_SECRET!, { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions)
+  return jwt.sign(normalized, JWT_SECRET!, { expiresIn } as jwt.SignOptions)
 }
 
-export function generateRefreshToken(payload: Omit<AuthUser, 'id'>): string {
+export function generateRefreshToken(
+  payload: Omit<AuthUser, 'id'>,
+  expiresIn: jwt.SignOptions['expiresIn'] = REFRESH_EXPIRES_IN
+): string {
   const normalized: Omit<AuthUser, 'id'> = {
     ...payload,
     role: normalizeRole(payload.role)
   }
-  return jwt.sign(normalized, REFRESH_SECRET!, { expiresIn: REFRESH_EXPIRES_IN } as jwt.SignOptions)
+  return jwt.sign(normalized, REFRESH_SECRET!, { expiresIn } as jwt.SignOptions)
 }
 
 export function verifyRefreshToken(token: string): Omit<AuthUser, 'id'> | null {
@@ -220,37 +226,59 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       }
     }
 
-    if (user.companyId) {
-      if (!user.company || user.company.deletedAt) {
-        return {
-          success: false,
-          error: 'Company account is inactive'
+    const permissionRows = await prisma.userPermission.findMany({
+      where: {
+        userId: user.id,
+        OR: [{ canRead: true }, { canWrite: true }],
+        company: {
+          deletedAt: null,
+          locked: false,
+          OR: [{ traderId: user.traderId }, { traderId: null }]
         }
+      },
+      select: {
+        companyId: true
       }
+    })
 
-      if (user.company.locked) {
-        return {
-          success: false,
-          error: 'Company account is locked'
-        }
-      }
-    }
+    const fallbackCompanyIds = Array.from(
+      new Set([
+        ...(user.companyId ? [user.companyId] : []),
+        ...permissionRows.map((row) => row.companyId)
+      ])
+    )
 
-    // Get company for this user (assuming first company of the trader)
     const company = user.companyId
       ? await prisma.company.findFirst({
           where: {
             id: user.companyId,
-            traderId: user.traderId,
-            deletedAt: null
+            deletedAt: null,
+            locked: false,
+            OR: [{ traderId: user.traderId }, { traderId: null }]
           }
         })
-      : await prisma.company.findFirst({
-          where: {
-            traderId: user.traderId,
-            deletedAt: null
-          }
-        })
+      : null
+
+    const resolvedCompany =
+      company ||
+      (fallbackCompanyIds.length > 0
+        ? await prisma.company.findFirst({
+            where: {
+              id: { in: fallbackCompanyIds },
+              deletedAt: null,
+              locked: false,
+              OR: [{ traderId: user.traderId }, { traderId: null }]
+            },
+            orderBy: { name: 'asc' }
+          })
+        : await prisma.company.findFirst({
+            where: {
+              deletedAt: null,
+              locked: false,
+              OR: [{ traderId: user.traderId }, { traderId: null }]
+            },
+            orderBy: { name: 'asc' }
+          }))
 
     // Generate JWT tokens
     const token = generateToken({
@@ -280,9 +308,9 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
         id: user.trader.id,
         name: user.trader.name
       },
-      company: company ? {
-        id: company.id,
-        name: company.name
+      company: resolvedCompany ? {
+        id: resolvedCompany.id,
+        name: resolvedCompany.name
       } : undefined,
       token,
       refreshToken

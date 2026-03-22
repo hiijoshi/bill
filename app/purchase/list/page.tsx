@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Eye, Edit, Trash2, Printer, FileText, Download, CreditCard } from 'lucide-react'
@@ -35,6 +36,13 @@ interface PurchaseItem {
   amount: number
 }
 
+interface RawPurchaseItem {
+  qty?: unknown
+  rate?: unknown
+  hammali?: unknown
+  amount?: unknown
+}
+
 interface SpecialPurchaseItem {
   noOfBags: number
   weight: number
@@ -42,6 +50,15 @@ interface SpecialPurchaseItem {
   netAmount: number
   otherAmount: number
   grossAmount: number
+}
+
+interface RawSpecialPurchaseItem {
+  noOfBags?: unknown
+  weight?: unknown
+  rate?: unknown
+  netAmount?: unknown
+  otherAmount?: unknown
+  grossAmount?: unknown
 }
 
 interface RegularPurchaseBill {
@@ -73,7 +90,32 @@ interface SpecialPurchaseBill {
   type: 'special'
 }
 
+interface RawRegularPurchaseBill {
+  id?: unknown
+  billNo?: unknown
+  billDate?: unknown
+  totalAmount?: unknown
+  paidAmount?: unknown
+  farmer?: Farmer | null
+  farmerNameSnapshot?: string | null
+  farmerAddressSnapshot?: string | null
+  krashakAnubandhSnapshot?: string | null
+  purchaseItems?: RawPurchaseItem[]
+}
+
+interface RawSpecialPurchaseBill {
+  id?: unknown
+  supplierInvoiceNo?: unknown
+  billDate?: unknown
+  totalAmount?: unknown
+  paidAmount?: unknown
+  supplier?: Supplier
+  specialPurchaseItems?: RawSpecialPurchaseItem[]
+}
+
 type PurchaseBill = RegularPurchaseBill | SpecialPurchaseBill
+type BillViewTab = 'active' | 'paid' | 'all'
+type PurchaseTypeFilter = 'all' | 'regular' | 'special'
 
 const clampNonNegative = (value: number): number => {
   const parsed = Number(value)
@@ -122,6 +164,7 @@ export default function PurchaseListPage() {
   const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>([])
   const [loading, setLoading] = useState(true)
   const [companyId, setCompanyId] = useState('')
+  const [billView, setBillView] = useState<BillViewTab>('active')
 
   // Filter states
   const [billNumber, setBillNumber] = useState('')
@@ -133,7 +176,7 @@ export default function PurchaseListPage() {
   const [rate, setRate] = useState('')
   const [registrationNumber, setRegistrationNumber] = useState('')
   const [payable, setPayable] = useState('')
-  const [purchaseType, setPurchaseType] = useState<'all' | 'regular' | 'special'>('all')
+  const [purchaseType, setPurchaseType] = useState<PurchaseTypeFilter>('all')
 
   const fetchPurchaseBills = useCallback(async (isCancelled: () => boolean = () => false) => {
     try {
@@ -178,18 +221,23 @@ export default function PurchaseListPage() {
       const regularRaw = await regularResponse.json().catch(() => [])
       const specialRaw = await specialResponse.json().catch(() => [])
       if (isCancelled()) return
-      const regularData = Array.isArray(regularRaw) ? regularRaw : []
-      const specialData = Array.isArray(specialRaw) ? specialRaw : []
+      const regularData = Array.isArray(regularRaw) ? (regularRaw as RawRegularPurchaseBill[]) : []
+      const specialData = Array.isArray(specialRaw) ? (specialRaw as RawSpecialPurchaseBill[]) : []
 
       // Add type field to distinguish between regular and special purchases
-      const regularBills = regularData.map((bill: any) => {
+      const regularBills: RegularPurchaseBill[] = regularData.map((bill) => {
         const normalized = normalizeBillFinancials(bill?.totalAmount, bill?.paidAmount)
         return {
-          ...bill,
+          id: String(bill.id || ''),
+          billNo: String(bill.billNo || ''),
+          billDate: String(bill.billDate || ''),
           ...normalized,
+          farmer: bill.farmer || null,
+          farmerNameSnapshot: bill.farmerNameSnapshot || null,
+          farmerAddressSnapshot: bill.farmerAddressSnapshot || null,
+          krashakAnubandhSnapshot: bill.krashakAnubandhSnapshot || null,
           purchaseItems: Array.isArray(bill?.purchaseItems)
-            ? bill.purchaseItems.map((item: any) => ({
-                ...item,
+            ? bill.purchaseItems.map((item) => ({
                 qty: clampNonNegative(Number(item?.qty || 0)),
                 rate: clampNonNegative(Number(item?.rate || 0)),
                 hammali: clampNonNegative(Number(item?.hammali || 0)),
@@ -199,14 +247,21 @@ export default function PurchaseListPage() {
           type: 'regular' as const
         }
       })
-      const specialBills = specialData.map((bill: any) => {
+      const specialBills: SpecialPurchaseBill[] = specialData.map((bill) => {
         const normalized = normalizeBillFinancials(bill?.totalAmount, bill?.paidAmount)
         return {
-          ...bill,
+          id: String(bill.id || ''),
+          supplierInvoiceNo: String(bill.supplierInvoiceNo || ''),
+          billDate: String(bill.billDate || ''),
           ...normalized,
+          supplier: bill.supplier || {
+            id: '',
+            name: '',
+            address: '',
+            gstNumber: ''
+          },
           specialPurchaseItems: Array.isArray(bill?.specialPurchaseItems)
-            ? bill.specialPurchaseItems.map((item: any) => ({
-                ...item,
+            ? bill.specialPurchaseItems.map((item) => ({
                 noOfBags: clampNonNegative(Number(item?.noOfBags || 0)),
                 weight: clampNonNegative(Number(item?.weight || 0)),
                 rate: clampNonNegative(Number(item?.rate || 0)),
@@ -333,6 +388,10 @@ export default function PurchaseListPage() {
 
     return filtered
   })()
+
+  const paidBills = filteredBills.filter((bill) => bill.status === 'paid')
+  const activeBills = filteredBills.filter((bill) => bill.status !== 'paid')
+  const visibleBills = billView === 'paid' ? paidBills : billView === 'all' ? filteredBills : activeBills
 
   const clearFilters = () => {
     setBillNumber('')
@@ -498,7 +557,7 @@ export default function PurchaseListPage() {
   }
 
   const exportToExcel = () => {
-    if (filteredBills.length === 0) {
+    if (visibleBills.length === 0) {
       alert('No purchase bills to export')
       return
     }
@@ -510,7 +569,7 @@ export default function PurchaseListPage() {
         'Date',
         'Party Name',
         'Party Address',
-        'Krashak Anubandh Number / GST',
+        'Krashak Anubandh Number',
         'Weight (Qt)',
         'Rate',
         'Payable',
@@ -518,7 +577,7 @@ export default function PurchaseListPage() {
         'Balance',
         'Status'
       ],
-      ...filteredBills.map((bill) => [
+      ...visibleBills.map((bill) => [
         bill.type === 'regular' ? 'Farmer' : 'Supplier',
         bill.type === 'regular' ? bill.billNo : bill.supplierInvoiceNo,
         new Date(bill.billDate).toLocaleDateString(),
@@ -538,7 +597,7 @@ export default function PurchaseListPage() {
   }
 
   const exportToPdf = () => {
-    if (filteredBills.length === 0) {
+    if (visibleBills.length === 0) {
       alert('No purchase bills to export')
       return
     }
@@ -548,7 +607,7 @@ export default function PurchaseListPage() {
       return
     }
 
-    const bodyRows = filteredBills
+    const bodyRows = visibleBills
       .map((bill) => {
         const billNo = bill.type === 'regular' ? bill.billNo : bill.supplierInvoiceNo
         const partyName = bill.type === 'regular' ? getRegularFarmerName(bill) : bill.supplier.name
@@ -597,11 +656,11 @@ export default function PurchaseListPage() {
     popup.print()
   }
 
-  const totalBills = filteredBills.length
-  const totalAmount = filteredBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
-  const regularBillsCount = filteredBills.filter((bill) => bill.type === 'regular').length
-  const specialBillsCount = filteredBills.filter((bill) => bill.type === 'special').length
-  const totalWeightQt = filteredBills.reduce((sum, bill) => sum + getBillWeightQt(bill), 0)
+  const totalBills = visibleBills.length
+  const totalAmount = visibleBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
+  const regularBillsCount = visibleBills.filter((bill) => bill.type === 'regular').length
+  const specialBillsCount = visibleBills.filter((bill) => bill.type === 'special').length
+  const totalWeightQt = visibleBills.reduce((sum, bill) => sum + getBillWeightQt(bill), 0)
   const totalWeightKg = totalWeightQt * 100
 
   if (loading) {
@@ -630,7 +689,7 @@ export default function PurchaseListPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               <div>
                 <Label htmlFor="purchaseType">Purchase Type</Label>
-                <Select value={purchaseType} onValueChange={(value: any) => setPurchaseType(value)}>
+                <Select value={purchaseType} onValueChange={(value: PurchaseTypeFilter) => setPurchaseType(value)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select type" />
                   </SelectTrigger>
@@ -743,7 +802,22 @@ export default function PurchaseListPage() {
         {/* Purchase Bills Table */}
         <Card>
           <CardHeader>
-            <CardTitle>Purchase Bills</CardTitle>
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <CardTitle>Purchase Bills</CardTitle>
+              <Tabs defaultValue="active" className="w-full lg:w-auto">
+                <TabsList className="w-full lg:w-auto">
+                  <TabsTrigger value="active" onClick={() => setBillView('active')}>
+                    Active ({activeBills.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="paid" onClick={() => setBillView('paid')}>
+                    Paid ({paidBills.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="all" onClick={() => setBillView('all')}>
+                    All ({filteredBills.length})
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
@@ -755,7 +829,7 @@ export default function PurchaseListPage() {
                     <TableHead>Date</TableHead>
                     <TableHead>Party Name</TableHead>
                     <TableHead>Party Address</TableHead>
-                    <TableHead>Krashak Anubandh Number / GST</TableHead>
+                    <TableHead>Krashak Anubandh Number</TableHead>
                     <TableHead>Weight</TableHead>
                     <TableHead>Rate</TableHead>
                     <TableHead>Payable</TableHead>
@@ -766,90 +840,98 @@ export default function PurchaseListPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredBills.map((bill) => (
-                    <TableRow key={bill.id}>
-                      <TableCell>
-                        <Badge variant={bill.type === 'regular' ? 'default' : 'secondary'}>
-                          {bill.type === 'regular' ? 'Farmer' : 'Supplier'}
-                        </Badge>
+                  {visibleBills.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={13} className="py-8 text-center text-gray-500">
+                        No bills found in this tab.
                       </TableCell>
-                      <TableCell>
-                        {bill.type === 'regular' ? bill.billNo : bill.supplierInvoiceNo}
-                      </TableCell>
-                      <TableCell>{new Date(bill.billDate).toLocaleDateString()}</TableCell>
-                      <TableCell>
-                        {bill.type === 'regular' ? getRegularFarmerName(bill) : bill.supplier.name}
-                      </TableCell>
-                      <TableCell>
-                        {bill.type === 'regular' ? getRegularFarmerAddress(bill) : bill.supplier.address}
-                      </TableCell>
-                      <TableCell>
-                        {bill.type === 'regular' 
-                          ? getRegularAnubandh(bill) 
-                          : bill.supplier.gstNumber
-                        }
-                      </TableCell>
-                      <TableCell>
-                        {getBillWeightQt(bill).toFixed(2)}
-                      </TableCell>
-                      <TableCell>
-                        {getBillRate(bill).toFixed(2)}
-                      </TableCell>
-                      <TableCell>₹{bill.totalAmount.toFixed(2)}</TableCell>
-                      <TableCell>₹{bill.paidAmount.toFixed(2)}</TableCell>
-                      <TableCell>₹{bill.balanceAmount.toFixed(2)}</TableCell>
-                      <TableCell>
-                        <Badge variant={
-                          bill.status === 'paid' ? 'default' :
-                          (bill.status === 'partial' || bill.status === 'partially_paid') ? 'secondary' : 'destructive'
-                        }>
-                          {bill.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex gap-1">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleView(bill)}
-                          >
-                            <Eye className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleEdit(bill)}
-                          >
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleDelete(bill)}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handlePrint(bill)}
-                          >
-                            <Printer className="w-4 h-4" />
-                          </Button>
-                          {bill.balanceAmount > 0 && (
+                    </TableRow>
+                  ) : (
+                    visibleBills.map((bill) => (
+                      <TableRow key={bill.id}>
+                        <TableCell>
+                          <Badge variant={bill.type === 'regular' ? 'default' : 'secondary'}>
+                            {bill.type === 'regular' ? 'Farmer' : 'Supplier'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {bill.type === 'regular' ? bill.billNo : bill.supplierInvoiceNo}
+                        </TableCell>
+                        <TableCell>{new Date(bill.billDate).toLocaleDateString()}</TableCell>
+                        <TableCell>
+                          {bill.type === 'regular' ? getRegularFarmerName(bill) : bill.supplier.name}
+                        </TableCell>
+                        <TableCell>
+                          {bill.type === 'regular' ? getRegularFarmerAddress(bill) : bill.supplier.address}
+                        </TableCell>
+                        <TableCell>
+                          {bill.type === 'regular'
+                            ? getRegularAnubandh(bill)
+                            : bill.supplier.gstNumber
+                          }
+                        </TableCell>
+                        <TableCell>
+                          {getBillWeightQt(bill).toFixed(2)}
+                        </TableCell>
+                        <TableCell>
+                          {getBillRate(bill).toFixed(2)}
+                        </TableCell>
+                        <TableCell>₹{bill.totalAmount.toFixed(2)}</TableCell>
+                        <TableCell>₹{bill.paidAmount.toFixed(2)}</TableCell>
+                        <TableCell>₹{bill.balanceAmount.toFixed(2)}</TableCell>
+                        <TableCell>
+                          <Badge variant={
+                            bill.status === 'paid' ? 'default' :
+                            (bill.status === 'partial' || bill.status === 'partially_paid') ? 'secondary' : 'destructive'
+                          }>
+                            {bill.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-1">
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => handlePayment(bill)}
-                              title="Record Payment"
+                              onClick={() => handleView(bill)}
                             >
-                              <CreditCard className="w-4 h-4" />
+                              <Eye className="w-4 h-4" />
                             </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleEdit(bill)}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleDelete(bill)}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handlePrint(bill)}
+                            >
+                              <Printer className="w-4 h-4" />
+                            </Button>
+                            {bill.balanceAmount > 0 && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handlePayment(bill)}
+                                title="Record Payment"
+                              >
+                                <CreditCard className="w-4 h-4" />
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </div>

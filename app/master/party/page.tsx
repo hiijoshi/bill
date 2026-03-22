@@ -19,6 +19,8 @@ interface Party {
   address?: string
   phone1?: string
   phone2?: string
+  creditLimit?: number | null
+  creditDays?: number | null
   ifscCode?: string
   bankName?: string
   accountNo?: string
@@ -44,6 +46,8 @@ export default function PartyMasterPage() {
     address: '',
     phone1: '',
     phone2: '',
+    creditLimit: '',
+    creditDays: '',
     ifscCode: '',
     bankName: '',
     accountNo: ''
@@ -160,6 +164,8 @@ export default function PartyMasterPage() {
       address: party.address || '',
       phone1: party.phone1 || '',
       phone2: party.phone2 || '',
+      creditLimit: party.creditLimit != null ? String(party.creditLimit) : '',
+      creditDays: party.creditDays != null ? String(party.creditDays) : '',
       ifscCode: party.ifscCode || '',
       bankName: party.bankName || '',
       accountNo: party.accountNo || ''
@@ -223,6 +229,8 @@ export default function PartyMasterPage() {
       'Address',
       'Phone1',
       'Phone2',
+      'CreditLimit',
+      'CreditDays',
       'BankName',
       'AccountNo',
       'IFSCCode',
@@ -234,6 +242,8 @@ export default function PartyMasterPage() {
       party.address || '',
       party.phone1 || '',
       party.phone2 || '',
+      party.creditLimit ?? '',
+      party.creditDays ?? '',
       party.bankName || '',
       party.accountNo || '',
       party.ifscCode || '',
@@ -264,6 +274,8 @@ export default function PartyMasterPage() {
       address: '',
       phone1: '',
       phone2: '',
+      creditLimit: '',
+      creditDays: '',
       ifscCode: '',
       bankName: '',
       accountNo: ''
@@ -377,6 +389,30 @@ export default function PartyMasterPage() {
                       />
                     </div>
                     <div>
+                      <Label htmlFor="creditLimit">Credit Limit</Label>
+                      <Input
+                        id="creditLimit"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={formData.creditLimit}
+                        onChange={(e) => setFormData({ ...formData, creditLimit: e.target.value })}
+                        placeholder="Enter buyer credit limit"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="creditDays">Credit Days</Label>
+                      <Input
+                        id="creditDays"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={formData.creditDays}
+                        onChange={(e) => setFormData({ ...formData, creditDays: e.target.value })}
+                        placeholder="Enter overdue days"
+                      />
+                    </div>
+                    <div>
                       <Label htmlFor="bankName">Bank Name</Label>
                       <Input
                         id="bankName"
@@ -434,7 +470,9 @@ export default function PartyMasterPage() {
                     <TableRow>
                       <TableHead>Party Name</TableHead>
                       <TableHead>Type</TableHead>
+                      <TableHead>Address</TableHead>
                       <TableHead>Phone</TableHead>
+                      <TableHead>Credit Control</TableHead>
                       <TableHead>Bank Details</TableHead>
                       <TableHead>Created Date</TableHead>
                       <TableHead>Actions</TableHead>
@@ -449,10 +487,17 @@ export default function PartyMasterPage() {
                             🛒 Buyer
                           </Badge>
                         </TableCell>
+                        <TableCell>{party.address || '-'}</TableCell>
                         <TableCell>
                           <div>
                             {party.phone1 && <div>{party.phone1}</div>}
                             {party.phone2 && <div className="text-sm text-gray-500">{party.phone2}</div>}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="text-sm">
+                            <div>Limit: {party.creditLimit != null ? `₹${party.creditLimit.toFixed(2)}` : '-'}</div>
+                            <div className="text-gray-500">Days: {party.creditDays ?? '-'}</div>
                           </div>
                         </TableCell>
                         <TableCell>

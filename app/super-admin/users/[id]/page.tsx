@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Loader2, Save } from 'lucide-react'
 
@@ -26,17 +27,32 @@ type UserSummary = {
   companyId?: string | null
 }
 
+type CompanyOption = {
+  id: string
+  name: string
+}
+
+type ReportAccessLevel = 'none' | 'company-only' | 'all-companies'
+
 export default function SuperAdminUserPermissionsPage() {
   const params = useParams<{ id: string }>()
   const userId = params?.id
   const [user, setUser] = useState<UserSummary | null>(null)
   const [companyId, setCompanyId] = useState('')
+  const [companyOptions, setCompanyOptions] = useState<CompanyOption[]>([])
   const [rows, setRows] = useState<PermissionRow[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const canSave = useMemo(() => companyId.trim().length > 0 && rows.length > 0, [companyId, rows.length])
+  const reportRowIndex = useMemo(() => rows.findIndex((row) => row.module === 'REPORTS'), [rows])
+  const reportAccessLevel = useMemo<ReportAccessLevel>(() => {
+    const row = reportRowIndex >= 0 ? rows[reportRowIndex] : null
+    if (!row || (!row.canRead && !row.canWrite)) return 'none'
+    if (row.canWrite) return 'all-companies'
+    return 'company-only'
+  }, [reportRowIndex, rows])
 
   const fetchMatrix = useCallback(async () => {
     if (!userId) return
@@ -50,9 +66,21 @@ export default function SuperAdminUserPermissionsPage() {
         throw new Error(payload.error || 'Failed to load permissions')
       }
 
-      setUser(payload.user || null)
+      const nextUser = payload.user || null
+      setUser(nextUser)
       setCompanyId(payload.companyId || '')
       setRows(Array.isArray(payload.permissions) ? payload.permissions : [])
+
+      if (nextUser?.traderId) {
+        const companiesResponse = await fetch(`/api/super-admin/companies?traderId=${encodeURIComponent(nextUser.traderId)}`)
+        const companiesPayload = await companiesResponse.json().catch(() => [])
+        if (!companiesResponse.ok) {
+          throw new Error(companiesPayload.error || 'Failed to load companies')
+        }
+        setCompanyOptions(Array.isArray(companiesPayload) ? companiesPayload : [])
+      } else {
+        setCompanyOptions([])
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load permissions')
     } finally {
@@ -75,6 +103,21 @@ export default function SuperAdminUserPermissionsPage() {
           return { ...row, canRead: false, canWrite: false }
         }
         return { ...row, [key]: value }
+      })
+    )
+  }
+
+  const setReportAccessLevel = (level: ReportAccessLevel) => {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.module !== 'REPORTS') return row
+        if (level === 'none') {
+          return { ...row, canRead: false, canWrite: false }
+        }
+        if (level === 'company-only') {
+          return { ...row, canRead: true, canWrite: false }
+        }
+        return { ...row, canRead: true, canWrite: true }
       })
     )
   }
@@ -122,7 +165,7 @@ export default function SuperAdminUserPermissionsPage() {
           <CardHeader>
             <CardTitle>User Context</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-5">
+          <CardContent className="grid gap-4 md:grid-cols-6">
             <div>
               <Label>User ID</Label>
               <Input value={user?.userId || ''} disabled />
@@ -141,7 +184,31 @@ export default function SuperAdminUserPermissionsPage() {
             </div>
             <div>
               <Label>Company ID</Label>
-              <Input value={companyId} onChange={(e) => setCompanyId(e.target.value)} />
+              <Select value={companyId} onValueChange={setCompanyId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select company" />
+                </SelectTrigger>
+                <SelectContent>
+                  {companyOptions.map((company) => (
+                    <SelectItem key={company.id} value={company.id}>
+                      {company.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Reports Access</Label>
+              <Select value={reportAccessLevel} onValueChange={(value) => setReportAccessLevel(value as ReportAccessLevel)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select report access" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No Reports Access</SelectItem>
+                  <SelectItem value="company-only">Company Only Report</SelectItem>
+                  <SelectItem value="all-companies">All Companies Report</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </CardContent>
         </Card>

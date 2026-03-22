@@ -1,11 +1,32 @@
 import { cookies } from 'next/headers'
+import { headers } from 'next/headers'
 import { verifyToken } from './auth'
 import { env } from './config'
 import { randomBytes } from 'crypto'
+import {
+  getCompanyCookieNameCandidates,
+  getSessionCookieNameCandidates,
+  getSessionCookieNames,
+  type SessionNamespace
+} from './session-cookies'
 
-export async function getSession() {
+async function resolveScopeSource(explicitScope?: string | null): Promise<string | null> {
+  if (explicitScope !== undefined) {
+    return explicitScope
+  }
+
+  const headerStore = await headers()
+  return headerStore.get('x-forwarded-host') || headerStore.get('host') || null
+}
+
+export async function getSession(namespace: SessionNamespace = 'app', scopeSource?: string | null) {
   const cookieStore = await cookies()
-  const token = cookieStore.get('auth-token')?.value
+  const resolvedScopeSource = await resolveScopeSource(scopeSource)
+  const cookieNameCandidates = getSessionCookieNameCandidates(namespace, resolvedScopeSource)
+  const token =
+    cookieNameCandidates
+      .map((cookieNames) => cookieStore.get(cookieNames.authToken)?.value)
+      .find((value): value is string => Boolean(value)) || null
   
   if (!token) return null
   
@@ -20,52 +41,66 @@ export async function getSession() {
 export async function setSession(
   token: string,
   refreshToken?: string,
-  res?: import('next/server').NextResponse
+  res?: import('next/server').NextResponse,
+  namespace: SessionNamespace = 'app',
+  scopeSource?: string | null
 ) {
   // allow an explicit response object or fall back to the implicit cookie store
   const store = res ? res.cookies : await cookies()
+  const resolvedScopeSource = await resolveScopeSource(scopeSource)
+  const cookieNames = getSessionCookieNames(namespace, resolvedScopeSource)
   
   // Set access token
-  store.set('auth-token', token, {
+  store.set(cookieNames.authToken, token, {
     httpOnly: true, // Prevent XSS attacks
     secure: env.NODE_ENV === 'production',
     sameSite: 'strict',
     path: '/',
-    maxAge: 12 * 60 * 60, // 12 hours
     priority: 'high'
   })
   
   // Set refresh token if provided
   if (refreshToken) {
-    store.set('refresh-token', refreshToken, {
+    store.set(cookieNames.refreshToken, refreshToken, {
       httpOnly: true,
       secure: env.NODE_ENV === 'production',
       sameSite: 'strict',
       path: '/',
-      maxAge: 30 * 24 * 60 * 60, // 30 days
       priority: 'high'
     })
   }
 
   // Double-submit CSRF token cookie for mutating cookie-auth API calls.
-  store.set('csrf-token', randomBytes(24).toString('hex'), {
+  store.set(cookieNames.csrfToken, randomBytes(24).toString('hex'), {
     httpOnly: false,
     secure: env.NODE_ENV === 'production',
     sameSite: 'strict',
     path: '/',
-    maxAge: 30 * 24 * 60 * 60,
     priority: 'high'
   })
 }
 
-export async function clearSession(res?: import('next/server').NextResponse) {
+export async function clearSession(
+  res?: import('next/server').NextResponse,
+  namespace: SessionNamespace = 'app',
+  scopeSource?: string | null
+) {
   const store = res ? res.cookies : await cookies()
+  const resolvedScopeSource = await resolveScopeSource(scopeSource)
+  const cookieNameCandidates = getSessionCookieNameCandidates(namespace, resolvedScopeSource)
   
   // Clear all authentication-related cookies
-  store.delete('auth-token')
-  store.delete('refresh-token')
-  store.delete('userId')
-  store.delete('traderId')
-  store.delete('companyId')
-  store.delete('csrf-token')
+  for (const cookieNames of cookieNameCandidates) {
+    store.delete(cookieNames.authToken)
+    store.delete(cookieNames.refreshToken)
+    store.delete(cookieNames.csrfToken)
+  }
+
+  if (namespace === 'app') {
+    store.delete('userId')
+    store.delete('traderId')
+    for (const cookieName of getCompanyCookieNameCandidates(resolvedScopeSource)) {
+      store.delete(cookieName)
+    }
+  }
 }

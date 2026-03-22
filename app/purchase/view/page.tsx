@@ -72,6 +72,27 @@ function PurchaseViewPageContent() {
 
   useEffect(() => {
     let cancelled = false
+
+    const fetchPurchaseBill = async (targetCompanyId: string) => {
+      try {
+        const response = await fetch(`/api/purchase-bills?companyId=${targetCompanyId}&billId=${billId}`)
+        if (cancelled) return
+        if (!response.ok) {
+          throw new Error('Purchase bill not found')
+        }
+        const billData: PurchaseBill = await response.json()
+        if (cancelled) return
+        setPurchaseBill(billData)
+        setLoading(false)
+      } catch (error) {
+        if (cancelled || isAbortError(error)) return
+        console.error('Error fetching purchase bill:', error)
+        setLoading(false)
+        alert('Error loading purchase bill')
+        router.back()
+      }
+    }
+
     ;(async () => {
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
       if (cancelled) return
@@ -83,32 +104,12 @@ function PurchaseViewPageContent() {
       }
       setCompanyId(resolvedCompanyId)
       stripCompanyParamsFromUrl()
-      await fetchPurchaseBill(resolvedCompanyId, () => cancelled)
+      await fetchPurchaseBill(resolvedCompanyId)
     })()
     return () => {
       cancelled = true
     }
   }, [billId, router])
-
-  const fetchPurchaseBill = async (targetCompanyId: string, isCancelled: () => boolean = () => false) => {
-    try {
-      const response = await fetch(`/api/purchase-bills?companyId=${targetCompanyId}&billId=${billId}`)
-      if (isCancelled()) return
-      if (!response.ok) {
-        throw new Error('Purchase bill not found')
-      }
-      const billData: PurchaseBill = await response.json()
-      if (isCancelled()) return
-      setPurchaseBill(billData)
-      setLoading(false)
-    } catch (error) {
-      if (isCancelled() || isAbortError(error)) return
-      console.error('Error fetching purchase bill:', error)
-      setLoading(false)
-      alert('Error loading purchase bill')
-      router.back()
-    }
-  }
 
   const handleEdit = () => {
     if (!billId) return
@@ -163,8 +164,11 @@ function PurchaseViewPageContent() {
   }
 
   const handleExportPDF = () => {
-    // TODO: Implement PDF export
-    alert('PDF export functionality coming soon!')
+    if (!billId) return
+    const printPath = companyId
+      ? `/purchase/${billId}/print?companyId=${encodeURIComponent(companyId)}`
+      : `/purchase/${billId}/print`
+    window.open(printPath, '_blank', 'noopener,noreferrer')
   }
 
   if (loading) {
@@ -187,6 +191,12 @@ function PurchaseViewPageContent() {
       </DashboardLayout>
     )
   }
+
+  const totalWeight = purchaseBill.purchaseItems.reduce((sum, item) => {
+    const parsed = Number(item.qty)
+    if (!Number.isFinite(parsed)) return sum
+    return sum + Math.max(0, parsed)
+  }, 0)
 
   return (
     <DashboardLayout companyId={companyId || ''}>
@@ -303,7 +313,7 @@ function PurchaseViewPageContent() {
                     </tr>
                   </thead>
                   <tbody>
-                    {purchaseBill.purchaseItems.map((item, index) => (
+                    {purchaseBill.purchaseItems.map((item) => (
                       <tr key={item.id} className="border-b">
                         <td className="p-2">{item.product?.name || 'Unknown Product'}</td>
                         <td className="text-right p-2">{item.qty}</td>
@@ -325,7 +335,7 @@ function PurchaseViewPageContent() {
               <CardTitle>Financial Summary</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="text-center p-4 bg-blue-50 rounded">
                   <p className="text-sm text-gray-600">Total Amount</p>
                   <p className="text-2xl font-bold text-blue-600">₹{purchaseBill.totalAmount.toFixed(2)}</p>
@@ -337,6 +347,10 @@ function PurchaseViewPageContent() {
                 <div className="text-center p-4 bg-red-50 rounded">
                   <p className="text-sm text-gray-600">Balance Amount</p>
                   <p className="text-2xl font-bold text-red-600">₹{purchaseBill.balanceAmount.toFixed(2)}</p>
+                </div>
+                <div className="text-center p-4 bg-amber-50 rounded">
+                  <p className="text-sm text-gray-600">Total Weight</p>
+                  <p className="text-2xl font-bold text-amber-700">{totalWeight.toFixed(2)}</p>
                 </div>
               </div>
             </CardContent>

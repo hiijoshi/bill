@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -36,22 +36,7 @@ export default function PaymentModeMasterPage() {
     description: '',
     isActive: true
   })
-  useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
-      if (!resolvedCompanyId) {
-        setErrorMessage('Failed to resolve active company. Please re-login.')
-        setLoading(false)
-        return
-      }
-
-      setCompanyId(resolvedCompanyId)
-      stripCompanyParamsFromUrl()
-      await fetchPaymentModes(resolvedCompanyId)
-    })()
-  }, [])
-
-  const fetchPaymentModes = async (targetCompanyId = companyId) => {
+  const fetchPaymentModes = useCallback(async (targetCompanyId = companyId) => {
     if (!targetCompanyId) {
       setLoading(false)
       return
@@ -71,7 +56,22 @@ export default function PaymentModeMasterPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [companyId])
+
+  useEffect(() => {
+    ;(async () => {
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (!resolvedCompanyId) {
+        setErrorMessage('Failed to resolve active company. Please re-login.')
+        setLoading(false)
+        return
+      }
+
+      setCompanyId(resolvedCompanyId)
+      stripCompanyParamsFromUrl()
+      await fetchPaymentModes(resolvedCompanyId)
+    })()
+  }, [fetchPaymentModes])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { normalizeOptionalString, normalizePhone, parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { generateUniqueMandiAccountNumber } from '@/lib/mandi-account-number'
+import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'Company ID is required') })
 
@@ -212,22 +213,82 @@ export async function PUT(
     }
 
     if (normalized.traderId !== undefined && normalized.traderId !== null) {
-      const trader = await prisma.trader.findFirst({
-        where: {
-          id: normalized.traderId,
-          deletedAt: null
-        },
-        select: { id: true }
-      })
+      const traderCapacity = await getTraderCapacitySnapshot(prisma, normalized.traderId)
 
-      if (!trader) {
+      if (!traderCapacity) {
         return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
+      }
+
+      if (traderCapacity.locked) {
+        return NextResponse.json({ error: 'Trader is locked' }, { status: 403 })
       }
     }
 
     const nextName = normalized.name ?? existingCompany.name
     const nextTraderId =
       normalized.traderId === undefined ? existingCompany.traderId : normalized.traderId
+
+    if (nextTraderId && nextTraderId !== existingCompany.traderId) {
+      const traderCapacity = await getTraderCapacitySnapshot(prisma, nextTraderId)
+      if (!traderCapacity) {
+        return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
+      }
+
+      if (
+        traderCapacity.maxCompanies !== null &&
+        traderCapacity.currentCompanies >= traderCapacity.maxCompanies
+      ) {
+        return NextResponse.json(
+          { error: `Trader company limit reached (${traderCapacity.currentCompanies}/${traderCapacity.maxCompanies})` },
+          { status: 409 }
+        )
+      }
+
+      const movingUsers = await prisma.user.findMany({
+        where: {
+          companyId,
+          deletedAt: null,
+          NOT: [{ role: 'SUPER_ADMIN' }, { role: 'super_admin' }]
+        },
+        select: {
+          id: true,
+          userId: true
+        }
+      })
+
+      if (
+        traderCapacity.maxUsers !== null &&
+        traderCapacity.currentUsers + movingUsers.length > traderCapacity.maxUsers
+      ) {
+        return NextResponse.json(
+          { error: `Trader user limit reached (${traderCapacity.currentUsers}/${traderCapacity.maxUsers})` },
+          { status: 409 }
+        )
+      }
+
+      if (movingUsers.length > 0) {
+        const duplicateUsers = await prisma.user.findMany({
+          where: {
+            traderId: nextTraderId,
+            deletedAt: null,
+            userId: {
+              in: movingUsers.map((user) => user.userId)
+            }
+          },
+          select: {
+            userId: true
+          },
+          take: 1
+        })
+
+        if (duplicateUsers[0]) {
+          return NextResponse.json(
+            { error: `Cannot move company. User ID "${duplicateUsers[0].userId}" already exists in the target trader.` },
+            { status: 409 }
+          )
+        }
+      }
+    }
 
     const duplicate = await prisma.company.findFirst({
       where: {

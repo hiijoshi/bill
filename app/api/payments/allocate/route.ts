@@ -19,6 +19,14 @@ const allocateSchema = z
     payDate: z.string().trim().min(1, 'Pay date is required'),
     amount: z.coerce.number().positive('Amount must be greater than zero'),
     mode: z.string().trim().min(1, 'Payment mode is required'),
+    bankId: z.string().trim().optional().nullable(),
+    onlinePayAmount: z.coerce.number().nonnegative().optional().nullable(),
+    onlinePaymentDate: z.string().trim().optional().nullable(),
+    ifscCode: z.string().trim().max(20).optional().nullable(),
+    beneficiaryBankAccount: z.string().trim().max(64).optional().nullable(),
+    bankNameSnapshot: z.string().trim().max(120).optional().nullable(),
+    bankBranchSnapshot: z.string().trim().max(120).optional().nullable(),
+    asFlag: z.string().trim().max(10).optional().nullable(),
     txnRef: z.string().trim().max(100).optional().nullable(),
     note: z.string().trim().max(400).optional().nullable(),
     rule: z.enum(['oldest', 'custom']).optional().default('oldest'),
@@ -49,6 +57,13 @@ function deriveStatus(totalAmount: number, paidAmount: number): 'unpaid' | 'part
   if (balance === 0) return 'paid'
   if (safePaid <= 0) return 'unpaid'
   return 'partial'
+}
+
+function parseOptionalDate(value: unknown): Date | null {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return null
+  return parsed
 }
 
 function sortOldestFirst(bills: PurchaseBillSnapshot[]): PurchaseBillSnapshot[] {
@@ -130,6 +145,9 @@ export async function POST(request: NextRequest) {
     if (!Number.isFinite(payDate.getTime())) {
       return NextResponse.json({ error: 'Invalid pay date' }, { status: 400 })
     }
+    const modeLower = (data.mode || '').trim().toLowerCase()
+    const isCashMode = modeLower === 'cash' || modeLower === 'c'
+    const normalizedIfscCode = normalizeOptionalString(data.ifscCode)?.toUpperCase() || null
 
     const requestedBills = await prisma.purchaseBill.findMany({
       where: {
@@ -233,6 +251,15 @@ export async function POST(request: NextRequest) {
             payDate,
             amount: allocationAmount,
             mode: data.mode,
+            cashAmount: isCashMode ? allocationAmount : null,
+            cashPaymentDate: isCashMode ? payDate : null,
+            onlinePayAmount: isCashMode ? null : data.onlinePayAmount ?? allocationAmount,
+            onlinePaymentDate: parseOptionalDate(data.onlinePaymentDate) ?? (!isCashMode ? payDate : null),
+            ifscCode: normalizedIfscCode,
+            beneficiaryBankAccount: normalizeOptionalString(data.beneficiaryBankAccount),
+            bankNameSnapshot: normalizeOptionalString(data.bankNameSnapshot),
+            bankBranchSnapshot: normalizeOptionalString(data.bankBranchSnapshot),
+            asFlag: normalizeOptionalString(data.asFlag) || 'A',
             status: 'paid',
             txnRef: normalizeOptionalString(data.txnRef),
             note: normalizeOptionalString(data.note),

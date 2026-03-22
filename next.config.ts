@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-import { env, ALLOWED_ORIGIN, isProduction } from './lib/config'
+import { ALLOWED_ORIGIN, isProduction } from './lib/config'
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ['127.0.0.1:51445'],

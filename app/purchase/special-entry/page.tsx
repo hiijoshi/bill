@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { kgToQuintal, round4, toKg } from '@/lib/unit-conversion'
 import { getCompanyIdFromSearch, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
@@ -19,6 +20,7 @@ import {
 interface Product {
   id: string
   name: string
+  gstRate?: number | null
 }
 
 interface Supplier {
@@ -57,7 +59,7 @@ export default function SpecialPurchaseEntryPage() {
   const [rate, setRate] = useState('')
   const [netAmount, setNetAmount] = useState('')
   const [otherAmount, setOtherAmount] = useState('')
-  const [grossAmount, setGrossAmount] = useState('')
+  const [manualGrossAmount, setManualGrossAmount] = useState('')
   const [paidAmount, setPaidAmount] = useState('')
   const [balance, setBalance] = useState('')
   const [paidAmountError, setPaidAmountError] = useState('')
@@ -68,6 +70,17 @@ export default function SpecialPurchaseEntryPage() {
     if (!Number.isFinite(parsed)) return ''
     return String(Math.max(0, parsed))
   }
+  const currencyText = (value: number) => `₹${roundCurrency(Number(value || 0)).toFixed(2)}`
+
+  const getCurrentFinalGrossTotal = useCallback(() => {
+    const taxableAmount = parseFloat(netAmount) || 0
+    const additionalAmount = parseFloat(otherAmount) || 0
+    const selectedProductRecord = products.find((product) => product.id === selectedProduct)
+    const calculatedGross = roundCurrency(
+      calculateTaxBreakdown(taxableAmount, selectedProductRecord?.gstRate || 0).lineTotal + additionalAmount
+    )
+    return manualGrossAmount !== '' ? roundCurrency(parseFloat(manualGrossAmount) || 0) : calculatedGross
+  }, [manualGrossAmount, netAmount, otherAmount, products, selectedProduct])
 
   const handlePaidAmountChange = (value: string) => {
     const normalized = toNonNegative(value)
@@ -78,12 +91,12 @@ export default function SpecialPurchaseEntryPage() {
     }
 
     const nextPaid = Number(normalized)
-    const maxGross = Number(grossAmount || 0)
-    const hasGross = grossAmount !== ''
+    const maxGross = getCurrentFinalGrossTotal()
+    const hasGross = maxGross > 0
 
     if (hasGross && nextPaid > maxGross) {
       setPaidAmount(String(maxGross))
-      setPaidAmountError('Paid amount cannot be greater than gross amount')
+      setPaidAmountError('Paid amount cannot be greater than final invoice total')
       return
     }
 
@@ -166,39 +179,26 @@ export default function SpecialPurchaseEntryPage() {
     }
   }, [weight, rate])
 
-  // Calculate gross amount when net amount or other amount changes
-  useEffect(() => {
-    if (netAmount && otherAmount) {
-      const net = parseFloat(netAmount) || 0
-      const other = parseFloat(otherAmount) || 0
-      setGrossAmount(Math.max(0, net + other).toString())
-    } else if (netAmount) {
-      setGrossAmount(netAmount)
-    } else {
-      setGrossAmount('')
-    }
-  }, [netAmount, otherAmount])
-
   // Calculate balance when gross or paid changes
   useEffect(() => {
-    const gross = parseFloat(grossAmount) || 0
+    const gross = getCurrentFinalGrossTotal()
     const paid = parseFloat(paidAmount) || 0
 
-    if (grossAmount !== '' && paidAmount && paid > gross) {
+    if (gross > 0 && paidAmount && paid > gross) {
       setPaidAmount(String(gross))
-      setPaidAmountError('Paid amount cannot be greater than gross amount')
+      setPaidAmountError('Paid amount cannot be greater than final invoice total')
       setBalance('0')
       return
     } else {
       setPaidAmountError('')
     }
 
-    if (grossAmount && paidAmount) {
+    if (gross > 0 && paidAmount) {
       setBalance(Math.max(0, gross - paid).toString())
       return
     }
     setBalance('')
-  }, [grossAmount, paidAmount])
+  }, [getCurrentFinalGrossTotal, paidAmount])
 
   // Handle supplier selection
   const handleSupplierChange = (supplierId: string) => {
@@ -282,7 +282,7 @@ export default function SpecialPurchaseEntryPage() {
       return
     }
     // Payment validation
-    const gross = parseFloat(grossAmount) || 0
+    const gross = getCurrentFinalGrossTotal()
     const paid = parseFloat(paidAmount) || 0
     if (gross < 0 || paid < 0) {
       alert('Amounts cannot be negative')
@@ -291,7 +291,7 @@ export default function SpecialPurchaseEntryPage() {
 
     // Check if paid amount exceeds gross amount
     if (paid > gross) {
-      setPaidAmountError('Paid amount cannot be greater than gross amount')
+      setPaidAmountError('Paid amount cannot be greater than final invoice total')
       return
     }
 
@@ -327,7 +327,7 @@ export default function SpecialPurchaseEntryPage() {
         rate: Math.max(0, parseFloat(rate) || 0),
         netAmount: Math.max(0, parseFloat(netAmount) || 0),
         otherAmount: Math.max(0, parseFloat(otherAmount) || 0),
-        grossAmount: Math.max(0, parseFloat(grossAmount) || 0),
+        grossAmount: Math.max(0, gross),
         paidAmount: Math.max(0, parseFloat(paidAmount) || 0),
         balance: Math.max(0, parseFloat(balance) || 0),
         paymentStatus,
@@ -381,6 +381,10 @@ export default function SpecialPurchaseEntryPage() {
 
   const companyId = getCompanyIdFromSearch(window.location.search)
   const defaultProductName = products.find((product) => product.id === defaultProductId)?.name || ''
+  const selectedProductRecord = products.find((product) => product.id === selectedProduct) || null
+  const taxPreview = calculateTaxBreakdown(parseFloat(netAmount) || 0, selectedProductRecord?.gstRate || 0)
+  const calculatedGrossAmount = roundCurrency(taxPreview.lineTotal + (parseFloat(otherAmount) || 0))
+  const finalGrossAmount = getCurrentFinalGrossTotal()
 
   return (
     <DashboardLayout companyId={companyId}>
@@ -516,6 +520,11 @@ export default function SpecialPurchaseEntryPage() {
                     {defaultProductName ? (
                       <p className="mt-1 text-xs text-slate-600">Default from Product Master: {defaultProductName}</p>
                     ) : null}
+                    {selectedProductRecord ? (
+                      <p className="mt-1 text-xs text-slate-600">
+                        Tax rule: {Number(selectedProductRecord.gstRate || 0) > 0 ? `${Number(selectedProductRecord.gstRate || 0).toFixed(2)}% GST` : 'Non-GST / tax-free'}
+                      </p>
+                    ) : null}
                   </div>
 
                   {/* No. of Bags */}
@@ -565,7 +574,7 @@ export default function SpecialPurchaseEntryPage() {
 
                   {/* Rate */}
                   <div>
-                    <Label htmlFor="rate">Rate</Label>
+                    <Label htmlFor="rate">Average Rate / Qt</Label>
                     <Input
                       id="rate"
                       type="number"
@@ -590,6 +599,17 @@ export default function SpecialPurchaseEntryPage() {
                     />
                   </div>
 
+                  <div>
+                    <Label htmlFor="gstAmount">GST Amount</Label>
+                    <Input
+                      id="gstAmount"
+                      value={taxPreview.gstAmount.toFixed(2)}
+                      readOnly
+                      className="bg-gray-100"
+                      placeholder="Calculated automatically"
+                    />
+                  </div>
+
                   {/* Other Amount */}
                   <div>
                     <Label htmlFor="otherAmount">Other Amount</Label>
@@ -606,14 +626,30 @@ export default function SpecialPurchaseEntryPage() {
 
                   {/* Gross Amount */}
                   <div>
-                    <Label htmlFor="grossAmount">Gross Amount</Label>
+                    <Label htmlFor="grossAmount">Calculated Gross Amount</Label>
                     <Input
                       id="grossAmount"
-                      value={grossAmount}
+                      value={calculatedGrossAmount.toFixed(2)}
                       readOnly
                       className="bg-gray-100"
                       placeholder="Calculated automatically"
                     />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="manualGrossAmount">Final Invoice Total</Label>
+                    <Input
+                      id="manualGrossAmount"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={manualGrossAmount}
+                      onChange={(e) => setManualGrossAmount(toNonNegative(e.target.value))}
+                      placeholder={calculatedGrossAmount.toFixed(2)}
+                    />
+                    <p className="mt-1 text-xs text-slate-500">
+                      Leave blank to use the calculated gross total. Enter a value here only when the final invoice amount needs a manual override.
+                    </p>
                   </div>
 
                   {/* Paid Amount */}
@@ -623,7 +659,7 @@ export default function SpecialPurchaseEntryPage() {
                       id="paidAmount"
                       type="number"
                       min="0"
-                      max={grossAmount || undefined}
+                      max={finalGrossAmount || undefined}
                       step="0.01"
                       value={paidAmount}
                       onChange={(e) => handlePaidAmountChange(e.target.value)}
@@ -648,9 +684,29 @@ export default function SpecialPurchaseEntryPage() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <div className="rounded-[1rem] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-xs text-slate-500">GST Status</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900">
+                      {taxPreview.gstRate > 0 ? `${taxPreview.gstRate.toFixed(2)}% GST` : 'Non-GST'}
+                    </p>
+                  </div>
+                  <div className="rounded-[1rem] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-xs text-slate-500">Calculated Gross</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900">{currencyText(calculatedGrossAmount)}</p>
+                  </div>
+                  <div className="rounded-[1rem] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-xs text-slate-500">Final Invoice Total</p>
+                    <p className="mt-1 text-lg font-semibold text-emerald-700">{currencyText(finalGrossAmount)}</p>
+                  </div>
+                </div>
+
                 <div className="flex justify-end space-x-4">
                   <Button type="button" variant="outline" onClick={() => router.back()}>
                     Cancel
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => setManualGrossAmount('')} disabled={manualGrossAmount === ''}>
+                    Reset Total
                   </Button>
                   <Button type="button" variant="outline" disabled={submitting} onClick={() => void submitSpecialPurchase(true)}>
                     Save & Print

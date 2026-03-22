@@ -1,0 +1,289 @@
+import { prisma } from '@/lib/prisma'
+import { createSupabaseAdminClient } from '@/lib/supabase/admin'
+import { getAccessibleCompanies, normalizeAppRole } from '@/lib/api-security'
+import type { RequestAuthContext } from '@/lib/api-security'
+
+type LegacyUserRecord = {
+  id: string
+  userId: string
+  traderId: string
+  companyId: string | null
+  name: string | null
+  role: string | null
+  locked: boolean
+  deletedAt: Date | null
+  trader: {
+    id: string
+    name: string
+    locked: boolean
+    deletedAt: Date | null
+  } | null
+}
+
+type SyncedSupabaseUser = {
+  authUserId: string
+  loginEmail: string
+  defaultCompanyId: string | null
+}
+
+// We intentionally use a loose client shape here until generated Supabase database
+// types are added; this bootstrap path only runs in the privileged auth bridge.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getAdminClient(): any {
+  return createSupabaseAdminClient()
+}
+
+function cleanEmailPart(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'user'
+}
+
+export function buildSupabaseLoginEmail(input: {
+  legacyUserId: string
+  traderId: string
+  userId: string
+}): string {
+  const traderPart = cleanEmailPart(input.traderId).slice(0, 32)
+  const userPart = cleanEmailPart(input.userId).slice(0, 32)
+  return `${traderPart}--${userPart}--${input.legacyUserId}@billing.local`
+}
+
+export async function loadLegacyUserForSupabaseSync(legacyUserId: string): Promise<LegacyUserRecord | null> {
+  const user = await prisma.user.findFirst({
+    where: {
+      id: legacyUserId,
+      deletedAt: null
+    },
+    select: {
+      id: true,
+      userId: true,
+      traderId: true,
+      companyId: true,
+      name: true,
+      role: true,
+      locked: true,
+      deletedAt: true,
+      trader: {
+        select: {
+          id: true,
+          name: true,
+          locked: true,
+          deletedAt: true
+        }
+      }
+    }
+  })
+
+  if (!user || !user.trader || user.locked || user.deletedAt || user.trader.locked || user.trader.deletedAt) {
+    return null
+  }
+
+  return user
+}
+
+async function syncProfileAccessGraph(params: {
+  authUserId: string
+  legacyUser: LegacyUserRecord
+  loginEmail: string
+}) {
+  const admin = getAdminClient()
+  const role = normalizeAppRole(params.legacyUser.role)
+  const authContext: RequestAuthContext = {
+    userId: params.legacyUser.userId,
+    traderId: params.legacyUser.traderId,
+    role,
+    companyId: params.legacyUser.companyId,
+    userDbId: params.legacyUser.id
+  }
+
+  const accessibleCompanies = await getAccessibleCompanies(authContext)
+  const accessibleCompanyIds = Array.from(new Set(accessibleCompanies.map((row) => row.id)))
+  const defaultCompanyId =
+    accessibleCompanies.find((row) => row.id === params.legacyUser.companyId && !row.locked)?.id ||
+    accessibleCompanies.find((row) => !row.locked)?.id ||
+    accessibleCompanies[0]?.id ||
+    null
+
+  const { error: profileError } = await admin.from('profiles').upsert(
+    {
+      id: params.authUserId,
+      legacy_user_id: params.legacyUser.id,
+      trader_id: params.legacyUser.traderId,
+      user_code: params.legacyUser.userId,
+      full_name: params.legacyUser.name,
+      app_role: role,
+      login_email: params.loginEmail,
+      default_company_id: defaultCompanyId,
+      is_active: true
+    },
+    {
+      onConflict: 'id'
+    }
+  )
+
+  if (profileError) {
+    throw new Error(`Failed to sync Supabase profile: ${profileError.message}`)
+  }
+
+  const { error: deactivateAccessError } = await admin
+    .from('profile_company_access')
+    .update({
+      is_active: false,
+      is_default: false
+    })
+    .eq('profile_id', params.authUserId)
+
+  if (deactivateAccessError) {
+    throw new Error(`Failed to refresh company access: ${deactivateAccessError.message}`)
+  }
+
+  if (accessibleCompanyIds.length > 0) {
+    const { error: accessUpsertError } = await admin.from('profile_company_access').upsert(
+      accessibleCompanyIds.map((companyId) => ({
+        profile_id: params.authUserId,
+        company_id: companyId,
+        is_default: companyId === defaultCompanyId,
+        is_active: true
+      })),
+      {
+        onConflict: 'profile_id,company_id'
+      }
+    )
+
+    if (accessUpsertError) {
+      throw new Error(`Failed to sync company access: ${accessUpsertError.message}`)
+    }
+  }
+
+  const permissionRows = await prisma.userPermission.findMany({
+    where: {
+      userId: params.legacyUser.id
+    },
+    select: {
+      companyId: true,
+      module: true,
+      canRead: true,
+      canWrite: true
+    }
+  })
+
+  const { error: deletePermissionsError } = await admin
+    .from('profile_company_permissions')
+    .delete()
+    .eq('profile_id', params.authUserId)
+
+  if (deletePermissionsError) {
+    throw new Error(`Failed to refresh company permissions: ${deletePermissionsError.message}`)
+  }
+
+  if (permissionRows.length > 0) {
+    const { error: permissionInsertError } = await admin.from('profile_company_permissions').insert(
+      permissionRows.map((row) => ({
+        profile_id: params.authUserId,
+        company_id: row.companyId,
+        module: row.module,
+        can_read: row.canRead,
+        can_write: row.canWrite
+      }))
+    )
+
+    if (permissionInsertError) {
+      throw new Error(`Failed to sync company permissions: ${permissionInsertError.message}`)
+    }
+  }
+
+  return {
+    defaultCompanyId
+  }
+}
+
+export async function ensureSupabaseIdentityForLegacyUser(params: {
+  legacyUser: LegacyUserRecord
+  password: string
+}): Promise<SyncedSupabaseUser> {
+  const admin = getAdminClient()
+  const fallbackEmail = buildSupabaseLoginEmail({
+    legacyUserId: params.legacyUser.id,
+    traderId: params.legacyUser.traderId,
+    userId: params.legacyUser.userId
+  })
+
+  const { data: existingProfile, error: profileLookupError } = await admin
+    .from('profiles')
+    .select('id, login_email')
+    .eq('legacy_user_id', params.legacyUser.id)
+    .maybeSingle()
+
+  if (profileLookupError) {
+    throw new Error(`Failed to lookup Supabase profile: ${profileLookupError.message}`)
+  }
+
+  let authUserId = existingProfile?.id || null
+  let loginEmail = existingProfile?.login_email || fallbackEmail
+
+  const userMetadata = {
+    legacy_user_id: params.legacyUser.id,
+    trader_id: params.legacyUser.traderId,
+    user_code: params.legacyUser.userId,
+    full_name: params.legacyUser.name || '',
+    app_role: normalizeAppRole(params.legacyUser.role),
+    login_email: loginEmail,
+    default_company_id: params.legacyUser.companyId || ''
+  }
+
+  if (!authUserId) {
+    const created = await admin.auth.admin.createUser({
+      email: loginEmail,
+      password: params.password,
+      email_confirm: true,
+      user_metadata: userMetadata
+    })
+
+    if (created.error) {
+      const { data: recoveredProfile, error: recoveryError } = await admin
+        .from('profiles')
+        .select('id, login_email')
+        .eq('login_email', loginEmail)
+        .maybeSingle()
+
+      if (recoveryError) {
+        throw new Error(`Failed to provision Supabase auth user: ${created.error.message}`)
+      }
+
+      if (!recoveredProfile?.id) {
+        throw new Error(`Failed to provision Supabase auth user: ${created.error.message}`)
+      }
+
+      authUserId = recoveredProfile.id
+      loginEmail = recoveredProfile.login_email || loginEmail
+    } else {
+      authUserId = created.data.user.id
+      loginEmail = created.data.user.email || loginEmail
+    }
+  }
+
+  const updatedAuthUser = await admin.auth.admin.updateUserById(authUserId, {
+    email: loginEmail,
+    password: params.password,
+    user_metadata: userMetadata
+  })
+
+  if (updatedAuthUser.error) {
+    throw new Error(`Failed to sync Supabase auth user: ${updatedAuthUser.error.message}`)
+  }
+
+  const graph = await syncProfileAccessGraph({
+    authUserId,
+    legacyUser: params.legacyUser,
+    loginEmail
+  })
+
+  return {
+    authUserId,
+    loginEmail,
+    defaultCompanyId: graph.defaultCompanyId
+  }
+}

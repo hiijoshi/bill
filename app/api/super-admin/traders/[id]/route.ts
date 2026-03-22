@@ -3,16 +3,19 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
+import { normalizeTraderLimitInput } from '@/lib/trader-limits'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'Trader ID is required') })
 
 const updateTraderSchema = z
   .object({
     name: z.string().trim().min(1, 'Trader name is required').max(100).optional(),
+    maxCompanies: z.union([z.number().int().min(0), z.string().trim().regex(/^\d+$/)]).optional().nullable(),
+    maxUsers: z.union([z.number().int().min(0), z.string().trim().regex(/^\d+$/)]).optional().nullable(),
     locked: z.boolean().optional()
   })
   .strict()
-  .refine((value) => value.name !== undefined || value.locked !== undefined, {
+  .refine((value) => value.name !== undefined || value.maxCompanies !== undefined || value.maxUsers !== undefined || value.locked !== undefined, {
     message: 'At least one field is required'
   })
 
@@ -25,6 +28,8 @@ async function getTraderById(id: string, includeDeleted: boolean) {
     select: {
       id: true,
       name: true,
+      maxCompanies: true,
+      maxUsers: true,
       locked: true,
       deletedAt: true,
       createdAt: true,
@@ -45,6 +50,8 @@ async function getTraderById(id: string, includeDeleted: boolean) {
   return {
     id: trader.id,
     name: trader.name,
+    maxCompanies: trader.maxCompanies ?? 0,
+    maxUsers: trader.maxUsers ?? 0,
     locked: trader.locked,
     deletedAt: trader.deletedAt,
     createdAt: trader.createdAt,
@@ -118,6 +125,12 @@ export async function PUT(
       return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
     }
 
+    const maxCompanies = normalizeTraderLimitInput(parsedBody.data.maxCompanies)
+    const maxUsers = normalizeTraderLimitInput(parsedBody.data.maxUsers)
+    if (maxCompanies === undefined || maxUsers === undefined) {
+      return NextResponse.json({ error: 'Trader limits must be whole numbers 0 or above' }, { status: 400 })
+    }
+
     if (parsedBody.data.locked === true && authResult.auth.traderId === traderId) {
       return NextResponse.json({ error: 'Cannot lock current session trader' }, { status: 403 })
     }
@@ -143,6 +156,8 @@ export async function PUT(
         where: { id: traderId },
         data: {
           ...(nextName !== undefined ? { name: nextName } : {}),
+          ...(maxCompanies !== undefined ? { maxCompanies } : {}),
+          ...(maxUsers !== undefined ? { maxUsers } : {}),
           ...(parsedBody.data.locked !== undefined ? { locked: parsedBody.data.locked } : {})
         }
       })

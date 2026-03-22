@@ -25,6 +25,49 @@ export async function POST(request: NextRequest) {
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
+    const [product, summary] = await Promise.all([
+      prisma.product.findFirst({
+        where: {
+          id: productId,
+          companyId
+        },
+        select: {
+          id: true,
+          name: true,
+          unit: {
+            select: {
+              symbol: true
+            }
+          }
+        }
+      }),
+      prisma.stockLedger.aggregate({
+        where: {
+          companyId,
+          productId
+        },
+        _sum: {
+          qtyIn: true,
+          qtyOut: true
+        }
+      })
+    ])
+
+    if (!product) {
+      return NextResponse.json({ error: 'Selected product not found' }, { status: 404 })
+    }
+
+    const nextQtyOut = Number(qtyOut) || 0
+    const currentStock = Number(summary._sum.qtyIn || 0) - Number(summary._sum.qtyOut || 0)
+    if (nextQtyOut > 0 && type === 'adjustment' && nextQtyOut > currentStock) {
+      return NextResponse.json(
+        {
+          error: `Adjustment quantity cannot exceed current stock (${currentStock.toFixed(2)} ${product.unit.symbol})`
+        },
+        { status: 400 }
+      )
+    }
+
     // Create stock ledger entry
     const stockLedger = await prisma.stockLedger.create({
       data: {
@@ -113,7 +156,7 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const whereClause: any = { companyId }
+    const whereClause: { companyId: string; productId?: string } = { companyId }
     if (productId) {
       whereClause.productId = productId
     }

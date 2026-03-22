@@ -2,9 +2,18 @@
 
 import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
+import { useRouter } from 'next/navigation'
+
+type AuthStatus = {
+  status: number | string
+  data?: unknown
+  success: boolean
+  error?: string
+}
 
 export default function AuthTestPage() {
-  const [authStatus, setAuthStatus] = useState<any>(null)
+  const router = useRouter()
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -31,34 +40,6 @@ export default function AuthTestPage() {
     }
   }
 
-  const testLogin = async () => {
-    try {
-      const response = await fetch('/api/auth', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          traderId: 'KR', 
-          userId: 'admin', 
-          password: '1234' 
-        }),
-      })
-      
-      const data = await response.json()
-      
-      if (response.ok) {
-        alert('Login successful! Try checking auth again.')
-        checkAuth() // Re-check auth status
-      } else {
-        alert('Login failed: ' + (data.error || 'Unknown error'))
-      }
-    } catch (error) {
-      console.error('Login test error:', error)
-      alert('Login test error: ' + (error instanceof Error ? error.message : 'Unknown error'))
-    }
-  }
-
   if (loading) {
     return <div>Loading...</div>
   }
@@ -76,9 +57,8 @@ export default function AuthTestPage() {
 
       <div className="space-x-4">
         <Button onClick={checkAuth}>Check Auth Status</Button>
-        <Button onClick={testLogin} variant="outline">Test Login</Button>
         <Button 
-          onClick={() => window.location.href = '/login'} 
+          onClick={() => router.push('/login')} 
           variant="secondary"
         >
           Go to Login Page
@@ -86,9 +66,8 @@ export default function AuthTestPage() {
       </div>
 
       <div className="mt-4 text-sm text-gray-600">
-        <p>1. Click "Test Login" to authenticate</p>
-        <p>2. Click "Check Auth Status" to verify session</p>
-        <p>3. If successful, try accessing the units page</p>
+        <p>1. Use the normal login screen for authentication</p>
+        <p>2. Click &quot;Check Auth Status&quot; to verify the current session</p>
       </div>
     </div>
   )

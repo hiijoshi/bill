@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import DashboardLayout from '@/app/components/DashboardLayout'
 import { CreditCard, Package, Users, BarChart } from 'lucide-react'
 
 interface User {

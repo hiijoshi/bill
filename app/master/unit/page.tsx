@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -37,21 +37,7 @@ export default function UnitMasterPage() {
     kgEquivalent: '1',
     description: ''
   })
-  useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
-      if (!resolvedCompanyId) {
-        setErrorMessage('Failed to resolve active company. Please re-login.')
-        setLoading(false)
-        return
-      }
-      setCompanyId(resolvedCompanyId)
-      stripCompanyParamsFromUrl()
-      await fetchUnits(resolvedCompanyId)
-    })()
-  }, [])
-
-  const fetchUnits = async (targetCompanyId = companyId) => {
+  const fetchUnits = useCallback(async (targetCompanyId = companyId) => {
     if (!targetCompanyId) {
       setLoading(false)
       return
@@ -72,7 +58,21 @@ export default function UnitMasterPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [companyId])
+
+  useEffect(() => {
+    ;(async () => {
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (!resolvedCompanyId) {
+        setErrorMessage('Failed to resolve active company. Please re-login.')
+        setLoading(false)
+        return
+      }
+      setCompanyId(resolvedCompanyId)
+      stripCompanyParamsFromUrl()
+      await fetchUnits(resolvedCompanyId)
+    })()
+  }, [fetchUnits])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

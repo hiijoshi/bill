@@ -8,11 +8,20 @@ interface RateLimitConfig {
   maxRequests: number // Max requests per window
 }
 
-export function rateLimit(config: RateLimitConfig) {
-  return function (target: any, propertyName: string, descriptor: PropertyDescriptor) {
-    const method = descriptor.value
+type RateLimitedHandler = (request: NextRequest, ...args: unknown[]) => Promise<unknown> | unknown
 
-    descriptor.value = async function (request: NextRequest, ...args: any[]) {
+export function rateLimit(config: RateLimitConfig) {
+  return function (
+    target: object,
+    propertyName: string,
+    descriptor: TypedPropertyDescriptor<RateLimitedHandler>
+  ) {
+    void target
+    void propertyName
+    const method = descriptor.value
+    if (!method) return descriptor
+
+    descriptor.value = async function (request: NextRequest, ...args: unknown[]) {
       const identifier = request.headers.get('x-forwarded-for') || 
                           request.headers.get('x-real-ip') || 
                           'unknown'
@@ -58,6 +67,8 @@ export function rateLimit(config: RateLimitConfig) {
       
       return response
     }
+
+    return descriptor
   }
 }
 

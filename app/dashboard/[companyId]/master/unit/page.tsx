@@ -1,13 +1,12 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import DashboardLayout from '@/app/components/DashboardLayout'
 import { Badge } from '@/components/ui/badge'
 import { Plus, Edit, Trash2, Ruler } from 'lucide-react'
 
@@ -39,18 +38,7 @@ export default function DashboardUnitPage({ params }: DashboardUnitPageProps) {
     description: ''
   })
 
-  useEffect(() => {
-    const resolveParams = async () => {
-      const resolvedParams = await params
-      setCompanyId(resolvedParams.companyId)
-      if (resolvedParams.companyId) {
-        fetchUnits(resolvedParams.companyId)
-      }
-    }
-    resolveParams()
-  }, [params])
-
-  const fetchUnits = async (companyId: string) => {
+  const fetchUnits = useCallback(async (companyId: string) => {
     try {
       const response = await fetch(`/api/units?companyId=${companyId}`)
       
@@ -80,7 +68,18 @@ export default function DashboardUnitPage({ params }: DashboardUnitPageProps) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [router])
+
+  useEffect(() => {
+    const resolveParams = async () => {
+      const resolvedParams = await params
+      setCompanyId(resolvedParams.companyId)
+      if (resolvedParams.companyId) {
+        void fetchUnits(resolvedParams.companyId)
+      }
+    }
+    void resolveParams()
+  }, [fetchUnits, params])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

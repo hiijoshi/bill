@@ -67,7 +67,7 @@ async function main() {
     },
   })
 
-  const user3 = await prisma.user.create({
+  await prisma.user.create({
     data: {
       userId: 'operator',
       password: await bcrypt.hash('operator123', 10),
@@ -82,7 +82,7 @@ async function main() {
   const superAdminUserId = process.env.SUPER_ADMIN_USER_ID || 'superadmin'
   const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD || 'super-admin-2026-secure'
   const hashedSuper = await bcrypt.hash(superAdminPassword, 10)
-  const superUser = await prisma.user.create({
+  await prisma.user.create({
     data: {
       userId: superAdminUserId,
       password: hashedSuper,
@@ -358,7 +358,7 @@ async function main() {
 
   // Create Transport
   console.log('🚛 Creating transport vehicles...')
-  const transports = await Promise.all([
+  await Promise.all([
     prisma.transport.create({
       data: {
         companyId: company1.id,

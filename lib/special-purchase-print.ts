@@ -19,8 +19,13 @@ export interface SpecialPurchaseBillPrintData {
   weight: number
   rate: number
   netAmount: number
+  taxableAmount: number
+  gstRate: number
+  gstAmount: number
   otherAmount: number
   grossAmount: number
+  subTotalAmount: number
+  totalGstAmount: number
   totalAmount: number
   paidAmount: number
   balanceAmount: number
@@ -48,12 +53,17 @@ type SpecialPurchaseBillLike = {
     weight?: unknown
     rate?: unknown
     netAmount?: unknown
+    taxableAmount?: unknown
+    gstRateSnapshot?: unknown
+    gstAmount?: unknown
     otherAmount?: unknown
     grossAmount?: unknown
     product?: {
       name?: unknown
     } | null
   }> | null
+  subTotalAmount?: unknown
+  gstAmount?: unknown
   totalAmount?: unknown
   paidAmount?: unknown
   balanceAmount?: unknown
@@ -94,8 +104,13 @@ export function mapSpecialPurchaseBillToPrintData(bill: SpecialPurchaseBillLike)
     weight: Math.max(0, toNumber(item?.weight, 0)),
     rate: Math.max(0, toNumber(item?.rate, 0)),
     netAmount: Math.max(0, toNumber(item?.netAmount, 0)),
+    taxableAmount: Math.max(0, toNumber(item?.taxableAmount ?? item?.netAmount, 0)),
+    gstRate: Math.max(0, toNumber(item?.gstRateSnapshot, 0)),
+    gstAmount: Math.max(0, toNumber(item?.gstAmount, 0)),
     otherAmount: Math.max(0, toNumber(item?.otherAmount, 0)),
     grossAmount: Math.max(0, toNumber(item?.grossAmount, 0)),
+    subTotalAmount: Math.max(0, toNumber(bill?.subTotalAmount ?? item?.taxableAmount ?? item?.netAmount, 0)),
+    totalGstAmount: Math.max(0, toNumber(bill?.gstAmount ?? item?.gstAmount, 0)),
     totalAmount: Math.max(0, toNumber(bill?.totalAmount, 0)),
     paidAmount: Math.max(0, toNumber(bill?.paidAmount, 0)),
     balanceAmount: Math.max(0, toNumber(bill?.balanceAmount, 0)),

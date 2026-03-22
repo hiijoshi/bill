@@ -8,6 +8,28 @@ const clampNonNegative = (value: number): number => {
   return Math.max(0, value)
 }
 
+const getCellString = (value: unknown): string => {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return ''
+}
+
+const getCellOptionalString = (value: unknown): string | null => {
+  const normalized = getCellString(value)
+  return normalized ? normalized : null
+}
+
+const getCellNumber = (value: unknown): number => {
+  const normalized = getCellString(value)
+  return clampNonNegative(Number(normalized || 0))
+}
+
+const getCellDateIso = (value: unknown): string => {
+  const normalized = getCellString(value)
+  const parsedDate = normalized ? new Date(normalized) : new Date()
+  return Number.isFinite(parsedDate.getTime()) ? parsedDate.toISOString() : new Date().toISOString()
+}
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData()
@@ -20,7 +42,7 @@ export async function POST(request: NextRequest) {
     const buffer = await file.arrayBuffer()
     const workbook = XLSX.read(buffer, { type: 'buffer' })
     const worksheet = workbook.Sheets[workbook.SheetNames[0]]
-    const data = XLSX.utils.sheet_to_json(worksheet)
+    const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet)
 
     const { searchParams } = new URL(request.url)
     const companyId = searchParams.get('companyId')
@@ -44,11 +66,17 @@ export async function POST(request: NextRequest) {
     let lastBillNumber: number = parseInt(lastBillRes?.billNo || '0')
 
     for (let i = 0; i < data.length; i++) {
-      const row = data[i] as any
+      const row = data[i]
       
       try {
+        const billNumber = getCellString(row['Bill Number'])
+        const farmerName = getCellString(row['Farmer Name'])
+        const productName = getCellString(row['Product Name'])
+        const weightValue = getCellString(row['Weight'])
+        const rateValue = getCellString(row['Rate'])
+
         // Validate required fields
-        if (!row['Bill Number'] || !row['Farmer Name'] || !row['Product Name'] || !row['Weight'] || !row['Rate']) {
+        if (!billNumber || !farmerName || !productName || !weightValue || !rateValue) {
           errors.push(`Row ${i + 2}: Missing required fields`)
           continue
         }
@@ -56,20 +84,20 @@ export async function POST(request: NextRequest) {
         // Get product
         const product = await prisma.product.findFirst({
           where: { 
-            name: row['Product Name'],
+            name: productName,
             companyId 
           }
         })
 
         if (!product) {
-          errors.push(`Row ${i + 2}: Product "${row['Product Name']}" not found`)
+          errors.push(`Row ${i + 2}: Product "${productName}" not found`)
           continue
         }
 
         // Find or create farmer
         let farmer = await prisma.farmer.findFirst({
           where: { 
-            name: row['Farmer Name'],
+            name: farmerName,
             companyId: companyId
           }
         })
@@ -77,9 +105,9 @@ export async function POST(request: NextRequest) {
         if (!farmer) {
           farmer = await prisma.farmer.create({
             data: {
-              name: row['Farmer Name'],
-              address: row['Farmer Address'] || null,
-              phone1: row['Farmer Contact'] || null,
+              name: farmerName,
+              address: getCellOptionalString(row['Farmer Address']),
+              phone1: getCellOptionalString(row['Farmer Contact']),
               companyId: companyId
             }
           })
@@ -87,11 +115,11 @@ export async function POST(request: NextRequest) {
 
         lastBillNumber++
 
-        const weight = clampNonNegative(parseFloat(row['Weight']) || 0)
-        const rate = clampNonNegative(parseFloat(row['Rate']) || 0)
-        const hammali = clampNonNegative(parseFloat(row['Hammali']) || 0)
-        const payableAmount = clampNonNegative((parseFloat(row['Payable Amount']) || (weight * rate) - hammali))
-        const paidAmount = clampNonNegative(parseFloat(row['Paid Amount']) || 0)
+        const weight = getCellNumber(row['Weight'])
+        const rate = getCellNumber(row['Rate'])
+        const hammali = getCellNumber(row['Hammali'])
+        const payableAmount = clampNonNegative(getCellNumber(row['Payable Amount']) || (weight * rate) - hammali)
+        const paidAmount = getCellNumber(row['Paid Amount'])
         const safePaidAmount = Math.min(payableAmount, paidAmount)
         const balanceAmount = clampNonNegative(payableAmount - safePaidAmount)
         const status = safePaidAmount <= 0 ? 'unpaid' : balanceAmount === 0 ? 'paid' : 'partial'
@@ -100,7 +128,7 @@ export async function POST(request: NextRequest) {
           data: {
             companyId,
             billNo: lastBillNumber.toString(),
-            billDate: row['Bill Date'] ? new Date(row['Bill Date']).toISOString() : new Date().toISOString(),
+            billDate: getCellDateIso(row['Bill Date']),
             farmerId: farmer.id,
             totalAmount: payableAmount,
             paidAmount: safePaidAmount,

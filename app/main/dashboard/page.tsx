@@ -1,12 +1,11 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { Progress } from '@/components/ui/progress'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import {
   ShoppingCart,
@@ -21,9 +20,15 @@ import {
   Building2,
   Boxes,
   Scale,
-  Landmark,
   Bell,
-  Download
+  Download,
+  ShieldAlert,
+  ShieldCheck,
+  Trophy,
+  ChevronRight,
+  Activity,
+  ArrowUpRight,
+  Clock3
 } from 'lucide-react'
 import StockManagementTab from './components/StockManagementTab'
 import PaymentTab from './components/PaymentTab'
@@ -33,6 +38,7 @@ import { stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 type ActiveTab = 'purchase' | 'sales' | 'stock' | 'payment' | 'report'
 const DASHBOARD_CACHE_AGE_MS = 15_000
+const currencyFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 })
 
 type PurchaseBill = {
   id: string
@@ -117,6 +123,8 @@ const clampNonNegative = (value: number): number => {
   return Math.max(0, parsed)
 }
 
+const formatCurrency = (value: number) => `₹${currencyFormatter.format(clampNonNegative(value))}`
+
 export default function MainDashboardPage() {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState<ActiveTab>('purchase')
@@ -147,7 +155,7 @@ export default function MainDashboardPage() {
     stripCompanyParamsFromUrl()
   }, [])
 
-  const loadCompanies = async () => {
+  const loadCompanies = useCallback(async () => {
     const res = await fetch('/api/companies', { cache: 'no-store' })
     if (!res.ok) {
       if (res.status === 401) {
@@ -167,7 +175,7 @@ export default function MainDashboardPage() {
     if (!contentType.includes('application/json')) {
       return []
     }
-    const rows = await parseApiJson<any[]>(res, [])
+    const rows = await parseApiJson<Array<Record<string, unknown>>>(res, [])
     return Array.isArray(rows)
       ? rows.map((row) => ({
           id: String(row.id),
@@ -175,9 +183,9 @@ export default function MainDashboardPage() {
           locked: Boolean(row.locked)
         }))
       : []
-  }
+  }, [router])
 
-  const fetchDashboardData = async (companyIds: string[]) => {
+  const fetchDashboardData = useCallback(async (companyIds: string[]) => {
     if (companyIds.length === 0) {
       setData(emptyData)
       setFetchFailures([])
@@ -237,7 +245,7 @@ export default function MainDashboardPage() {
     setData(nextData)
     setFetchFailures(failures)
     setClientCache(`main-dashboard:${companyIds.slice().sort().join(',')}`, nextData)
-  }
+  }, [companies])
 
   useEffect(() => {
     let cancelled = false
@@ -248,26 +256,46 @@ export default function MainDashboardPage() {
         .split(',')
         .map((id) => id.trim())
         .filter(Boolean)
+      let activeCompanyId = ''
 
       try {
         const list: CompanyOption[] = await loadCompanies()
         if (cancelled) return
         setCompanies(list)
 
+        try {
+          const activeResponse = await fetch('/api/auth/company', { cache: 'no-store' })
+          if (activeResponse.ok) {
+            const activePayload = await activeResponse.json().catch(() => null)
+            const nextId = String(activePayload?.company?.id || '').trim()
+            if (nextId) {
+              activeCompanyId = nextId
+            }
+          }
+        } catch {
+          activeCompanyId = ''
+        }
+
         const availableIds = new Set(list.map((item) => item.id))
         let nextSelected = queryCompanyIds.filter((id) => availableIds.has(id))
         if (nextSelected.length === 0 && queryCompanyId && availableIds.has(queryCompanyId)) {
           nextSelected = [queryCompanyId]
+        }
+        if (nextSelected.length === 0 && activeCompanyId && availableIds.has(activeCompanyId)) {
+          nextSelected = [activeCompanyId]
         }
         if (nextSelected.length === 0 && queryCompanyId && list.length === 0) {
           nextSelected = [queryCompanyId]
           setCompanies([{ id: queryCompanyId, name: 'Current Company' }])
         }
         if (nextSelected.length === 0) {
-          nextSelected = list.map((item) => item.id)
+          const defaultCompanyId = list.find((item) => !item.locked)?.id || list[0]?.id || ''
+          nextSelected = defaultCompanyId ? [defaultCompanyId] : []
         }
         const nextPrimary = availableIds.has(queryCompanyId) && nextSelected.includes(queryCompanyId)
           ? queryCompanyId
+          : activeCompanyId && nextSelected.includes(activeCompanyId)
+            ? activeCompanyId
           : (nextSelected[0] || '')
         setSelectedCompanyIds(nextSelected)
         setPrimaryCompanyId(nextPrimary)
@@ -278,6 +306,10 @@ export default function MainDashboardPage() {
           setCompanies([{ id: queryCompanyId, name: 'Current Company' }])
           setSelectedCompanyIds([queryCompanyId])
           setPrimaryCompanyId(queryCompanyId)
+        } else if (activeCompanyId) {
+          setCompanies([{ id: activeCompanyId, name: 'Current Company' }])
+          setSelectedCompanyIds([activeCompanyId])
+          setPrimaryCompanyId(activeCompanyId)
         } else {
           setUiError('Failed to load company list')
         }
@@ -289,7 +321,7 @@ export default function MainDashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [loadCompanies])
 
   useEffect(() => {
     if (selectedCompanyIds.length === 0) return
@@ -324,7 +356,7 @@ export default function MainDashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [selectedCompanyIds.join(','), primaryCompanyId, companies])
+  }, [companies, fetchDashboardData, primaryCompanyId, selectedCompanyIds])
 
   useEffect(() => {
     if (!primaryCompanyId) return
@@ -419,39 +451,6 @@ export default function MainDashboardPage() {
       .sort((a, b) => b.date.getTime() - a.date.getTime())
       .slice(0, 8)
   }, [companies, data.purchaseBills, data.salesBills])
-
-  const topKpis = useMemo(() => {
-    return [
-      {
-        label: 'Business Volume',
-        value: `₹${(purchaseStats.total + salesStats.total).toFixed(2)}`,
-        hint: 'Purchase + sales',
-        icon: Building2,
-        className: 'border-slate-200 bg-white'
-      },
-      {
-        label: 'Net Cash Flow',
-        value: `₹${cashflow.net.toFixed(2)}`,
-        hint: cashflow.net > 0 ? 'Positive movement' : 'Balanced movement',
-        icon: Wallet,
-        className: 'border-slate-200 bg-white'
-      },
-      {
-        label: 'Master Records',
-        value: `${data.products.length + data.parties.length + data.units.length}`,
-        hint: `${data.products.length} products, ${data.parties.length} parties`,
-        icon: Boxes,
-        className: 'border-slate-200 bg-white'
-      },
-      {
-        label: 'Stock Entries',
-        value: `${data.stockLedger.length}`,
-        hint: 'Ledger records',
-        icon: Scale,
-        className: 'border-slate-200 bg-white'
-      }
-    ]
-  }, [cashflow.net, data.parties.length, data.products.length, data.stockLedger.length, data.units.length, purchaseStats.total, salesStats.total])
 
   const companyPerformance = useMemo(() => {
     const map = new Map<string, {
@@ -595,6 +594,52 @@ export default function MainDashboardPage() {
       lowStockItems: stockNotifications.slice(0, 5)
     }
   }, [data.purchaseBills, data.salesBills, fetchFailures.length, stockNotifications])
+  const notificationCount = notifications.lowStock + notifications.pendingBills + notifications.failedEntries
+
+  const topKpis = useMemo(() => {
+    return [
+      {
+        label: 'Business Volume',
+        value: formatCurrency(purchaseStats.total + salesStats.total),
+        hint: 'Purchase + Sales',
+        trend: `${purchaseStats.count + salesStats.count} bills tracked`,
+        icon: Building2,
+        className: 'border-slate-200 bg-white',
+        iconTone: 'bg-slate-900 text-white',
+        trendTone: 'text-slate-500'
+      },
+      {
+        label: 'Net Cash Flow',
+        value: formatCurrency(cashflow.net),
+        hint: 'Cash In vs Cash Out',
+        trend: cashflow.inAmount >= cashflow.outAmount ? 'Inflow ahead' : 'Watch payouts',
+        icon: Wallet,
+        className: 'border-slate-200 bg-white',
+        iconTone: 'bg-slate-100 text-slate-700',
+        trendTone: 'text-slate-500'
+      },
+      {
+        label: 'Master Records',
+        value: `${data.products.length + data.parties.length + data.units.length}`,
+        hint: `${data.products.length} products, ${data.parties.length} parties`,
+        trend: `${data.units.length} units configured`,
+        icon: Boxes,
+        className: 'border-slate-200 bg-white',
+        iconTone: 'bg-slate-100 text-slate-700',
+        trendTone: 'text-slate-500'
+      },
+      {
+        label: 'Stock Entries',
+        value: `${data.stockLedger.length}`,
+        hint: 'Ledger records',
+        trend: notifications.lowStock > 0 ? `${notifications.lowStock} low stock alerts` : 'Stock position stable',
+        icon: Scale,
+        className: 'border-slate-200 bg-white',
+        iconTone: notifications.lowStock > 0 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700',
+        trendTone: 'text-slate-500'
+      }
+    ]
+  }, [cashflow.inAmount, cashflow.net, cashflow.outAmount, data.parties.length, data.products.length, data.stockLedger.length, data.units.length, notifications.lowStock, purchaseStats.count, purchaseStats.total, salesStats.count, salesStats.total])
 
   const downloadTextFile = (name: string, content: string, mimeType: string) => {
     const blob = new Blob([content], { type: mimeType })
@@ -680,6 +725,16 @@ export default function MainDashboardPage() {
     }
   }
 
+  const getTabDescription = (tab: ActiveTab) => {
+    switch (tab) {
+      case 'purchase': return 'Supplier intake, bills and payable control'
+      case 'sales': return 'Dispatch, invoicing and receivable follow-up'
+      case 'stock': return 'Ledger movements, balances and shortage control'
+      case 'payment': return 'Cash, bank and bill settlement visibility'
+      case 'report': return 'Exports, summaries and decision-ready reporting'
+    }
+  }
+
   if (loading) {
     return (
       <DashboardLayout companyId={primaryCompanyId}>
@@ -690,258 +745,599 @@ export default function MainDashboardPage() {
     )
   }
 
+  const headerActions = (
+    <>
+      <Button
+        onClick={() => handleNavigation('/purchase/entry')}
+        className="h-10 rounded-2xl bg-slate-950 px-5 text-sm text-white transition-colors hover:bg-slate-800"
+      >
+        <Plus className="mr-2 h-4 w-4" />
+        Quick Bill
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        onClick={() => document.getElementById('notification-center')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+        className="relative h-10 w-10 rounded-2xl border-slate-200 bg-white transition-colors hover:bg-slate-50"
+      >
+        <Bell className="h-4 w-4" />
+        {notificationCount > 0 ? (
+          <span className="absolute -right-1.5 -top-1.5 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
+            {Math.min(notificationCount, 99)}
+          </span>
+        ) : null}
+      </Button>
+    </>
+  )
+
+  const primaryCompanyName = companies.find((item) => item.id === primaryCompanyId)?.name || 'None'
+  const executiveIndicators = [
+    {
+      label: 'Companies',
+      value: `${selectedCompanyIds.length}`,
+      hint: selectedCompanyIds.length === 1 ? 'currently in scope' : 'currently in scope',
+      icon: Building2,
+      tone: 'border-slate-200 bg-slate-50',
+      iconTone: 'bg-slate-900 text-white'
+    },
+    {
+      label: 'Collections',
+      value: formatCurrency(cashflow.inAmount),
+      hint: 'sales payments recorded',
+      icon: Wallet,
+      tone: 'border-slate-200 bg-slate-50',
+      iconTone: 'bg-slate-100 text-slate-700'
+    },
+    {
+      label: 'Attention',
+      value: `${notifications.pendingBills + notifications.lowStock}`,
+      hint: 'open bills and stock alerts',
+      icon: ShieldAlert,
+      tone: 'border-slate-200 bg-slate-50',
+      iconTone: 'bg-slate-100 text-slate-700'
+    }
+  ] as const
+  const quickActions = [
+    {
+      label: 'Purchase Entry',
+      hint: 'Capture supplier purchases fast',
+      icon: ShoppingCart,
+      path: '/purchase/entry',
+      tone: 'border-slate-200 bg-white text-slate-950',
+      iconTone: 'bg-slate-900 text-white'
+    },
+    {
+      label: 'Sales Entry',
+      hint: 'Create dispatch bills in one flow',
+      icon: Receipt,
+      path: '/sales/entry',
+      tone: 'border-slate-200 bg-white text-slate-950',
+      iconTone: 'bg-slate-100 text-slate-700'
+    },
+    {
+      label: 'Payments',
+      hint: 'Track settlements and pending dues',
+      icon: CreditCard,
+      path: '/payment/dashboard',
+      tone: 'border-slate-200 bg-white text-slate-950',
+      iconTone: 'bg-slate-100 text-slate-700'
+    },
+    {
+      label: 'Reports',
+      hint: 'Open operational and export views',
+      icon: FileText,
+      path: '/reports/main',
+      tone: 'border-slate-200 bg-white text-slate-950',
+      iconTone: 'bg-slate-100 text-slate-700'
+    }
+  ] as const
+  const healthHighlights = [
+    {
+      label: 'Sales Collection',
+      value: `${health.salesCollectionRate.toFixed(1)}%`,
+      progress: health.salesCollectionRate,
+      accent: 'bg-emerald-500'
+    },
+    {
+      label: 'Purchase Clearance',
+      value: `${health.purchaseClearanceRate.toFixed(1)}%`,
+      progress: health.purchaseClearanceRate,
+      accent: 'bg-sky-500'
+    }
+  ] as const
+
   return (
-    <DashboardLayout companyId={primaryCompanyId}>
-      <div className="p-6 md:p-8">
-        <div className="max-w-7xl mx-auto space-y-6">
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="h-1 rounded-t-2xl bg-gradient-to-r from-slate-700 via-slate-500 to-slate-700" />
-            <div className="p-6 md:p-8">
-              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <p className="text-sm text-slate-500">Dashboard</p>
-                  <h1 className="text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">Business Overview</h1>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Track purchase, sales, stock and payments across selected companies.
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="secondary">{selectedCompanyIds.length} companies selected</Badge>
-                  <Badge variant="outline">Primary: {companies.find((item) => item.id === primaryCompanyId)?.name || 'None'}</Badge>
-                  <Button onClick={() => handleNavigation('/purchase/entry')}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Quick Bill
-                  </Button>
-                  <Button variant="outline" onClick={handleExportBackup}>
-                    <Download className="mr-2 h-4 w-4" />
-                    Daily Backup
-                  </Button>
-                </div>
+    <DashboardLayout companyId={primaryCompanyId} headerActions={headerActions}>
+      <div className="min-h-full bg-[#f5f5f7]">
+        <div className="mx-auto max-w-7xl space-y-8 p-6 md:p-8">
+          <section className="grid gap-6 xl:grid-cols-[1.45fr_0.85fr]">
+            <div className="rounded-[2rem] border border-black/5 bg-white p-8 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.22)]">
+              <p className="text-sm font-medium text-slate-500">Dashboard</p>
+              <h1 className="mt-3 text-4xl font-semibold tracking-tight text-slate-950 md:text-[3.2rem]">
+                Business Overview
+              </h1>
+              <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600 md:text-lg">
+                A clear view of purchase, sales, stock and payments across the companies you manage.
+              </p>
+
+              <div className="mt-6 flex flex-wrap gap-3">
+                <Badge className="rounded-full border border-slate-200 bg-slate-50 px-4 py-1.5 text-slate-700 hover:bg-slate-50">
+                  {selectedCompanyIds.length} {selectedCompanyIds.length === 1 ? 'company' : 'companies'}
+                </Badge>
+                <Badge className="rounded-full border border-slate-200 bg-slate-50 px-4 py-1.5 text-slate-700 hover:bg-slate-50">
+                  Primary: {primaryCompanyName}
+                </Badge>
+                <Badge className="rounded-full border border-slate-200 bg-slate-50 px-4 py-1.5 text-slate-700 hover:bg-slate-50">
+                  {fetchFailures.length === 0 ? 'All sources connected' : `${fetchFailures.length} source warnings`}
+                </Badge>
+              </div>
+
+              <div className="mt-8 grid gap-3 sm:grid-cols-3">
+                {executiveIndicators.map((item) => (
+                  <div key={item.label} className={`rounded-[1.35rem] border p-4 ${item.tone}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className={`inline-flex h-10 w-10 items-center justify-center rounded-2xl ${item.iconTone}`}>
+                        <item.icon className="h-4 w-4" />
+                      </span>
+                      <span className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">{item.label}</span>
+                    </div>
+                    <p className="mt-6 text-3xl font-semibold tracking-tight text-slate-950">{item.value}</p>
+                    <p className="mt-2 text-sm text-slate-500">{item.hint}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-8 flex flex-wrap gap-3">
+                <Button
+                  onClick={handleExportBackup}
+                  className="h-11 rounded-2xl bg-slate-950 px-5 text-sm font-medium text-white transition-colors hover:bg-slate-800"
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  Export Backup
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => document.getElementById('notification-center')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  className="h-11 rounded-2xl border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  <Bell className="mr-2 h-4 w-4" />
+                  View Alerts
+                </Button>
               </div>
             </div>
-          </div>
 
-          <Card>
-            <CardContent className="pt-5">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="rounded-[2rem] border border-slate-900 bg-[#101113] p-6 text-white shadow-[0_28px_80px_-44px_rgba(15,23,42,0.48)]">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold text-slate-900">Company Scope</p>
-                  <p className="text-xs text-slate-500">
-                    Company access is controlled by Super Admin. This dashboard shows assigned company data only.
-                  </p>
+                  <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Live Snapshot</p>
+                  <h2 className="mt-3 text-2xl font-semibold tracking-tight text-white">Today</h2>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {selectedCompanyNames.slice(0, 3).map((name) => (
-                    <Badge key={name} variant="outline">{name}</Badge>
+                <span className="rounded-full border border-white/10 px-3 py-1 text-xs font-medium text-slate-300">
+                  Updated live
+                </span>
+              </div>
+
+              <div className="mt-8 space-y-5">
+                <div className="border-b border-white/10 pb-4">
+                  <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Top company</p>
+                  <div className="mt-2 flex items-end justify-between gap-3">
+                    <div>
+                      <p className="text-lg font-medium text-white">{topCompany?.name || 'N/A'}</p>
+                      <p className="mt-1 text-sm text-slate-400">{topCompany?.salesBills || 0} sales bills</p>
+                    </div>
+                    <p className="text-lg font-medium text-white">{formatCurrency(topCompany?.salesTotal || 0)}</p>
+                  </div>
+                </div>
+
+                <div className="border-b border-white/10 pb-4">
+                  <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Cash position</p>
+                  <div className="mt-2 flex items-end justify-between gap-3">
+                    <div>
+                      <p className="text-lg font-medium text-white">{topGrowthCompany?.name || 'N/A'}</p>
+                      <p className="mt-1 text-sm text-slate-400">Best net cash flow</p>
+                    </div>
+                    <p className="text-lg font-medium text-white">{formatCurrency(topGrowthCompany?.cashflow || 0)}</p>
+                  </div>
+                </div>
+
+                <div className="border-b border-white/10 pb-4">
+                  <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Open issues</p>
+                  <div className="mt-2 flex items-end justify-between gap-3">
+                    <div>
+                      <p className="text-lg font-medium text-white">{notificationCount} items need attention</p>
+                      <p className="mt-1 text-sm text-slate-400">Pending bills, stock alerts and source checks</p>
+                    </div>
+                    <p className="text-lg font-medium text-white">{notifications.pendingBills}/{notifications.lowStock}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 rounded-[1.4rem] border border-white/10 bg-white/[0.04] p-4">
+                <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
+                  <Activity className="h-4 w-4" />
+                  Active companies
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {selectedCompanyNames.slice(0, 5).map((name) => (
+                    <span key={name} className="rounded-full border border-white/10 px-3 py-1 text-xs text-slate-300">
+                      {name}
+                    </span>
                   ))}
-                  {selectedCompanyNames.length > 3 && (
-                    <Badge variant="outline">+{selectedCompanyNames.length - 3} more</Badge>
+                  {selectedCompanyNames.length > 5 && (
+                    <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-slate-300">
+                      +{selectedCompanyNames.length - 5} more
+                    </span>
                   )}
                 </div>
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </section>
+
+          <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+            <Card className="rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
+              <CardContent className="p-6">
+                <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Company Scope</p>
+                    <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">Assigned access</h2>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                      This dashboard shows only the companies assigned by Super Admin. The current primary company is {primaryCompanyName}.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedCompanyNames.slice(0, 6).map((name) => (
+                      <Badge
+                        key={name}
+                        className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-slate-700 hover:bg-slate-50"
+                      >
+                        {name}
+                      </Badge>
+                    ))}
+                    {selectedCompanyNames.length > 6 && (
+                      <Badge className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-slate-700 hover:bg-slate-50">
+                        +{selectedCompanyNames.length - 6} more
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
+              <CardContent className="p-6">
+                <div className="flex items-start gap-3">
+                  <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-900 text-white">
+                    <ShieldCheck className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">System Status</p>
+                    <h2 className="mt-3 text-xl font-semibold text-slate-950">
+                      {fetchFailures.length === 0 ? 'All critical feeds are connected' : `${fetchFailures.length} data sources need review`}
+                    </h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      {notificationCount === 0 ? 'No urgent operational issues right now.' : `${notificationCount} items still need attention.`}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
 
           {uiMessage && (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{uiMessage}</div>
+            <div className="rounded-[1.35rem] border border-emerald-200 bg-emerald-50/90 p-4 text-sm text-emerald-700 shadow-sm">
+              {uiMessage}
+            </div>
           )}
           {uiError && (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{uiError}</div>
+            <div className="rounded-[1.35rem] border border-rose-200 bg-rose-50/90 p-4 text-sm text-rose-700 shadow-sm">
+              {uiError}
+            </div>
           )}
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
             {topKpis.map((kpi) => (
-              <Card key={kpi.label} className={`shadow-sm ${kpi.className}`}>
-                <CardContent className="p-5">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="text-sm text-slate-600">{kpi.label}</p>
-                      <p className="mt-1 text-2xl font-bold text-slate-900">{kpi.value}</p>
-                      <p className="text-xs text-slate-500">{kpi.hint}</p>
+              <Card
+                key={kpi.label}
+                className={`group rounded-[1.5rem] border shadow-[0_20px_50px_-40px_rgba(15,23,42,0.2)] transition-colors duration-200 hover:border-slate-300 ${kpi.className}`}
+              >
+                <CardContent className="p-6">
+                  <div className="flex items-start justify-between gap-4">
+                    <span className={`inline-flex h-12 w-12 items-center justify-center rounded-[1.1rem] ${kpi.iconTone}`}>
+                      <kpi.icon className="h-5 w-5" />
+                    </span>
+                    <span className={`text-right text-xs font-medium ${kpi.trendTone}`}>
+                      {kpi.trend}
+                    </span>
+                  </div>
+                  <div className="mt-8">
+                    <p className="text-sm font-medium text-slate-500">{kpi.label}</p>
+                    <div className="mt-3 flex items-end justify-between gap-3">
+                      <p className="text-3xl font-semibold tracking-tight text-slate-950">{kpi.value}</p>
+                      <ArrowUpRight className="h-4 w-4 text-slate-300" />
                     </div>
-                    <kpi.icon className="h-8 w-8 text-slate-400" />
+                    <p className="mt-3 text-sm text-slate-500">{kpi.hint}</p>
                   </div>
                 </CardContent>
               </Card>
             ))}
           </div>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg">Mandi Pulse</CardTitle>
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+            <Card className="overflow-hidden rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
+              <CardHeader className="border-b border-slate-100 pb-5">
+                <CardTitle className="text-2xl tracking-tight text-slate-950">Mandi Pulse</CardTitle>
+                <p className="text-sm text-slate-500">Core commercial signals from the active mandi workspace.</p>
               </CardHeader>
-              <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                <div className="rounded-lg border bg-slate-50 p-3">
-                  <p className="text-xs text-slate-500">Top Trading Company</p>
-                  <p className="text-sm font-semibold text-slate-900">{topCompany?.name || 'N/A'}</p>
-                  <p className="text-xs text-slate-600">Sales ₹{clampNonNegative(topCompany?.salesTotal || 0).toFixed(2)}</p>
+              <CardContent className="grid grid-cols-1 gap-4 p-6 md:grid-cols-3">
+                <div className="rounded-[1.35rem] border border-slate-200 bg-white p-5">
+                  <div className="flex items-center gap-3">
+                    <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
+                      <Trophy className="h-5 w-5" />
+                    </span>
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Top Trading Company</p>
+                      <p className="mt-1 text-base font-semibold text-slate-950">{topCompany?.name || 'N/A'}</p>
+                    </div>
+                  </div>
+                  <p className="mt-6 text-2xl font-semibold text-slate-950">{formatCurrency(topCompany?.salesTotal || 0)}</p>
+                  <p className="mt-2 text-sm text-slate-500">Sales across {topCompany?.salesBills || 0} bills</p>
                 </div>
-                <div className="rounded-lg border bg-slate-50 p-3">
-                  <p className="text-xs text-slate-500">Best Cash Position</p>
-                  <p className="text-sm font-semibold text-slate-900">{topGrowthCompany?.name || 'N/A'}</p>
-                  <p className="text-xs text-emerald-700">Cashflow ₹{clampNonNegative(topGrowthCompany?.cashflow || 0).toFixed(2)}</p>
+                <div className="rounded-[1.35rem] border border-slate-200 bg-white p-5">
+                  <div className="flex items-center gap-3">
+                    <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
+                      <Wallet className="h-5 w-5" />
+                    </span>
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Best Cash Position</p>
+                      <p className="mt-1 text-base font-semibold text-slate-950">{topGrowthCompany?.name || 'N/A'}</p>
+                    </div>
+                  </div>
+                  <p className="mt-6 text-2xl font-semibold text-slate-950">{formatCurrency(topGrowthCompany?.cashflow || 0)}</p>
+                  <p className="mt-2 text-sm text-slate-500">Cashflow lead in active companies</p>
                 </div>
-                <div className="rounded-lg border bg-slate-50 p-3">
-                  <p className="text-xs text-slate-500">Risk Snapshot</p>
-                  <p className="text-sm font-semibold text-slate-900">{notifications.pendingBills} pending bills</p>
-                  <p className="text-xs text-rose-700">{notifications.lowStock} low stock alerts</p>
+                <div className="rounded-[1.35rem] border border-slate-200 bg-white p-5">
+                  <div className="flex items-center gap-3">
+                    <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
+                      <ShieldAlert className="h-5 w-5" />
+                    </span>
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Risk Snapshot</p>
+                      <p className="mt-1 text-base font-semibold text-slate-950">{notifications.pendingBills} pending bills</p>
+                    </div>
+                  </div>
+                  <p className="mt-6 text-2xl font-semibold text-slate-950">{notifications.lowStock}</p>
+                  <p className="mt-2 text-sm text-slate-500">Low stock alerts need review</p>
                 </div>
               </CardContent>
             </Card>
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg">Top Companies</CardTitle>
+
+            <Card className="overflow-hidden rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
+              <CardHeader className="border-b border-slate-100 pb-5">
+                <CardTitle className="text-2xl tracking-tight text-slate-950">Top Companies</CardTitle>
+                <p className="text-sm text-slate-500">Leaderboard based on live sales volume and bill count.</p>
               </CardHeader>
-              <CardContent className="space-y-2">
-                {companyPerformance.slice(0, 4).map((row) => (
-                  <div key={row.id} className="rounded-md border p-2">
-                    <p className="truncate text-sm font-medium">{row.name}</p>
-                    <p className="text-xs text-slate-500">Sales ₹{clampNonNegative(row.salesTotal).toFixed(0)} | Bills {row.purchaseBills + row.salesBills}</p>
-                  </div>
-                ))}
+              <CardContent className="space-y-3 p-6">
+                {companyPerformance.slice(0, 5).map((row, index) => {
+                  const relativeWidth = topCompany?.salesTotal ? Math.max(12, (row.salesTotal / topCompany.salesTotal) * 100) : 12
+                  return (
+                    <div
+                      key={row.id}
+                      className="rounded-[1.35rem] border border-slate-200 bg-white p-4"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-950 text-xs font-semibold text-white">
+                          {index + 1}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="truncate text-sm font-semibold text-slate-950">{row.name}</p>
+                            <p className="text-sm font-semibold text-slate-700">{formatCurrency(row.salesTotal)}</p>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">Bills {row.purchaseBills + row.salesBills} • Cashflow {formatCurrency(row.cashflow)}</p>
+                        </div>
+                        <ChevronRight className="h-4 w-4 text-slate-300" />
+                      </div>
+                      <div className="mt-3 h-1.5 rounded-full bg-slate-100">
+                        <div
+                          className="h-full rounded-full bg-[linear-gradient(90deg,#0f172a_0%,#14b8a6_100%)]"
+                          style={{ width: `${relativeWidth}%` }}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
                 {companyPerformance.length === 0 && <p className="text-sm text-slate-500">No company data yet</p>}
               </CardContent>
             </Card>
           </div>
 
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg">7-Day Trends</CardTitle>
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+            <Card className="overflow-hidden rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
+              <CardHeader className="border-b border-slate-100 pb-5">
+                <CardTitle className="text-2xl tracking-tight text-slate-950">7-Day Trends</CardTitle>
+                <p className="text-sm text-slate-500">Daily purchase, sales and payment movement across the active scope.</p>
               </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-7 gap-2">
-                  {trendData.map((row) => {
-                    const purchaseHeight = Math.max(4, (row.purchase / chartMax) * 110)
-                    const salesHeight = Math.max(4, (row.sales / chartMax) * 110)
-                    const paymentHeight = Math.max(4, (row.payment / chartMax) * 110)
-                    return (
-                      <div key={row.day} className="flex flex-col items-center gap-2">
-                        <div className="flex h-28 items-end gap-1">
-                          <div className="w-2 rounded-sm bg-orange-400" style={{ height: `${purchaseHeight}px` }} />
-                          <div className="w-2 rounded-sm bg-emerald-500" style={{ height: `${salesHeight}px` }} />
-                          <div className="w-2 rounded-sm bg-sky-500" style={{ height: `${paymentHeight}px` }} />
+              <CardContent className="p-6">
+                <div className="rounded-[1.6rem] border border-slate-200 bg-slate-50 p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Weekly trend</p>
+                      <p className="mt-2 text-lg font-semibold text-slate-950">Last 7 days of movement</p>
+                    </div>
+                    <Badge className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-700 hover:bg-white">
+                      Chart max {formatCurrency(chartMax)}
+                    </Badge>
+                  </div>
+                  <div className="mt-6 grid grid-cols-7 gap-3">
+                    {trendData.map((row) => {
+                      const purchaseHeight = Math.max(8, (row.purchase / chartMax) * 126)
+                      const salesHeight = Math.max(8, (row.sales / chartMax) * 126)
+                      const paymentHeight = Math.max(8, (row.payment / chartMax) * 126)
+                      return (
+                        <div key={row.day} className="flex flex-col items-center gap-3">
+                          <div className="flex h-36 w-full items-end justify-center gap-1.5 rounded-[1.25rem] bg-white px-2 py-3 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.12)]">
+                            <div className="w-2.5 rounded-full bg-orange-400/95" style={{ height: `${purchaseHeight}px` }} />
+                            <div className="w-2.5 rounded-full bg-emerald-400/95" style={{ height: `${salesHeight}px` }} />
+                            <div className="w-2.5 rounded-full bg-sky-400/95" style={{ height: `${paymentHeight}px` }} />
+                          </div>
+                          <div className="text-center">
+                            <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+                              {new Date(row.day).toLocaleDateString(undefined, { weekday: 'short' })}
+                            </p>
+                            <p className="mt-1 text-[11px] text-slate-400">{new Date(row.day).getDate()}</p>
+                          </div>
                         </div>
-                        <p className="text-[10px] text-gray-500">{new Date(row.day).toLocaleDateString(undefined, { weekday: 'short' })}</p>
+                      )
+                    })}
+                  </div>
+                  <div className="mt-5 flex flex-wrap gap-4 text-xs text-slate-500">
+                    <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-orange-400" />Purchase</span>
+                    <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />Sales</span>
+                    <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-sky-400" />Payments</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="grid grid-cols-1 gap-6">
+              <Card className="overflow-hidden rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
+                <CardHeader className="border-b border-slate-100 pb-5">
+                  <CardTitle className="text-2xl tracking-tight text-slate-950">Quick Launch</CardTitle>
+                  <p className="text-sm text-slate-500">Jump into the workflows the team uses most.</p>
+                </CardHeader>
+                <CardContent className="grid grid-cols-1 gap-3 p-6 sm:grid-cols-2">
+                  {quickActions.map((action) => (
+                    <button
+                      key={action.label}
+                      type="button"
+                      onClick={() => handleNavigation(action.path)}
+                      className={`group rounded-[1.35rem] border p-4 text-left transition-colors duration-200 hover:border-slate-300 hover:bg-slate-50 ${action.tone}`}
+                    >
+                      <span className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl ${action.iconTone}`}>
+                        <action.icon className="h-5 w-5" />
+                      </span>
+                      <div className="mt-6 flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-base font-semibold">{action.label}</p>
+                          <p className="mt-2 text-sm text-slate-600">{action.hint}</p>
+                        </div>
+                        <ArrowUpRight className="mt-0.5 h-4 w-4 text-slate-300" />
                       </div>
-                    )
-                  })}
-                </div>
-                <div className="mt-3 flex flex-wrap gap-4 text-xs text-gray-600">
-                  <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-orange-400" />Purchase</span>
-                  <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />Sales</span>
-                  <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-sky-500" />Payments</span>
-                </div>
-              </CardContent>
-            </Card>
+                    </button>
+                  ))}
+                </CardContent>
+              </Card>
 
-            <Card className="lg:col-span-2">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg">Fast Actions</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                  <Button onClick={() => handleNavigation('/purchase/entry')} className="justify-start"><ShoppingCart className="mr-2 h-4 w-4" />Purchase Entry</Button>
-                  <Button onClick={() => handleNavigation('/sales/entry')} className="justify-start"><Receipt className="mr-2 h-4 w-4" />Sales Entry</Button>
-                  <Button variant="outline" onClick={() => handleNavigation('/payment/dashboard')} className="justify-start"><CreditCard className="mr-2 h-4 w-4" />Payments</Button>
-                  <Button variant="outline" onClick={() => handleNavigation('/stock/dashboard')} className="justify-start"><Package className="mr-2 h-4 w-4" />Stock</Button>
-                  <Button variant="outline" onClick={() => handleNavigation('/master/product')} className="justify-start"><Boxes className="mr-2 h-4 w-4" />Products</Button>
-                  <Button variant="outline" onClick={() => handleNavigation('/master/party')} className="justify-start"><Landmark className="mr-2 h-4 w-4" />Parties</Button>
-                  <Button variant="outline" onClick={() => handleNavigation('/master/unit')} className="justify-start"><Ruler className="mr-2 h-4 w-4" />Units</Button>
-                  <Button variant="outline" onClick={() => handleNavigation('/reports/main')} className="justify-start"><FileText className="mr-2 h-4 w-4" />Reports</Button>
-                </div>
-              </CardContent>
-            </Card>
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-1">
+                <Card id="notification-center" className="overflow-hidden rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
+                  <CardHeader className="border-b border-slate-100 pb-5">
+                    <CardTitle className="text-2xl tracking-tight text-slate-950">Business Health</CardTitle>
+                    <p className="text-sm text-slate-500">Collection and payout rhythm across the active scope.</p>
+                  </CardHeader>
+                  <CardContent className="space-y-5 p-6">
+                    {healthHighlights.map((item) => (
+                      <div key={item.label}>
+                        <div className="mb-2 flex items-center justify-between text-sm">
+                          <span className="font-medium text-slate-700">{item.label}</span>
+                          <span className="font-semibold text-slate-950">{item.value}</span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                          <div
+                            className={`h-full rounded-full transition-all ${item.accent}`}
+                            style={{ width: `${Math.max(0, Math.min(100, item.progress))}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                    <div className="rounded-[1.35rem] border border-slate-200 bg-slate-50 p-4 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500">Cash In</span>
+                        <span className="font-semibold text-emerald-600">₹{cashflow.inAmount.toFixed(2)}</span>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between">
+                        <span className="text-slate-500">Cash Out</span>
+                        <span className="font-semibold text-rose-600">₹{cashflow.outAmount.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
 
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg">Business Health</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <div className="mb-1 flex items-center justify-between text-sm">
-                    <span>Sales Collection</span>
-                    <span className="font-semibold">{health.salesCollectionRate.toFixed(1)}%</span>
-                  </div>
-                  <Progress value={health.salesCollectionRate} />
-                </div>
-                <div>
-                  <div className="mb-1 flex items-center justify-between text-sm">
-                    <span>Purchase Clearance</span>
-                    <span className="font-semibold">{health.purchaseClearanceRate.toFixed(1)}%</span>
-                  </div>
-                  <Progress value={health.purchaseClearanceRate} />
-                </div>
-                <div className="rounded-lg border bg-slate-50 p-3 text-sm">
-                  <div className="flex justify-between">
-                    <span>Cash In</span>
-                    <span className="font-semibold text-emerald-600">₹{cashflow.inAmount.toFixed(2)}</span>
-                  </div>
-                  <div className="mt-1 flex justify-between">
-                    <span>Cash Out</span>
-                    <span className="font-semibold text-rose-600">₹{cashflow.outAmount.toFixed(2)}</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <Bell className="h-5 w-5 text-amber-600" />
-                  Notification Center
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <div className="flex items-center justify-between rounded-md border p-2">
-                  <span>Low Stock Alerts</span>
-                  <Badge variant={notifications.lowStock > 0 ? 'destructive' : 'default'}>
-                    {notifications.lowStock}
-                  </Badge>
-                </div>
-                <div className="flex items-center justify-between rounded-md border p-2">
-                  <span>Pending Bills</span>
-                  <Badge variant={notifications.pendingBills > 0 ? 'destructive' : 'default'}>
-                    {notifications.pendingBills}
-                  </Badge>
-                </div>
-                <div className="flex items-center justify-between rounded-md border p-2">
-                  <span>Failed Data Sources</span>
-                  <Badge variant={notifications.failedEntries > 0 ? 'destructive' : 'default'}>
-                    {notifications.failedEntries}
-                  </Badge>
-                </div>
-                {notifications.lowStockItems.length > 0 && (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700">
-                    {notifications.lowStockItems.map((item) => item.name).join(', ')}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                <Card className="overflow-hidden rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
+                  <CardHeader className="border-b border-slate-100 pb-5">
+                    <CardTitle className="flex items-center gap-2 text-2xl tracking-tight text-slate-950">
+                      <Bell className="h-5 w-5 text-amber-600" />
+                      Notification Center
+                    </CardTitle>
+                    <p className="text-sm text-slate-500">Operational issues that need attention before they compound.</p>
+                  </CardHeader>
+                  <CardContent className="space-y-3 p-6 text-sm">
+                    <div className="flex items-center justify-between rounded-[1.1rem] border border-slate-200 bg-slate-50 px-4 py-3">
+                      <span className="font-medium text-slate-700">Low Stock Alerts</span>
+                      <Badge variant={notifications.lowStock > 0 ? 'destructive' : 'default'}>
+                        {notifications.lowStock}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center justify-between rounded-[1.1rem] border border-slate-200 bg-slate-50 px-4 py-3">
+                      <span className="font-medium text-slate-700">Pending Bills</span>
+                      <Badge variant={notifications.pendingBills > 0 ? 'destructive' : 'default'}>
+                        {notifications.pendingBills}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center justify-between rounded-[1.1rem] border border-slate-200 bg-slate-50 px-4 py-3">
+                      <span className="font-medium text-slate-700">Failed Data Sources</span>
+                      <Badge variant={notifications.failedEntries > 0 ? 'destructive' : 'default'}>
+                        {notifications.failedEntries}
+                      </Badge>
+                    </div>
+                    {notifications.lowStockItems.length > 0 && (
+                      <div className="rounded-[1.15rem] border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-700">
+                        Low stock on: {notifications.lowStockItems.map((item) => item.name).join(', ')}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
           </div>
 
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Recent Activity</CardTitle>
+          <Card className="overflow-hidden rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
+            <CardHeader className="border-b border-slate-100 pb-5">
+              <CardTitle className="text-2xl tracking-tight text-slate-950">Recent Activity</CardTitle>
+              <p className="text-sm text-slate-500">Latest purchase and sales moves across your active companies.</p>
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-6">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 {recentActivity.length === 0 && (
-                  <p className="text-sm text-gray-500">No recent bills available.</p>
+                  <p className="text-sm text-slate-500">No recent bills available.</p>
                 )}
                 {recentActivity.map((entry) => (
-                  <div key={entry.id} className="flex items-center justify-between rounded-lg border p-3">
-                    <div>
-                      <p className="text-sm font-medium">
-                        {entry.type} #{entry.no}
-                      </p>
-                      <p className="text-xs text-gray-500">{entry.name}</p>
-                      <p className="text-xs text-slate-400">{entry.companyName}</p>
+                  <div
+                    key={entry.id}
+                    className="rounded-[1.35rem] border border-slate-200 bg-white p-4"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                        <Clock3 className="h-3.5 w-3.5" />
+                        {entry.type} activity
+                      </div>
+                      <Badge className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-700 hover:bg-white">
+                        {entry.companyName}
+                      </Badge>
                     </div>
-                    <div className="text-right">
-                      <p className="text-sm font-semibold">₹{entry.amount.toFixed(2)}</p>
-                      <p className="text-xs text-gray-500">{entry.date.toLocaleDateString()}</p>
+                    <div className="mt-4 flex items-end justify-between gap-4">
+                      <div>
+                        <p className="text-base font-semibold text-slate-950">
+                          {entry.type} #{entry.no}
+                        </p>
+                        <p className="mt-1 text-sm text-slate-600">{entry.name}</p>
+                        <p className="mt-2 text-xs text-slate-400">{entry.date.toLocaleDateString()}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-semibold text-slate-950">₹{entry.amount.toFixed(2)}</p>
+                        <p className="mt-1 text-xs text-slate-400">Latest entry</p>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -949,22 +1345,49 @@ export default function MainDashboardPage() {
             </CardContent>
           </Card>
 
-          <div className="flex space-x-1 border-b">
-            {(['purchase', 'sales', 'stock', 'payment', 'report'] as ActiveTab[]).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`flex items-center gap-2 px-4 py-2 font-medium text-sm ${
-                  activeTab === tab
-                    ? 'border-b-2 border-slate-900 text-slate-900 bg-slate-100'
-                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                {getTabIcon(tab)}
-                {getTabLabel(tab)}
-              </button>
-            ))}
-          </div>
+          <section className="space-y-5">
+            <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Operational Modules</p>
+                <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                  Open a live workspace without leaving the dashboard
+                </h2>
+              </div>
+              <p className="max-w-xl text-sm leading-6 text-slate-600">
+                Move between purchase, sales, stock, payment and reports while keeping the same company context and executive view.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-5">
+              {(['purchase', 'sales', 'stock', 'payment', 'report'] as ActiveTab[]).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  className={`rounded-[1.35rem] border p-4 text-left transition-colors duration-200 ${
+                    activeTab === tab
+                      ? 'border-slate-900 bg-slate-900 text-white'
+                      : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className={`inline-flex h-10 w-10 items-center justify-center rounded-2xl ${
+                      activeTab === tab ? 'bg-white/10 text-white' : 'bg-slate-100 text-slate-700'
+                    }`}>
+                      {getTabIcon(tab)}
+                    </span>
+                    <div>
+                      <p className="text-sm font-semibold">{getTabLabel(tab)}</p>
+                      <p className={`mt-1 text-xs leading-5 ${activeTab === tab ? 'text-slate-300' : 'text-slate-500'}`}>
+                        {getTabDescription(tab)}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <div className="rounded-[2rem] border border-black/5 bg-white p-4 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.16)] md:p-6">
 
           {/* Purchase Tab */}
           {activeTab === 'purchase' && (
@@ -1189,6 +1612,7 @@ export default function MainDashboardPage() {
           {activeTab === 'report' && (
             <ReportsTab companyId={primaryCompanyId} />
           )}
+        </div>
         </div>
       </div>
     </DashboardLayout>

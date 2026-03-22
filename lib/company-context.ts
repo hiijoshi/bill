@@ -1,12 +1,19 @@
+import { getCompanyCookieNameCandidates } from './session-cookies'
+
 function getCompanyIdFromCookie(): string {
   if (typeof document === 'undefined') return ''
-  const match = document.cookie
+  const cookieParts = document.cookie
     .split(';')
     .map((part) => part.trim())
-    .find((part) => part.startsWith('companyId='))
-  if (!match) return ''
-  const value = decodeURIComponent(match.split('=').slice(1).join('=')).trim()
-  return value || ''
+
+  for (const cookieName of getCompanyCookieNameCandidates(window.location.host)) {
+    const match = cookieParts.find((part) => part.startsWith(`${cookieName}=`))
+    if (!match) continue
+    const value = decodeURIComponent(match.split('=').slice(1).join('=')).trim()
+    if (value) return value
+  }
+
+  return ''
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs: number = 12000): Promise<Response> {

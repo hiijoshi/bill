@@ -35,6 +35,8 @@ export function shouldRequireMFA(userRole: string): boolean {
 
 // Placeholder functions - would require database schema updates and actual implementation
 export async function setupMFA(userId: string, traderId: string): Promise<MFASetupResult> {
+  void userId
+  void traderId
   // This would require:
   // 1. Database schema updates to add MFA fields to User model
   // 2. speakeasy library for TOTP generation
@@ -50,16 +52,24 @@ export async function verifyMFAToken(
   token: string,
   ip?: string
 ): Promise<MFAVerificationResult> {
+  void userId
+  void traderId
+  void token
+  void ip
   // Placeholder implementation
   throw new Error('MFA verification requires database schema updates and additional packages')
 }
 
 export async function disableMFA(userId: string, traderId: string): Promise<boolean> {
+  void userId
+  void traderId
   // Placeholder implementation
   throw new Error('MFA disable requires database schema updates')
 }
 
 export async function isMFASetup(userId: string, traderId: string): Promise<boolean> {
+  void userId
+  void traderId
   // Placeholder implementation
   return false
 }

@@ -5,71 +5,27 @@ import { setSession } from '@/lib/session'
 import { generateRefreshToken, generateToken, normalizeRole } from '@/lib/auth'
 import { env } from '@/lib/config'
 
-async function ensureDevSuperAdmin(userId: string, password: string): Promise<boolean> {
-  if (env.NODE_ENV !== 'development') return false
-
-  const defaultUser = process.env.SUPER_ADMIN_USER_ID || 'superadmin'
-  const defaultPassword = process.env.SUPER_ADMIN_PASSWORD || 'super-admin-2026-secure'
-  if (userId !== defaultUser || password !== defaultPassword) {
-    return false
-  }
-
-  let systemTrader = await prisma.trader.findUnique({
-    where: { id: 'system' }
-  })
-  if (!systemTrader) {
-    systemTrader = await prisma.trader.create({
-      data: { id: 'system', name: 'System Trader' }
-    })
-  } else if (systemTrader.locked || systemTrader.deletedAt) {
-    systemTrader = await prisma.trader.update({
-      where: { id: systemTrader.id },
-      data: {
-        locked: false,
-        deletedAt: null
-      }
-    })
-  }
-
-  const hashed = await bcrypt.hash(defaultPassword, 12)
-  await prisma.user.upsert({
-    where: {
-      traderId_userId: {
-        traderId: systemTrader.id,
-        userId: defaultUser
-      }
-    },
-    update: {
-      password: hashed,
-      role: 'SUPER_ADMIN',
-      name: 'System Administrator',
-      locked: false,
-      deletedAt: null
-    },
-    create: {
-      traderId: systemTrader.id,
-      userId: defaultUser,
-      password: hashed,
-      role: 'SUPER_ADMIN',
-      name: 'System Administrator',
-      locked: false
-    }
-  })
-
-  return true
-}
+const SUPER_ADMIN_ACCESS_EXPIRES_IN: Parameters<typeof generateToken>[1] =
+  (env.SUPER_ADMIN_ACCESS_EXPIRES_IN || '30m') as Parameters<typeof generateToken>[1]
+const SUPER_ADMIN_REFRESH_EXPIRES_IN: Parameters<typeof generateRefreshToken>[1] =
+  (env.SUPER_ADMIN_REFRESH_EXPIRES_IN || '8h') as Parameters<typeof generateRefreshToken>[1]
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}))
     const userId = typeof body?.userId === 'string' ? body.userId.trim() : ''
     const password = typeof body?.password === 'string' ? body.password : ''
+    const secondSecret = typeof body?.secondSecret === 'string' ? body.secondSecret : ''
 
     if (!userId || !password) {
       return NextResponse.json({ error: 'User ID and password are required' }, { status: 400 })
     }
 
-    let user = await prisma.user.findFirst({
+    if (env.SUPER_ADMIN_SECOND_SECRET && secondSecret !== env.SUPER_ADMIN_SECOND_SECRET) {
+      return NextResponse.json({ error: 'Invalid second secret' }, { status: 401 })
+    }
+
+    const user = await prisma.user.findFirst({
       where: {
         traderId: 'system',
         userId,
@@ -80,34 +36,6 @@ export async function POST(request: NextRequest) {
         company: true
       }
     })
-
-    // Legacy fallback: locate super-admin by userId irrespective of traderId.
-    if (!user) {
-      user = await prisma.user.findFirst({
-        where: { userId, deletedAt: null },
-        include: {
-          trader: true,
-          company: true
-        }
-      })
-    }
-
-    if (!user) {
-      const created = await ensureDevSuperAdmin(userId, password)
-      if (created) {
-        user = await prisma.user.findFirst({
-          where: {
-            userId,
-            traderId: 'system',
-            deletedAt: null
-          },
-          include: {
-            trader: true,
-            company: true
-          }
-        })
-      }
-    }
 
     if (!user) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 })
@@ -136,13 +64,13 @@ export async function POST(request: NextRequest) {
       traderId: user.traderId,
       name: user.name || 'System Administrator',
       role: user.role || undefined
-    })
+    }, SUPER_ADMIN_ACCESS_EXPIRES_IN)
     const refreshToken = generateRefreshToken({
       userId: user.userId,
       traderId: user.traderId,
       name: user.name || 'System Administrator',
       role: user.role || undefined
-    })
+    }, SUPER_ADMIN_REFRESH_EXPIRES_IN)
 
     const response = NextResponse.json({
       success: true,
@@ -153,7 +81,7 @@ export async function POST(request: NextRequest) {
         traderId: user.traderId
       }
     })
-    await setSession(token, refreshToken, response)
+    await setSession(token, refreshToken, response, 'super_admin')
     return response
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

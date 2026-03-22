@@ -5,6 +5,11 @@ import { useRouter } from 'next/navigation'
 import { Sidebar } from '@/components/mandi/Sidebar'
 import { validateTenantAccess } from '@/lib/tenancy'
 
+type DashboardUser = {
+  companyId?: string | null
+  role?: string | null
+}
+
 export default function MandiDashboardLayout({
   children,
   params,
@@ -14,7 +19,7 @@ export default function MandiDashboardLayout({
 }) {
   const router = useRouter()
   const [isLoading, setIsLoading] = useState(true)
-  const [currentUser, setCurrentUser] = useState<any>(null)
+  const [currentUser, setCurrentUser] = useState<DashboardUser | null>(null)
   const [companyId, setCompanyId] = useState<string>('')
 
   useEffect(() => {
@@ -41,7 +46,7 @@ export default function MandiDashboardLayout({
         } else {
           router.push('/login')
         }
-      } catch (error) {
+      } catch {
         router.push('/login')
       } finally {
         setIsLoading(false)
@@ -57,7 +62,7 @@ export default function MandiDashboardLayout({
 
   return (
     <div className="flex h-screen bg-gray-50">
-      <Sidebar companyId={companyId} userRole={currentUser?.role} />
+      <Sidebar companyId={companyId} userRole={currentUser?.role || ''} />
       <div className="flex-1 flex flex-col overflow-hidden">
         {children}
       </div>

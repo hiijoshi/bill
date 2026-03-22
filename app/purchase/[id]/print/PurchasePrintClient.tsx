@@ -107,7 +107,7 @@ export default function PurchasePrintClient({ printData }: Props) {
 
         <div className="grid grid-cols-4 border-b border-black text-[12px] font-medium print:text-[10px]">
           <div className="border-r border-black p-1 print:p-[2px]">कुल हम्माली : ₹ {printData.hammali.toFixed(2)}</div>
-          <div className="border-r border-black p-1 print:p-[2px]">विलंब से भुगतान पर अतिरिक्त : ₹ 0.00</div>
+          <div className="border-r border-black p-1 print:p-[2px]">GST राशि : ₹ {printData.gstAmount.toFixed(2)}</div>
           <div className="border-r border-black p-1 print:p-[2px]">बैग : {printData.bags}</div>
           <div className="p-1 print:p-[2px]">किसान को भुगतान योग्य राशि : ₹ {payableToFarmer.toFixed(2)}</div>
         </div>
@@ -136,7 +136,13 @@ export default function PurchasePrintClient({ printData }: Props) {
         </div>
 
         <div className="grid grid-cols-3 border-b border-black text-[12px] font-medium print:text-[10px]">
-          <div className="border-r border-black p-1 print:p-[2px]">कुल राशि: ₹ {printData.totalAmount.toFixed(2)}</div>
+          <div className="border-r border-black p-1 print:p-[2px]">टैक्सेबल राशि: ₹ {printData.subTotalAmount.toFixed(2)}</div>
+          <div className="border-r border-black p-1 print:p-[2px]">कुल GST: ₹ {printData.gstAmount.toFixed(2)}</div>
+          <div className="p-1 print:p-[2px]">फाइनल इनवॉइस टोटल: ₹ {printData.totalAmount.toFixed(2)}</div>
+        </div>
+
+        <div className="grid grid-cols-3 border-b border-black text-[12px] font-medium print:text-[10px]">
+          <div className="border-r border-black p-1 print:p-[2px]">लाइन टोटल: ₹ {printData.lineTotal.toFixed(2)}</div>
           <div className="border-r border-black p-1 print:p-[2px]">शेष राशि: ₹ {printData.balanceAmount.toFixed(2)}</div>
           <div className="p-1 print:p-[2px]">यूनिट: {printData.userUnitName || 'Quintal'}</div>
         </div>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, Suspense } from 'react'
+import { useState, useEffect, Suspense, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,11 +8,13 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 interface Product {
   id: string
   name: string
+  gstRate?: number | null
 }
 
 interface Farmer {
@@ -78,6 +80,7 @@ function PurchaseEditPageContent() {
   const [weight, setWeight] = useState('')
   const [rate, setRate] = useState('')
   const [payableAmount, setPayableAmount] = useState('')
+  const [manualTotalAmount, setManualTotalAmount] = useState('')
   const [paidAmount, setPaidAmount] = useState('')
   const [balance, setBalance] = useState('')
   const [billNumber, setBillNumber] = useState('')
@@ -88,6 +91,14 @@ function PurchaseEditPageContent() {
     if (!Number.isFinite(parsed)) return ''
     return String(Math.max(0, parsed))
   }
+  const currencyText = (value: number) => `₹${roundCurrency(Number(value || 0)).toFixed(2)}`
+
+  const getCurrentFinalTotalValue = useCallback(() => {
+    const taxableAmount = parseFloat(payableAmount) || 0
+    const selectedProductRecord = products.find((product) => product.id === selectedProduct)
+    const calculatedTotal = calculateTaxBreakdown(taxableAmount, selectedProductRecord?.gstRate || 0).lineTotal
+    return manualTotalAmount !== '' ? roundCurrency(parseFloat(manualTotalAmount) || 0) : calculatedTotal
+  }, [manualTotalAmount, payableAmount, products, selectedProduct])
 
   const handlePaidAmountChange = (value: string) => {
     const normalized = toNonNegative(value)
@@ -98,12 +109,12 @@ function PurchaseEditPageContent() {
     }
 
     const nextPaid = Number(normalized)
-    const maxPayable = Number(payableAmount || 0)
-    const hasPayable = payableAmount !== ''
+    const maxPayable = getCurrentFinalTotalValue()
+    const hasPayable = maxPayable > 0
 
     if (hasPayable && nextPaid > maxPayable) {
       setPaidAmount(String(maxPayable))
-      setPaidAmountError('Paid amount cannot be greater than payable amount')
+      setPaidAmountError('Paid amount cannot be greater than final invoice total')
       return
     }
 
@@ -123,6 +134,61 @@ function PurchaseEditPageContent() {
 
   useEffect(() => {
     let cancelled = false
+
+    const fetchData = async (targetCompanyId: string) => {
+      try {
+        const productsRes = await fetch(`/api/products?companyId=${targetCompanyId}`)
+        const productsData = await parseApiJson<Product[]>(productsRes, [])
+        if (cancelled) return
+        setProducts(productsData)
+
+        const billRes = await fetch(`/api/purchase-bills?companyId=${targetCompanyId}&billId=${billId}`)
+        if (!billRes.ok) {
+          throw new Error('Purchase bill not found')
+        }
+        const billData = await parseApiJson<PurchaseBill | null>(billRes, null)
+        if (cancelled) return
+        if (!billData?.id) {
+          throw new Error('Purchase bill not found')
+        }
+        setPurchaseBill(billData)
+
+        setBillNumber(billData.billNo)
+        {
+          const parsedBillDate = new Date(billData.billDate)
+          const safeBillDate = Number.isFinite(parsedBillDate.getTime())
+            ? parsedBillDate.toISOString().split('T')[0]
+            : new Date().toISOString().split('T')[0]
+          setBillDate(safeBillDate)
+        }
+        setFarmerName(billData.farmer?.name || '')
+        setFarmerAddress(billData.farmer?.address || '')
+        setFarmerContact(billData.farmer?.phone1 || '')
+        setKrashakAnubandhNumber(billData.farmer?.krashakAnubandhNumber || '')
+
+        if (billData.purchaseItems && billData.purchaseItems.length > 0) {
+          const item = billData.purchaseItems[0]
+          setSelectedProduct(item.productId)
+          setNoOfBags(item.bags.toString())
+          setHammali(item.hammali.toString())
+          setWeight(item.qty.toString())
+          setRate(item.rate.toString())
+          setPayableAmount(item.amount.toString())
+        }
+
+        setManualTotalAmount(billData.totalAmount.toString())
+        setPaidAmount(billData.paidAmount.toString())
+        setBalance(billData.balanceAmount.toString())
+        setLoading(false)
+      } catch (error) {
+        if (cancelled) return
+        console.error('Error fetching data:', error)
+        setLoading(false)
+        alert('Error loading purchase bill')
+        router.back()
+      }
+    }
+
     ;(async () => {
       if (!billId) {
         setLoading(false)
@@ -142,70 +208,13 @@ function PurchaseEditPageContent() {
 
       setCompanyId(resolvedCompanyId)
       stripCompanyParamsFromUrl()
-      await fetchData(resolvedCompanyId, () => cancelled)
+      await fetchData(resolvedCompanyId)
     })()
 
     return () => {
       cancelled = true
     }
   }, [billId, router])
-
-  const fetchData = async (targetCompanyId: string, isCancelled: () => boolean = () => false) => {
-    try {
-      // Fetch products
-      const productsRes = await fetch(`/api/products?companyId=${targetCompanyId}`)
-      const productsData = await parseApiJson<Product[]>(productsRes, [])
-      if (isCancelled()) return
-      setProducts(productsData)
-
-      // Fetch purchase bill
-      const billRes = await fetch(`/api/purchase-bills?companyId=${targetCompanyId}&billId=${billId}`)
-      if (!billRes.ok) {
-        throw new Error('Purchase bill not found')
-      }
-      const billData = await parseApiJson<PurchaseBill | null>(billRes, null)
-      if (isCancelled()) return
-      if (!billData?.id) {
-        throw new Error('Purchase bill not found')
-      }
-      setPurchaseBill(billData)
-
-      // Populate form with existing data
-      setBillNumber(billData.billNo)
-      {
-        const parsedBillDate = new Date(billData.billDate)
-        const safeBillDate = Number.isFinite(parsedBillDate.getTime())
-          ? parsedBillDate.toISOString().split('T')[0]
-          : new Date().toISOString().split('T')[0]
-        setBillDate(safeBillDate)
-      }
-      setFarmerName(billData.farmer?.name || '')
-      setFarmerAddress(billData.farmer?.address || '')
-      setFarmerContact(billData.farmer?.phone1 || '')
-      setKrashakAnubandhNumber(billData.farmer?.krashakAnubandhNumber || '')
-      
-      if (billData.purchaseItems && billData.purchaseItems.length > 0) {
-        const item = billData.purchaseItems[0]
-        setSelectedProduct(item.productId)
-        setNoOfBags(item.bags.toString())
-        setHammali(item.hammali.toString())
-        setWeight(item.qty.toString())
-        setRate(item.rate.toString())
-        setPayableAmount(item.amount.toString())
-      }
-      
-      setPaidAmount(billData.paidAmount.toString())
-      setBalance(billData.balanceAmount.toString())
-
-      setLoading(false)
-    } catch (error) {
-      if (isCancelled()) return
-      console.error('Error fetching data:', error)
-      setLoading(false)
-      alert('Error loading purchase bill')
-      router.back()
-    }
-  }
 
   // Calculate hammali when noOfBags changes
   useEffect(() => {
@@ -231,33 +240,23 @@ function PurchaseEditPageContent() {
 
   // Calculate balance when payable or paid changes
   useEffect(() => {
-    const payable = parseFloat(payableAmount) || 0
+    const payable = getCurrentFinalTotalValue()
     const paid = parseFloat(paidAmount) || 0
 
-    if (payableAmount !== '' && paidAmount && paid > payable) {
+    if (payable > 0 && paidAmount && paid > payable) {
       setPaidAmount(String(payable))
-      setPaidAmountError('Paid amount cannot be greater than payable amount')
+      setPaidAmountError('Paid amount cannot be greater than final invoice total')
       setBalance('0')
       return
     }
 
     setPaidAmountError('')
-    if (payableAmount && paidAmount) {
+    if (payable > 0 && paidAmount) {
       setBalance(Math.max(0, payable - paid).toString())
       return
     }
     setBalance('')
-  }, [payableAmount, paidAmount])
-
-  const handleFarmerChange = (farmerId: string) => {
-    const farmer = purchaseBill?.farmer
-    if (farmer && farmer.id === farmerId) {
-      setFarmerName(farmer.name)
-      setFarmerAddress(farmer.address)
-      setFarmerContact(farmer.phone1)
-      setKrashakAnubandhNumber(farmer.krashakAnubandhNumber)
-    }
-  }
+  }, [getCurrentFinalTotalValue, paidAmount])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -274,7 +273,7 @@ function PurchaseEditPageContent() {
     }
 
     // Payment validation
-    const payable = parseFloat(payableAmount) || 0
+    const payable = getCurrentFinalTotalValue()
     const paid = parseFloat(paidAmount) || 0
     if (payable < 0 || paid < 0) {
       alert('Amounts cannot be negative')
@@ -283,7 +282,7 @@ function PurchaseEditPageContent() {
 
     // Check if paid amount exceeds payable amount
     if (paid > payable) {
-      alert('Paid amount cannot be more than payable amount!')
+      alert('Paid amount cannot be more than final invoice total!')
       return
     }
 
@@ -315,6 +314,7 @@ function PurchaseEditPageContent() {
         weight: Math.max(0, parseFloat(weight) || 0),
         rate: Math.max(0, parseFloat(rate) || 0),
         payableAmount: Math.max(0, parseFloat(payableAmount) || 0),
+        totalAmount: Math.max(0, payable),
         paidAmount: Math.max(0, parseFloat(paidAmount) || 0),
         balanceAmount: Math.max(0, parseFloat(balance) || 0),
         status: paymentStatus
@@ -351,6 +351,10 @@ function PurchaseEditPageContent() {
       </DashboardLayout>
     )
   }
+
+  const selectedProductRecord = products.find((product) => product.id === selectedProduct) || null
+  const taxPreview = calculateTaxBreakdown(parseFloat(payableAmount) || 0, selectedProductRecord?.gstRate || 0)
+  const finalTotalAmount = getCurrentFinalTotalValue()
 
   return (
     <DashboardLayout companyId={companyId || ''}>
@@ -458,6 +462,11 @@ function PurchaseEditPageContent() {
                         ))}
                       </SelectContent>
                     </Select>
+                    {selectedProductRecord ? (
+                      <p className="mt-1 text-xs text-slate-600">
+                        Tax rule: {Number(selectedProductRecord.gstRate || 0) > 0 ? `${Number(selectedProductRecord.gstRate || 0).toFixed(2)}% GST` : 'Non-GST / tax-free'}
+                      </p>
+                    ) : null}
                   </div>
 
                   {/* No. of Bags */}
@@ -502,7 +511,7 @@ function PurchaseEditPageContent() {
 
                   {/* Rate */}
                   <div>
-                    <Label htmlFor="rate">Rate</Label>
+                    <Label htmlFor="rate">Average Rate / Qt</Label>
                     <Input
                       id="rate"
                       type="number"
@@ -517,13 +526,46 @@ function PurchaseEditPageContent() {
 
                   {/* Payable Amount */}
                   <div>
-                    <Label htmlFor="payableAmount">Payable Amount</Label>
+                    <Label htmlFor="payableAmount">Taxable Amount</Label>
                     <Input
                       id="payableAmount"
                       value={payableAmount}
                       readOnly
                       className="bg-gray-100"
                       placeholder="Calculated automatically"
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="gstAmount">GST Amount</Label>
+                    <Input
+                      id="gstAmount"
+                      value={taxPreview.gstAmount.toFixed(2)}
+                      readOnly
+                      className="bg-gray-100"
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="calculatedTotalAmount">Calculated Total</Label>
+                    <Input
+                      id="calculatedTotalAmount"
+                      value={taxPreview.lineTotal.toFixed(2)}
+                      readOnly
+                      className="bg-gray-100"
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="manualTotalAmount">Final Invoice Total</Label>
+                    <Input
+                      id="manualTotalAmount"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={manualTotalAmount}
+                      onChange={(e) => setManualTotalAmount(toNonNegative(e.target.value))}
+                      placeholder={taxPreview.lineTotal.toFixed(2)}
                     />
                   </div>
 
@@ -534,6 +576,7 @@ function PurchaseEditPageContent() {
                       id="paidAmount"
                       type="number"
                       min="0"
+                      max={finalTotalAmount || undefined}
                       step="0.01"
                       value={paidAmount}
                       onChange={(e) => handlePaidAmountChange(e.target.value)}
@@ -558,10 +601,30 @@ function PurchaseEditPageContent() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <div className="rounded-[1rem] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-xs text-slate-500">GST Status</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900">
+                      {taxPreview.gstRate > 0 ? `${taxPreview.gstRate.toFixed(2)}% GST` : 'Non-GST'}
+                    </p>
+                  </div>
+                  <div className="rounded-[1rem] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-xs text-slate-500">Calculated Total</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900">{currencyText(taxPreview.lineTotal)}</p>
+                  </div>
+                  <div className="rounded-[1rem] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-xs text-slate-500">Final Invoice Total</p>
+                    <p className="mt-1 text-lg font-semibold text-emerald-700">{currencyText(finalTotalAmount)}</p>
+                  </div>
+                </div>
+
                 {/* Submit Button */}
                 <div className="flex justify-end space-x-4">
                   <Button type="button" variant="outline" onClick={() => router.back()}>
                     Cancel
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => setManualTotalAmount('')} disabled={manualTotalAmount === ''}>
+                    Reset Total
                   </Button>
                   <Button type="submit">
                     Update Purchase Bill

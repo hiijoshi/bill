@@ -2,17 +2,12 @@ import { redirect } from 'next/navigation'
 import { getSession } from '@/lib/session'
 
 export default async function Home() {
-  // If already authenticated, send user to appropriate area
-  const session = await getSession()
-  if (session) {
-    if (session.role === 'super_admin') {
-      redirect('/super-admin')
-    } else {
-      redirect('/main/dashboard')
-    }
+  // Keep app-user shortcut, but do not auto-jump into the developer-only super-admin area.
+  const appSession = await getSession()
+  if (appSession) {
+    redirect('/main/dashboard')
   }
 
-  // otherwise show simple landing with login links
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
       <h1 className="text-3xl font-bold mb-6">Welcome to Mandi ERP</h1>

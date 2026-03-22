@@ -135,33 +135,8 @@ export async function hasCompanyAccess(
   auth: RequestAuthContext
 ): Promise<boolean> {
   if (!companyId) return false
-
-  const where: {
-    id: string
-    deletedAt: null
-    traderId?: string
-  } = {
-    id: companyId,
-    deletedAt: null
-  }
-
-  if (!isSuperAdmin(auth)) {
-    if (auth.role === 'trader_admin') {
-      where.traderId = auth.traderId
-    } else {
-      if (!auth.companyId || auth.companyId !== companyId) {
-        return false
-      }
-      where.traderId = auth.traderId
-    }
-  }
-
-  const company = await prisma.company.findFirst({
-    where,
-    select: { id: true }
-  })
-
-  return !!company
+  const scopedCompanyIds = await getScopedCompanyIds(auth, companyId)
+  return scopedCompanyIds.includes(companyId)
 }
 
 async function hasModulePermission(
@@ -287,6 +262,7 @@ export async function getScopedCompanyIds(
     const rows = await prisma.company.findMany({
       where: {
         deletedAt: null,
+        locked: false,
         ...(companyId ? { id: companyId } : {})
       },
       select: { id: true }
@@ -297,8 +273,9 @@ export async function getScopedCompanyIds(
   if (auth.role === 'trader_admin') {
     const rows = await prisma.company.findMany({
       where: {
-        traderId: auth.traderId,
         deletedAt: null,
+        locked: false,
+        OR: [{ traderId: auth.traderId }, { traderId: null }],
         ...(companyId ? { id: companyId } : {})
       },
       select: { id: true }
@@ -306,19 +283,133 @@ export async function getScopedCompanyIds(
     return rows.map((row) => row.id)
   }
 
-  if (!auth.companyId) return []
-  if (companyId && companyId !== auth.companyId) return []
+  const candidateIds = new Set<string>()
+  if (auth.companyId) {
+    candidateIds.add(auth.companyId)
+  }
 
-  const company = await prisma.company.findFirst({
+  if (auth.userDbId) {
+    const permissionRows = await prisma.userPermission.findMany({
+      where: {
+        userId: auth.userDbId,
+        OR: [{ canRead: true }, { canWrite: true }],
+        company: {
+          deletedAt: null,
+          locked: false,
+          OR: [{ traderId: auth.traderId }, { traderId: null }]
+        }
+      },
+      select: {
+        companyId: true
+      }
+    })
+
+    permissionRows.forEach((row) => {
+      if (row.companyId) candidateIds.add(row.companyId)
+    })
+  }
+
+  const ids = Array.from(candidateIds)
+  if (ids.length === 0) return []
+
+  const rows = await prisma.company.findMany({
     where: {
-      id: auth.companyId,
-      traderId: auth.traderId,
-      deletedAt: null
+      id: {
+        in: companyId ? ids.filter((id) => id === companyId) : ids
+      },
+      deletedAt: null,
+      locked: false,
+      OR: [{ traderId: auth.traderId }, { traderId: null }]
     },
     select: { id: true }
   })
 
-  return company ? [company.id] : []
+  return rows.map((row) => row.id)
+}
+
+export async function getAccessibleCompanies(
+  auth: RequestAuthContext,
+  requestedCompanyId?: string | null
+): Promise<Array<{ id: string; name: string; locked: boolean; traderId: string | null }>> {
+  const companyId = requestedCompanyId?.trim()
+
+  if (auth.role === 'super_admin') {
+    return prisma.company.findMany({
+      where: {
+        deletedAt: null,
+        ...(companyId ? { id: companyId } : {})
+      },
+      select: {
+        id: true,
+        name: true,
+        locked: true,
+        traderId: true
+      },
+      orderBy: { name: 'asc' }
+    })
+  }
+
+  if (auth.role === 'trader_admin') {
+    return prisma.company.findMany({
+      where: {
+        deletedAt: null,
+        OR: [{ traderId: auth.traderId }, { traderId: null }],
+        ...(companyId ? { id: companyId } : {})
+      },
+      select: {
+        id: true,
+        name: true,
+        locked: true,
+        traderId: true
+      },
+      orderBy: { name: 'asc' }
+    })
+  }
+
+  const candidateIds = new Set<string>()
+  if (auth.companyId) {
+    candidateIds.add(auth.companyId)
+  }
+
+  if (auth.userDbId) {
+    const permissionRows = await prisma.userPermission.findMany({
+      where: {
+        userId: auth.userDbId,
+        OR: [{ canRead: true }, { canWrite: true }],
+        company: {
+          deletedAt: null,
+          OR: [{ traderId: auth.traderId }, { traderId: null }]
+        }
+      },
+      select: {
+        companyId: true
+      }
+    })
+
+    permissionRows.forEach((row) => {
+      if (row.companyId) candidateIds.add(row.companyId)
+    })
+  }
+
+  const ids = Array.from(candidateIds)
+  if (ids.length === 0) return []
+
+  return prisma.company.findMany({
+    where: {
+      id: {
+        in: companyId ? ids.filter((id) => id === companyId) : ids
+      },
+      deletedAt: null,
+      OR: [{ traderId: auth.traderId }, { traderId: null }]
+    },
+    select: {
+      id: true,
+      name: true,
+      locked: true,
+      traderId: true
+    },
+    orderBy: { name: 'asc' }
+  })
 }
 
 export async function parseJsonWithSchema<T>(

@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs'
 import { prisma } from '@/lib/prisma'
 import { normalizeOptionalString, parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
+import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
 
 const createUserSchema = z
   .object({
@@ -31,6 +32,12 @@ function normalizeCreatePayload(payload: z.infer<typeof createUserSchema>) {
   }
 }
 
+function omitPassword<T extends { password: string }>(user: T): Omit<T, 'password'> {
+  const { password, ...rest } = user
+  void password
+  return rest
+}
+
 export async function GET(request: NextRequest) {
   const authResult = requireRoles(request, ['super_admin'])
   if (!authResult.ok) return authResult.response
@@ -45,7 +52,8 @@ export async function GET(request: NextRequest) {
       where: {
         ...(includeDeleted ? {} : { deletedAt: null }),
         ...(traderId ? { traderId } : {}),
-        ...(companyId ? { companyId } : {})
+        ...(companyId ? { companyId } : {}),
+        NOT: [{ role: 'SUPER_ADMIN' }, { role: 'super_admin' }]
       },
       include: {
         trader: {
@@ -70,10 +78,13 @@ export async function GET(request: NextRequest) {
       }
     })
 
-    const usersWithoutPassword = users.map(({ password, ...user }) => ({
-      ...user,
-      active: !user.locked
-    }))
+    const usersWithoutPassword = users.map((user) => {
+      const userWithoutPassword = omitPassword(user)
+      return {
+        ...userWithoutPassword,
+        active: !user.locked
+      }
+    })
 
     return NextResponse.json(usersWithoutPassword)
   } catch {
@@ -116,17 +127,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
     }
 
+    if (trader.locked) {
+      return NextResponse.json({ error: 'Trader is locked' }, { status: 403 })
+    }
+
     const company = await prisma.company.findFirst({
       where: {
         id: normalized.companyId,
         traderId: normalized.traderId,
         deletedAt: null
       },
-      select: { id: true }
+      select: { id: true, locked: true }
     })
 
     if (!company) {
       return NextResponse.json({ error: 'Company not found for this trader' }, { status: 404 })
+    }
+
+    if (company.locked) {
+      return NextResponse.json({ error: 'Company is locked' }, { status: 403 })
     }
 
     const existingUser = await prisma.user.findFirst({
@@ -135,12 +154,61 @@ export async function POST(request: NextRequest) {
         userId: normalized.userId,
         deletedAt: null
       },
-      select: { id: true }
+      include: {
+        trader: {
+          select: {
+            id: true,
+            name: true
+          }
+        },
+        company: {
+          select: {
+            id: true,
+            name: true
+          }
+        }
+      }
     })
 
     if (existingUser) {
+      const linkedCompany = await prisma.userPermission.findFirst({
+        where: {
+          userId: existingUser.id,
+          companyId: normalized.companyId
+        },
+        select: { id: true }
+      })
+
+      if (existingUser.companyId === normalized.companyId || linkedCompany) {
+        return NextResponse.json(
+          { error: 'User with this ID is already linked to this company' },
+          { status: 409 }
+        )
+      }
+
+      const userWithoutPassword = omitPassword(existingUser)
       return NextResponse.json(
-        { error: 'User with this ID already exists for this trader' },
+        {
+          ...userWithoutPassword,
+          active: !userWithoutPassword.locked,
+          linkedExistingUser: true,
+          linkedCompanyId: normalized.companyId
+        },
+        { status: 200 }
+      )
+    }
+
+    const traderCapacity = await getTraderCapacitySnapshot(prisma, normalized.traderId)
+    if (!traderCapacity) {
+      return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
+    }
+
+    if (
+      traderCapacity.maxUsers !== null &&
+      traderCapacity.currentUsers >= traderCapacity.maxUsers
+    ) {
+      return NextResponse.json(
+        { error: `Trader user limit reached (${traderCapacity.currentUsers}/${traderCapacity.maxUsers})` },
         { status: 409 }
       )
     }
@@ -173,7 +241,7 @@ export async function POST(request: NextRequest) {
       }
     })
 
-    const { password, ...userWithoutPassword } = user
+    const userWithoutPassword = omitPassword(user)
 
     await writeAuditLog({
       actor: {

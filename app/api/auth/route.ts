@@ -7,6 +7,11 @@ import { auditLogger } from '@/lib/audit-logging'
 import { env } from '@/lib/config'
 import { loginSchema } from '@/lib/validation'
 import { getRequestIp } from '@/lib/api-security'
+import { isSupabaseConfigured } from '@/lib/supabase/client'
+import { createSupabaseRouteClient } from '@/lib/supabase/route'
+import { ensureSupabaseIdentityForLegacyUser, loadLegacyUserForSupabaseSync } from '@/lib/supabase/legacy-user-sync'
+import { getAppCompanyCookieOptions } from '@/lib/supabase/app-session'
+import { getCompanyCookieName } from '@/lib/session-cookies'
 
 // Simple in-memory rate limiting store
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
@@ -240,6 +245,94 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+    let preferredCompanyId = authResult.company?.id || null
+
+    if (isSupabaseConfigured()) {
+      const legacyUser = await loadLegacyUserForSupabaseSync(authResult.user!.id)
+      if (!legacyUser) {
+        return NextResponse.json(
+          { error: 'Account is locked or inactive' },
+          { status: 403, headers }
+        )
+      }
+
+      const routeClient = createSupabaseRouteClient(request)
+      if (!routeClient) {
+        return NextResponse.json(
+          { error: 'Supabase client is not configured correctly' },
+          { status: 500, headers }
+        )
+      }
+
+      const supabaseIdentity = await ensureSupabaseIdentityForLegacyUser({
+        legacyUser,
+        password
+      })
+
+      preferredCompanyId = supabaseIdentity.defaultCompanyId || preferredCompanyId
+
+      const signInResult = await routeClient.supabase.auth.signInWithPassword({
+        email: supabaseIdentity.loginEmail,
+        password
+      })
+
+      if (signInResult.error) {
+        await auditLogger.logAuthentication(
+          authResult.user!.userId,
+          authResult.user!.traderId,
+          'LOGIN_FAILURE',
+          ipAddress,
+          userAgent,
+          `Supabase sign-in failed: ${signInResult.error.message}`
+        )
+
+        return NextResponse.json(
+          { error: 'Failed to start Supabase session' },
+          { status: 500, headers }
+        )
+      }
+
+      // Prepare success response so we can attach both Supabase and legacy compatibility cookies.
+      const response = routeClient.applyCookies(
+        NextResponse.json({
+          success: true,
+          user: authResult.user,
+          trader: authResult.trader,
+          company: authResult.company
+        }, {
+          headers
+        })
+      )
+
+      await setSession(authResult.token!, authResult.refreshToken, response, 'app', scopeSource)
+
+      if (preferredCompanyId) {
+        response.cookies.set(
+          getCompanyCookieName(scopeSource),
+          preferredCompanyId,
+          getAppCompanyCookieOptions()
+        )
+      }
+
+      // Record successful attempt (resets brute force counter) only after both sessions are ready.
+      recordSuccessfulAttempt(request)
+
+      await auditLogger.logAuthentication(
+        authResult.user!.userId,
+        authResult.user!.traderId,
+        'LOGIN_SUCCESS',
+        ipAddress,
+        userAgent
+      )
+
+      if (!isDev) {
+        accountLockoutStore.delete(accountKey)
+      }
+
+      return response
+    }
+
     // Record successful attempt (resets brute force counter)
     recordSuccessfulAttempt(request)
 
@@ -266,7 +359,15 @@ export async function POST(request: NextRequest) {
     })
 
     // Set HttpOnly cookies with both tokens on the response
-    await setSession(authResult.token!, authResult.refreshToken, response)
+    await setSession(authResult.token!, authResult.refreshToken, response, 'app', scopeSource)
+
+    if (preferredCompanyId) {
+      response.cookies.set(
+        getCompanyCookieName(scopeSource),
+        preferredCompanyId,
+        getAppCompanyCookieOptions()
+      )
+    }
 
     return response
 

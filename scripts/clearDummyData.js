@@ -1,6 +1,5 @@
-const { PrismaClient } = require('@prisma/client')
-
 ;(async () => {
+  const { PrismaClient } = await import('@prisma/client')
   const prisma = new PrismaClient()
   try {
     console.log('🔄 Clearing all data...')

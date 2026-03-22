@@ -1,0 +1,2 @@
+ALTER TABLE "Trader" ADD COLUMN "maxCompanies" INTEGER;
+ALTER TABLE "Trader" ADD COLUMN "maxUsers" INTEGER;

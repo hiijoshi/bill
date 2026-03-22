@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Building2, Loader2, Lock, Pencil, Plus, RefreshCw, ShieldCheck, Store, Unlock, Users } from 'lucide-react'
+import { Building2, Loader2, Lock, Pencil, Plus, RefreshCw, ShieldCheck, Store, Unlock, Users, type LucideIcon } from 'lucide-react'
 import { PERMISSION_MODULES, type PermissionModule } from '@/lib/permissions'
 
 type CrudSection = 'traders' | 'companies' | 'users'
@@ -18,6 +18,8 @@ type CrudSection = 'traders' | 'companies' | 'users'
 type TraderRow = {
   id: string
   name: string
+  maxCompanies?: number | null
+  maxUsers?: number | null
   locked: boolean
   _count?: {
     companies?: number
@@ -67,10 +69,12 @@ type ModalState = {
     mandiAccountNumber?: string
     locked?: boolean
     privilegePreset?: 'keep' | 'none' | 'read' | 'all'
+    maxCompanies?: string
+    maxUsers?: string
   }
 }
 
-const tabs: Array<{ key: CrudSection; label: string; icon: any }> = [
+const tabs: Array<{ key: CrudSection; label: string; icon: LucideIcon }> = [
   { key: 'traders', label: 'Traders', icon: Store },
   { key: 'companies', label: 'Companies', icon: Building2 },
   { key: 'users', label: 'Users', icon: Users }
@@ -86,6 +90,9 @@ export default function SuperAdminCrudPage() {
   const [saving, setSaving] = useState(false)
   const [lockingKey, setLockingKey] = useState<string | null>(null)
   const [privilegeSavingKey, setPrivilegeSavingKey] = useState<string | null>(null)
+  const [quickLimitCompanyId, setQuickLimitCompanyId] = useState('')
+  const [quickLimitForm, setQuickLimitForm] = useState({ maxCompanies: '0', maxUsers: '0' })
+  const [quickLimitSaving, setQuickLimitSaving] = useState(false)
 
   const [traders, setTraders] = useState<TraderRow[]>([])
   const [companies, setCompanies] = useState<CompanyRow[]>([])
@@ -177,15 +184,21 @@ export default function SuperAdminCrudPage() {
     })
   }, [lowerSearch, users])
 
-  const resetModal = () => setModal(null)
+  const resetModal = () => {
+    setModal(null)
+    setError(null)
+  }
 
   const openCreateModal = (section: CrudSection) => {
+    setError(null)
     if (section === 'traders') {
       setModal({
         section,
         mode: 'create',
         form: {
           name: '',
+          maxCompanies: '0',
+          maxUsers: '0',
           locked: false
         }
       })
@@ -224,6 +237,7 @@ export default function SuperAdminCrudPage() {
   }
 
   const openEditModal = (section: CrudSection, record: TraderRow | CompanyRow | UserRow) => {
+    setError(null)
     if (section === 'traders') {
       const row = record as TraderRow
       setModal({
@@ -232,6 +246,8 @@ export default function SuperAdminCrudPage() {
         recordId: row.id,
         form: {
           name: row.name,
+          maxCompanies: String(row.maxCompanies ?? 0),
+          maxUsers: String(row.maxUsers ?? 0),
           locked: row.locked
         }
       })
@@ -332,6 +348,8 @@ export default function SuperAdminCrudPage() {
         method = mode === 'create' ? 'POST' : 'PUT'
         payload = {
           name,
+          maxCompanies: form.maxCompanies?.trim() === '' ? 0 : Number(form.maxCompanies),
+          maxUsers: form.maxUsers?.trim() === '' ? 0 : Number(form.maxUsers),
           locked: form.locked === true
         }
       } else if (section === 'companies') {
@@ -355,7 +373,10 @@ export default function SuperAdminCrudPage() {
         if (!traderId || !companyId || !userId) {
           throw new Error('Trader, company and user ID are required')
         }
-        if (password.length < 6) {
+        if (mode === 'create' && password.length < 6) {
+          throw new Error('Password must be at least 6 characters')
+        }
+        if (mode === 'edit' && password && password.length < 6) {
           throw new Error('Password must be at least 6 characters')
         }
 
@@ -367,7 +388,7 @@ export default function SuperAdminCrudPage() {
           userId,
           name: form.name?.trim() || null,
           locked: form.locked === true,
-          password
+          ...(password ? { password } : {})
         }
       }
 
@@ -486,6 +507,76 @@ export default function SuperAdminCrudPage() {
   const companyOptions = companies
     .filter((row) => !modal?.form.traderId || row.traderId === modal.form.traderId)
     .map((row) => ({ value: row.id, label: row.name }))
+  const modalTrader = modal?.form.traderId ? traders.find((row) => row.id === modal.form.traderId) || null : null
+  const quickLimitCompany = companies.find((row) => row.id === quickLimitCompanyId) || null
+  const quickLimitTrader = traders.find((row) => row.id === quickLimitCompany?.traderId) || null
+
+  useEffect(() => {
+    if (activeTab !== 'companies') return
+    if (!companies.length) {
+      setQuickLimitCompanyId('')
+      setQuickLimitForm({ maxCompanies: '0', maxUsers: '0' })
+      return
+    }
+
+    const nextCompanyId = companies.some((row) => row.id === quickLimitCompanyId) ? quickLimitCompanyId : companies[0].id
+    const nextCompany = companies.find((row) => row.id === nextCompanyId) || null
+    const nextTrader = traders.find((row) => row.id === nextCompany?.traderId) || null
+
+    setQuickLimitCompanyId(nextCompanyId)
+    setQuickLimitForm({
+      maxCompanies: String(nextTrader?.maxCompanies ?? 0),
+      maxUsers: String(nextTrader?.maxUsers ?? 0)
+    })
+  }, [activeTab, companies, traders, quickLimitCompanyId])
+
+  const selectQuickLimitCompany = (companyId: string) => {
+    setError(null)
+    setQuickLimitCompanyId(companyId)
+    const selectedCompany = companies.find((row) => row.id === companyId) || null
+    const selectedTrader = traders.find((row) => row.id === selectedCompany?.traderId) || null
+    setQuickLimitForm({
+      maxCompanies: String(selectedTrader?.maxCompanies ?? 0),
+      maxUsers: String(selectedTrader?.maxUsers ?? 0)
+    })
+  }
+
+  const saveQuickLimits = async () => {
+    if (!quickLimitCompany) {
+      setError('Select a company first')
+      return
+    }
+
+    if (!quickLimitCompany.traderId) {
+      setError('Selected company is not linked to a trader')
+      return
+    }
+
+    try {
+      setError(null)
+      setQuickLimitSaving(true)
+
+      const response = await fetch(`/api/super-admin/traders/${quickLimitCompany.traderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          maxCompanies: quickLimitForm.maxCompanies.trim() === '' ? 0 : Number(quickLimitForm.maxCompanies),
+          maxUsers: quickLimitForm.maxUsers.trim() === '' ? 0 : Number(quickLimitForm.maxUsers)
+        })
+      })
+
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(payload.error || 'Failed to update limits')
+      }
+
+      await fetchData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update limits')
+    } finally {
+      setQuickLimitSaving(false)
+    }
+  }
 
   const activeTabLabel = tabs.find((tab) => tab.key === activeTab)?.label || 'Records'
 
@@ -562,6 +653,11 @@ export default function SuperAdminCrudPage() {
           <Card className="border-slate-200">
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Traders Table</CardTitle>
+              <p className="text-sm text-slate-600">
+                Super-admin can increase or decrease trader limits at any time. If a limit is not set, it defaults to
+                0. Lowering a limit does not remove existing companies or users; it only blocks new additions until
+                usage comes under the limit.
+              </p>
             </CardHeader>
             <CardContent>
               <Table>
@@ -569,7 +665,9 @@ export default function SuperAdminCrudPage() {
                   <TableRow>
                     <TableHead>Name</TableHead>
                     <TableHead>Companies</TableHead>
+                    <TableHead>Company Limit</TableHead>
                     <TableHead>Users</TableHead>
+                    <TableHead>User Limit</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
@@ -579,7 +677,9 @@ export default function SuperAdminCrudPage() {
                     <TableRow key={row.id}>
                       <TableCell className="font-medium">{row.name}</TableCell>
                       <TableCell>{row._count?.companies || 0}</TableCell>
+                      <TableCell>{row.maxCompanies ?? 0}</TableCell>
                       <TableCell>{row._count?.users || 0}</TableCell>
+                      <TableCell>{row.maxUsers ?? 0}</TableCell>
                       <TableCell>
                         <Badge variant={row.locked ? 'destructive' : 'default'}>
                           {row.locked ? 'Locked' : 'Active'}
@@ -615,13 +715,66 @@ export default function SuperAdminCrudPage() {
           <Card className="border-slate-200">
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Companies Table</CardTitle>
+              <p className="text-sm text-slate-600">
+                Select any company here and update its trader limits directly. These limits apply across all companies of
+                the same trader.
+              </p>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 md:grid-cols-5">
+                <div className="md:col-span-2">
+                  <Label>Select Company</Label>
+                  <Select value={quickLimitCompanyId} onValueChange={selectQuickLimitCompany}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select company" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {companies.map((row) => (
+                        <SelectItem key={row.id} value={row.id}>
+                          {row.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Company Limit</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={quickLimitForm.maxCompanies}
+                    onChange={(e) => setQuickLimitForm((prev) => ({ ...prev, maxCompanies: e.target.value }))}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <Label>User Limit</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={quickLimitForm.maxUsers}
+                    onChange={(e) => setQuickLimitForm((prev) => ({ ...prev, maxUsers: e.target.value }))}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <Button type="button" className="w-full" onClick={saveQuickLimits} disabled={quickLimitSaving || !quickLimitCompanyId}>
+                    {quickLimitSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    Set Limits
+                  </Button>
+                </div>
+                <div className="md:col-span-5 text-xs text-slate-500">
+                  Trader: {quickLimitTrader?.name || quickLimitCompany?.trader?.name || '-'} | Lowering a limit keeps
+                  current records active and only restricts new additions. Blank values are saved as 0.
+                </div>
+              </div>
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Company</TableHead>
                     <TableHead>Trader</TableHead>
+                    <TableHead>Company Limit</TableHead>
+                    <TableHead>User Limit</TableHead>
                     <TableHead>Mandi Account No.</TableHead>
                     <TableHead>Users</TableHead>
                     <TableHead>Status</TableHead>
@@ -633,6 +786,8 @@ export default function SuperAdminCrudPage() {
                     <TableRow key={row.id}>
                       <TableCell className="font-medium">{row.name}</TableCell>
                       <TableCell>{row.trader?.name || row.traderId || '-'}</TableCell>
+                      <TableCell>{traders.find((trader) => trader.id === row.traderId)?.maxCompanies ?? 0}</TableCell>
+                      <TableCell>{traders.find((trader) => trader.id === row.traderId)?.maxUsers ?? 0}</TableCell>
                       <TableCell>{row.mandiAccountNumber || '-'}</TableCell>
                       <TableCell>{row._count?.users || 0}</TableCell>
                       <TableCell>
@@ -642,6 +797,9 @@ export default function SuperAdminCrudPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
+                          <Button type="button" size="sm" variant="outline" onClick={() => selectQuickLimitCompany(row.id)}>
+                            Limits
+                          </Button>
                           <Button
                             type="button"
                             size="sm"
@@ -791,6 +949,28 @@ export default function SuperAdminCrudPage() {
                     <Label>Trader Name</Label>
                     <Input value={modal.form.name || ''} onChange={(e) => setModalField('name', e.target.value)} />
                   </div>
+                  <div>
+                    <Label>Company Limit</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={modal.form.maxCompanies || ''}
+                      onChange={(e) => setModalField('maxCompanies', e.target.value)}
+                      placeholder="0"
+                    />
+                    <p className="mt-1 text-xs text-slate-500">Defaults to 0 if left empty. Existing companies stay active.</p>
+                  </div>
+                  <div>
+                    <Label>User Limit</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={modal.form.maxUsers || ''}
+                      onChange={(e) => setModalField('maxUsers', e.target.value)}
+                      placeholder="0"
+                    />
+                    <p className="mt-1 text-xs text-slate-500">Defaults to 0 if left empty. Existing users stay active.</p>
+                  </div>
                   <div className="flex items-center gap-2 pt-6">
                     <input
                       type="checkbox"
@@ -823,6 +1003,17 @@ export default function SuperAdminCrudPage() {
                       </SelectContent>
                     </Select>
                   </div>
+                  {modalTrader ? (
+                    <div className="md:col-span-2">
+                      <LimitStatusBox
+                        label={`Trader limit status for ${modalTrader.name}`}
+                        companyCount={modalTrader._count?.companies || 0}
+                        companyLimit={modalTrader.maxCompanies ?? 0}
+                        userCount={modalTrader._count?.users || 0}
+                        userLimit={modalTrader.maxUsers ?? 0}
+                      />
+                    </div>
+                  ) : null}
                   <div>
                     <Label>Phone</Label>
                     <Input
@@ -887,6 +1078,17 @@ export default function SuperAdminCrudPage() {
                       </SelectContent>
                     </Select>
                   </div>
+                  {modalTrader ? (
+                    <div className="md:col-span-2">
+                      <LimitStatusBox
+                        label={`Trader limit status for ${modalTrader.name}`}
+                        companyCount={modalTrader._count?.companies || 0}
+                        companyLimit={modalTrader.maxCompanies ?? 0}
+                        userCount={modalTrader._count?.users || 0}
+                        userLimit={modalTrader.maxUsers ?? 0}
+                      />
+                    </div>
+                  ) : null}
                   <div>
                     <Label>Company</Label>
                     <Select value={modal.form.companyId || ''} onValueChange={(value) => setModalField('companyId', value)}>
@@ -905,13 +1107,23 @@ export default function SuperAdminCrudPage() {
                   <div>
                     <Label>User ID</Label>
                     <Input value={modal.form.userId || ''} onChange={(e) => setModalField('userId', e.target.value)} />
+                    {modal.mode === 'create' ? (
+                      <p className="mt-1 text-xs text-slate-500">
+                        If this user ID already exists under the same trader, the system will attach the selected company access instead of creating a duplicate user.
+                      </p>
+                    ) : null}
+                    {modalTrader && (modalTrader.maxUsers ?? 0) <= (modalTrader._count?.users || 0) ? (
+                      <p className="mt-1 text-xs text-amber-600">
+                        Trader user limit is already full. New unique users will be blocked, but existing same user IDs can still attach to another company of this trader.
+                      </p>
+                    ) : null}
                   </div>
                   <div>
                     <Label>Name</Label>
                     <Input value={modal.form.name || ''} onChange={(e) => setModalField('name', e.target.value)} />
                   </div>
                   <div>
-                    <Label>Password</Label>
+                    <Label>Password {modal.mode === 'create' ? '' : '(leave blank to keep current)'}</Label>
                     <Input
                       type="password"
                       value={modal.form.password || ''}
@@ -972,6 +1184,41 @@ function KpiTile({ label, value, danger }: { label: string; value: number; dange
     <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
       <p className="text-[11px] uppercase tracking-wide text-slate-500">{label}</p>
       <p className={`text-xl font-semibold ${danger ? 'text-red-600' : 'text-slate-900'}`}>{value}</p>
+    </div>
+  )
+}
+
+function LimitStatusBox({
+  label,
+  companyCount,
+  companyLimit,
+  userCount,
+  userLimit
+}: {
+  label: string
+  companyCount: number
+  companyLimit: number
+  userCount: number
+  userLimit: number
+}) {
+  const companyRemaining = companyLimit - companyCount
+  const userRemaining = userLimit - userCount
+  const companyOver = companyRemaining <= 0
+  const userOver = userRemaining <= 0
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <p className="text-sm font-medium text-slate-900">{label}</p>
+      <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+        <div className={`rounded-md border px-3 py-2 text-sm ${companyOver ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-slate-200 bg-white text-slate-700'}`}>
+          Companies: {companyCount}/{companyLimit} used
+          <div className="text-xs">{companyOver ? 'No company slots left' : `${companyRemaining} slots left`}</div>
+        </div>
+        <div className={`rounded-md border px-3 py-2 text-sm ${userOver ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-slate-200 bg-white text-slate-700'}`}>
+          Users: {userCount}/{userLimit} used
+          <div className="text-xs">{userOver ? 'No user slots left' : `${userRemaining} slots left`}</div>
+        </div>
+      </div>
     </div>
   )
 }

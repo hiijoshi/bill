@@ -204,7 +204,15 @@ function SpecialPurchaseViewContent() {
                 <Printer className="w-4 h-4 mr-2" />
                 Print
               </Button>
-              <Button variant="outline" onClick={() => alert('PDF export coming soon')}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const printPath = companyId
+                    ? `/purchase/special/${bill.id}/print?companyId=${encodeURIComponent(companyId)}`
+                    : `/purchase/special/${bill.id}/print`
+                  window.open(printPath, '_blank', 'noopener,noreferrer')
+                }}
+              >
                 <FileText className="w-4 h-4 mr-2" />
                 PDF
               </Button>

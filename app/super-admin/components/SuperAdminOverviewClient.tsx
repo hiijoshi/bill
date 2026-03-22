@@ -312,16 +312,20 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
 
   useEffect(() => {
     const handleLayoutChange = () => recalculateGraphPoints()
+    const traderListElement = traderListRef.current
+    const companyListElement = companyListRef.current
+    const userListElement = userListRef.current
+
     window.addEventListener('resize', handleLayoutChange)
-    traderListRef.current?.addEventListener('scroll', handleLayoutChange)
-    companyListRef.current?.addEventListener('scroll', handleLayoutChange)
-    userListRef.current?.addEventListener('scroll', handleLayoutChange)
+    traderListElement?.addEventListener('scroll', handleLayoutChange)
+    companyListElement?.addEventListener('scroll', handleLayoutChange)
+    userListElement?.addEventListener('scroll', handleLayoutChange)
 
     return () => {
       window.removeEventListener('resize', handleLayoutChange)
-      traderListRef.current?.removeEventListener('scroll', handleLayoutChange)
-      companyListRef.current?.removeEventListener('scroll', handleLayoutChange)
-      userListRef.current?.removeEventListener('scroll', handleLayoutChange)
+      traderListElement?.removeEventListener('scroll', handleLayoutChange)
+      companyListElement?.removeEventListener('scroll', handleLayoutChange)
+      userListElement?.removeEventListener('scroll', handleLayoutChange)
     }
   }, [recalculateGraphPoints])
 

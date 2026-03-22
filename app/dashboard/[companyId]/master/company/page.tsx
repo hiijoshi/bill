@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -11,8 +12,18 @@ interface CompanyPageProps {
   params: { companyId: string }
 }
 
+type CompanyData = {
+  name: string
+  gstNumber: string
+  mandiLicense: string
+  address: string
+  phone: string
+  email: string
+  logo: string
+}
+
 export default function CompanyMaster({ params }: CompanyPageProps) {
-  const [companyData, setCompanyData] = useState({
+  const [companyData, setCompanyData] = useState<CompanyData>({
     name: '',
     gstNumber: '',
     mandiLicense: '',
@@ -25,21 +36,30 @@ export default function CompanyMaster({ params }: CompanyPageProps) {
   const [isEditing, setIsEditing] = useState(false)
 
   useEffect(() => {
-    // Load company data
-    loadCompanyData()
-  }, [params.companyId])
+    let isMounted = true
 
-  const loadCompanyData = async () => {
-    try {
-      const response = await fetch(`/api/companies/${params.companyId}`)
-      if (response.ok) {
+    const fetchCompanyData = async () => {
+      try {
+        const response = await fetch(`/api/companies/${params.companyId}`)
+        if (!response.ok || !isMounted) {
+          return
+        }
+
         const data = await response.json()
-        setCompanyData(data)
+        if (isMounted) {
+          setCompanyData(data)
+        }
+      } catch (error) {
+        console.error('Error loading company data:', error)
       }
-    } catch (error) {
-      console.error('Error loading company data:', error)
     }
-  }
+
+    void fetchCompanyData()
+
+    return () => {
+      isMounted = false
+    }
+  }, [params.companyId])
 
   const handleSave = async () => {
     try {
@@ -80,7 +100,14 @@ export default function CompanyMaster({ params }: CompanyPageProps) {
           <div className="flex items-center space-x-4">
             <div className="w-24 h-24 bg-gray-200 rounded-lg flex items-center justify-center">
               {companyData.logo ? (
-                <img src={companyData.logo} alt="Company Logo" className="w-full h-full object-cover rounded-lg" />
+                <Image
+                  src={companyData.logo}
+                  alt="Company Logo"
+                  width={96}
+                  height={96}
+                  unoptimized
+                  className="w-full h-full object-cover rounded-lg"
+                />
               ) : (
                 <Building2 className="h-8 w-8 text-gray-400" />
               )}

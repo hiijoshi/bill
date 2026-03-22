@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { validateRequest, createCompanySchema, updateCompanySchema } from '@/lib/validation'
 import {
+  getAccessibleCompanies,
   normalizeId,
   parseBooleanParam,
   requireRoles
@@ -46,13 +47,30 @@ export async function GET(request: NextRequest) {
     } else if (auth.role === 'trader_admin') {
       where.traderId = auth.traderId
     } else {
-      // For company users/admins with missing company assignment, do not hard-fail dashboard bootstrap.
-      // Return trader-scoped companies so they can recover via company selection UI.
-      if (auth.companyId) {
-        where.id = auth.companyId
-      } else if (auth.traderId) {
-        where.traderId = auth.traderId
+      const accessibleCompanies = await getAccessibleCompanies(auth)
+      const ids = accessibleCompanies.map((company) => company.id)
+      if (ids.length === 0) {
+        return NextResponse.json([], { headers: setCORSHeaders() })
       }
+      const companies = await prisma.company.findMany({
+        where: {
+          deletedAt: null,
+          id: { in: ids }
+        },
+        include: {
+          trader: {
+            select: {
+              id: true,
+              name: true,
+              locked: true,
+              deletedAt: true
+            }
+          }
+        },
+        orderBy: { name: 'asc' }
+      })
+
+      return NextResponse.json(companies, { headers: setCORSHeaders() })
     }
 
     const companies = await prisma.company.findMany({

@@ -99,13 +99,13 @@ export default function SpecialPurchasePrintClient({ printData }: Props) {
           <div className="border-r border-black p-1 print:p-[2px]">बैग : {printData.bags.toFixed(2)}</div>
           <div className="border-r border-black p-1 print:p-[2px]">वजन (क्विंटल) : {printData.weight.toFixed(2)}</div>
           <div className="border-r border-black p-1 print:p-[2px]">दर : ₹ {printData.rate.toFixed(2)}</div>
-          <div className="border-r border-black p-1 print:p-[2px]">नेट राशि : ₹ {printData.netAmount.toFixed(2)}</div>
+          <div className="border-r border-black p-1 print:p-[2px]">टैक्सेबल राशि : ₹ {printData.taxableAmount.toFixed(2)}</div>
           <div className="p-1 print:p-[2px]">ग्रॉस राशि : ₹ {printData.grossAmount.toFixed(2)}</div>
         </div>
 
         <div className="grid grid-cols-4 border-b border-black text-[12px] font-medium print:text-[10px]">
           <div className="border-r border-black p-1 print:p-[2px]">अन्य राशि : ₹ {printData.otherAmount.toFixed(2)}</div>
-          <div className="border-r border-black p-1 print:p-[2px]">विलंब से भुगतान पर अतिरिक्त : ₹ 0.00</div>
+          <div className="border-r border-black p-1 print:p-[2px]">GST राशि : ₹ {printData.totalGstAmount.toFixed(2)}</div>
           <div className="border-r border-black p-1 print:p-[2px]">GST नंबर : {printData.supplierGstNumber || '-'}</div>
           <div className="p-1 print:p-[2px]">सप्लायर को भुगतान योग्य राशि : ₹ {payableToSupplier.toFixed(2)}</div>
         </div>
@@ -134,7 +134,13 @@ export default function SpecialPurchasePrintClient({ printData }: Props) {
         </div>
 
         <div className="grid grid-cols-3 border-b border-black text-[12px] font-medium print:text-[10px]">
-          <div className="border-r border-black p-1 print:p-[2px]">कुल राशि : ₹ {printData.totalAmount.toFixed(2)}</div>
+          <div className="border-r border-black p-1 print:p-[2px]">सबटोटल : ₹ {printData.subTotalAmount.toFixed(2)}</div>
+          <div className="border-r border-black p-1 print:p-[2px]">कुल GST : ₹ {printData.totalGstAmount.toFixed(2)}</div>
+          <div className="p-1 print:p-[2px]">फाइनल इनवॉइस टोटल : ₹ {printData.totalAmount.toFixed(2)}</div>
+        </div>
+
+        <div className="grid grid-cols-3 border-b border-black text-[12px] font-medium print:text-[10px]">
+          <div className="border-r border-black p-1 print:p-[2px]">लाइन ग्रॉस : ₹ {printData.grossAmount.toFixed(2)}</div>
           <div className="border-r border-black p-1 print:p-[2px]">शेष राशि : ₹ {printData.balanceAmount.toFixed(2)}</div>
           <div className="p-1 print:p-[2px]">कंपनी फोन : {printData.companyPhone || '-'}</div>
         </div>

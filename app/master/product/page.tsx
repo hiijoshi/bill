@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -61,23 +61,7 @@ export default function ProductMasterPage() {
   })
 
   const gstRates = ['0', '5', '12', '18', '28']
-  useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
-      if (!resolvedCompanyId) {
-        setErrorMessage('Failed to resolve active company. Please re-login.')
-        setLoading(false)
-        return
-      }
-
-      setCompanyId(resolvedCompanyId)
-      setDefaultPurchaseProductIdState(getDefaultPurchaseProductId(resolvedCompanyId))
-      stripCompanyParamsFromUrl()
-      await Promise.all([fetchProducts(resolvedCompanyId), fetchUnits(resolvedCompanyId)])
-    })()
-  }, [])
-
-  const fetchUnits = async (targetCompanyId = companyId) => {
+  const fetchUnits = useCallback(async (targetCompanyId = companyId) => {
     if (!targetCompanyId) return
     try {
       const response = await fetch(`/api/units?companyId=${encodeURIComponent(targetCompanyId)}`)
@@ -91,9 +75,9 @@ export default function ProductMasterPage() {
       console.error('Error fetching units:', error)
       setUnits([])
     }
-  }
+  }, [companyId])
 
-  const fetchProducts = async (targetCompanyId = companyId) => {
+  const fetchProducts = useCallback(async (targetCompanyId = companyId) => {
     if (!targetCompanyId) {
       setLoading(false)
       return
@@ -124,7 +108,23 @@ export default function ProductMasterPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [companyId])
+
+  useEffect(() => {
+    ;(async () => {
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (!resolvedCompanyId) {
+        setErrorMessage('Failed to resolve active company. Please re-login.')
+        setLoading(false)
+        return
+      }
+
+      setCompanyId(resolvedCompanyId)
+      setDefaultPurchaseProductIdState(getDefaultPurchaseProductId(resolvedCompanyId))
+      stripCompanyParamsFromUrl()
+      await Promise.all([fetchProducts(resolvedCompanyId), fetchUnits(resolvedCompanyId)])
+    })()
+  }, [fetchProducts, fetchUnits])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

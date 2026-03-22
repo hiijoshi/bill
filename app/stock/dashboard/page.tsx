@@ -52,6 +52,12 @@ const clampNonNegative = (value: number): number => {
   return Math.max(0, parsed)
 }
 
+const formatSignedQuantity = (value: number): string => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return '0.00'
+  return parsed.toFixed(2)
+}
+
 export default function StockDashboardPage() {
   const router = useRouter()
   const [products, setProducts] = useState<Product[]>([])
@@ -172,6 +178,11 @@ export default function StockDashboardPage() {
     return Object.values(summary)
   }, [products, stockLedger])
 
+  const selectedStockSummary = useMemo(
+    () => stockSummary.find((stock) => stock.productId === selectedProduct) || null,
+    [selectedProduct, stockSummary]
+  )
+
   const handleStockAdjustment = async (e: React.FormEvent) => {
     e.preventDefault()
 
@@ -180,36 +191,49 @@ export default function StockDashboardPage() {
       return
     }
 
-    try {
-      const adjustmentData = {
-        companyId,
-        productId: selectedProduct,
-        entryDate: adjustmentDate,
-        type: 'adjustment',
-        qtyIn: adjustmentType === 'in' ? parseFloat(quantity) : 0,
-        qtyOut: adjustmentType === 'out' ? parseFloat(quantity) : 0,
-        refTable: 'stock_adjustments',
-        refId: 'manual',
-        note: reason
-      }
+    const parsedQuantity = Number(quantity)
+    if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
+      alert('Quantity must be greater than 0')
+      return
+    }
 
-      const response = await fetch('/api/stock-ledger', {
+    if (adjustmentType === 'out' && selectedStockSummary && parsedQuantity > selectedStockSummary.closingStock) {
+      alert(`Adjustment quantity cannot exceed current stock (${selectedStockSummary.closingStock.toFixed(2)} ${selectedStockSummary.productUnit})`)
+      return
+    }
+
+    try {
+      const response = await fetch('/api/stock/adjustment', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(adjustmentData),
+        body: JSON.stringify({
+          companyId,
+          productId: selectedProduct,
+          adjustmentDate,
+          adjustmentType,
+          quantity: parsedQuantity,
+          remark: reason.trim() || null
+        }),
       })
 
+      const payload = await response.json().catch(() => ({} as { error?: string; currentStockAfter?: number; unit?: string }))
+
       if (response.ok) {
-        alert('Stock adjustment recorded successfully!')
+        const stockAfter =
+          typeof payload.currentStockAfter === 'number' && selectedStockSummary
+            ? ` Updated stock: ${payload.currentStockAfter.toFixed(2)} ${payload.unit || selectedStockSummary.productUnit}`
+            : ''
+        alert(`Stock ${adjustmentType === 'in' ? 'in' : 'out'} adjustment recorded successfully!${stockAfter}`)
         setShowAdjustmentForm(false)
         setSelectedProduct('')
+        setAdjustmentType('in')
         setQuantity('')
         setReason('')
         void fetchData() // Refresh data
       } else {
-        alert('Error recording stock adjustment')
+        alert(payload.error || 'Error recording stock adjustment')
       }
     } catch (error) {
       console.error('Error:', error)
@@ -240,7 +264,7 @@ export default function StockDashboardPage() {
   }, [stockLedger, filterProduct, filterType, dateFrom, dateTo])
 
   const totalStockValue = useMemo(
-    () => stockSummary.reduce((sum, stock) => sum + clampNonNegative(stock.closingStock), 0),
+    () => stockSummary.reduce((sum, stock) => sum + Number(stock.closingStock || 0), 0),
     [stockSummary]
   )
   const lowStockProducts = useMemo(
@@ -344,11 +368,11 @@ export default function StockDashboardPage() {
                           {clampNonNegative(stock.totalOut).toFixed(2)}
                         </TableCell>
                         <TableCell className="font-bold">
-                          {clampNonNegative(stock.closingStock).toFixed(2)}
+                          {formatSignedQuantity(stock.closingStock)}
                         </TableCell>
                         <TableCell>
-                          <Badge variant={clampNonNegative(stock.closingStock) > 0 ? 'default' : 'destructive'}>
-                            {clampNonNegative(stock.closingStock) > 0 ? 'In Stock' : 'Out of Stock'}
+                          <Badge variant={stock.closingStock > 0 ? 'default' : 'destructive'}>
+                            {stock.closingStock > 0 ? 'In Stock' : stock.closingStock < 0 ? 'Shortage' : 'Out of Stock'}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -489,6 +513,11 @@ export default function StockDashboardPage() {
                           ))}
                         </SelectContent>
                       </Select>
+                      {selectedStockSummary && (
+                        <p className="mt-1 text-sm text-gray-500">
+                          Current stock: {formatSignedQuantity(selectedStockSummary.closingStock)} {selectedStockSummary.productUnit}
+                        </p>
+                      )}
                     </div>
                     <div>
                       <Label htmlFor="adjustmentDate">Date</Label>

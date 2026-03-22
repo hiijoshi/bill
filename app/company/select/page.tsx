@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { getSession } from '@/lib/session'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { prisma } from '@/lib/prisma'
+import { getAccessibleCompanies, normalizeAppRole } from '@/lib/api-security'
 import CompanySelectorSimple from './CompanySelectorSimple'
 
 export default async function CompanySelectPage() {
@@ -11,23 +12,29 @@ export default async function CompanySelectPage() {
     redirect('/login')
   }
 
-  const isSuperAdmin = session.role === 'super_admin'
-  const companies = await prisma.company.findMany({
-    where: isSuperAdmin
-      ? undefined
-      : {
-          OR: [
-            { traderId: session.traderId },
-            { traderId: null }
-          ]
-        },
+  const user = await prisma.user.findFirst({
+    where: {
+      userId: session.userId,
+      traderId: session.traderId,
+      deletedAt: null
+    },
     select: {
       id: true,
-      name: true
-    },
-    orderBy: {
-      name: 'asc'
+      companyId: true,
+      role: true
     }
+  })
+
+  if (!user) {
+    redirect('/login')
+  }
+
+  const companies = await getAccessibleCompanies({
+    userId: session.userId,
+    traderId: session.traderId,
+    role: normalizeAppRole(user.role || session.role),
+    companyId: user.companyId,
+    userDbId: user.id
   })
 
   return (

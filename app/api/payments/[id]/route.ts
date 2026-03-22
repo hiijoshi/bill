@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import {
@@ -57,7 +58,10 @@ const parseOptionalDate = (value: unknown): Date | null => {
   return parsed
 }
 
-async function recalculateBillTotals(tx: any, payment: { id: string; billType: string; billId: string }) {
+async function recalculateBillTotals(
+  tx: Prisma.TransactionClient,
+  payment: { id: string; billType: string; billId: string }
+) {
   const aggregate = await tx.payment.aggregate({
     where: {
       billType: payment.billType,

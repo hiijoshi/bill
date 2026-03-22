@@ -1,11 +1,11 @@
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, type StockLedger } from '@prisma/client'
 
 const prisma = new PrismaClient()
 
 export interface StockUpdateResult {
   success: boolean
   message?: string
-  stockLedgerEntries?: any[]
+  stockLedgerEntries?: StockLedger[]
 }
 
 export async function updateStockOnPurchase(
@@ -19,7 +19,7 @@ export async function updateStockOnPurchase(
   }>
 ): Promise<StockUpdateResult> {
   try {
-    const stockLedgerEntries = []
+    const stockLedgerEntries: StockLedger[] = []
 
     for (const item of items) {
       // Create stock ledger entry for purchase
@@ -63,7 +63,7 @@ export async function updateStockOnSales(
   }>
 ): Promise<StockUpdateResult> {
   try {
-    const stockLedgerEntries = []
+    const stockLedgerEntries: StockLedger[] = []
 
     for (const item of items) {
       // Check current stock availability

@@ -1,8 +1,3 @@
-import { prisma } from '@/lib/prisma'
-import { notFound, redirect } from 'next/navigation'
-import { cookies } from 'next/headers'
-import Sidebar from '@/app/components/Sidebar'
-
 export default function DashboardLayout({
   children
 }: {

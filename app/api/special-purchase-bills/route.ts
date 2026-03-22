@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { cookies } from 'next/headers'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { cleanString, normalizeTenDigitPhone, parseNonNegativeNumber } from '@/lib/field-validation'
+import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 
 const writeSchema = z.object({
   id: z.string().optional(),
@@ -105,20 +106,36 @@ export async function POST(request: NextRequest) {
     const rate = parseNonNegativeNumber(body.rate)
     const netAmount = parseNonNegativeNumber(body.netAmount)
     const otherAmount = parseNonNegativeNumber(body.otherAmount) ?? 0
-    const grossAmount = parseNonNegativeNumber(body.grossAmount)
     const paidAmount = parseNonNegativeNumber(body.paidAmount) ?? 0
     if (weight === null) return NextResponse.json({ error: 'Weight must be a non-negative number' }, { status: 400 })
     if (rate === null) return NextResponse.json({ error: 'Rate must be a non-negative number' }, { status: 400 })
     if (netAmount === null) return NextResponse.json({ error: 'Net amount must be a non-negative number' }, { status: 400 })
-    if (grossAmount === null) return NextResponse.json({ error: 'Gross amount must be a non-negative number' }, { status: 400 })
+
+    const cookieStore = await cookies()
+    const userId = cookieStore.get('userId')?.value || 'test-user'
+
+    const product = await prisma.product.findFirst({
+      where: {
+        id: body.productId,
+        companyId: body.companyId
+      },
+      select: {
+        id: true,
+        gstRate: true
+      }
+    })
+
+    if (!product) {
+      return NextResponse.json({ error: 'Product not found' }, { status: 404 })
+    }
+
+    const tax = calculateTaxBreakdown(netAmount, product.gstRate)
+    const grossAmount = parseNonNegativeNumber(body.grossAmount) ?? roundCurrency(tax.lineTotal + otherAmount)
     if (paidAmount > grossAmount) {
       return NextResponse.json({ error: 'Paid amount cannot exceed gross amount' }, { status: 400 })
     }
     const balanceAmount = Math.max(0, grossAmount - paidAmount)
     const normalizedStatus = deriveStatus(paidAmount, grossAmount)
-
-    const cookieStore = await cookies()
-    const userId = cookieStore.get('userId')?.value || 'test-user'
 
     let supplier = await prisma.supplier.findFirst({
       where: {
@@ -162,6 +179,8 @@ export async function POST(request: NextRequest) {
         supplierInvoiceNo: body.supplierInvoiceNo,
         billDate: new Date(body.billDate),
         supplierId: supplier.id,
+        subTotalAmount: tax.taxableAmount,
+        gstAmount: tax.gstAmount,
         totalAmount: grossAmount,
         paidAmount,
         balanceAmount,
@@ -177,7 +196,10 @@ export async function POST(request: NextRequest) {
         noOfBags: body.noOfBags ? parseInt(String(body.noOfBags), 10) : null,
         weight,
         rate,
-        netAmount,
+        taxableAmount: tax.taxableAmount,
+        gstRateSnapshot: tax.gstRate,
+        gstAmount: tax.gstAmount,
+        netAmount: tax.taxableAmount,
         otherAmount,
         grossAmount,
       },
@@ -305,12 +327,28 @@ export async function PUT(request: NextRequest) {
     const rate = parseNonNegativeNumber(body.rate)
     const netAmount = parseNonNegativeNumber(body.netAmount)
     const otherAmount = parseNonNegativeNumber(body.otherAmount) ?? 0
-    const grossAmount = parseNonNegativeNumber(body.grossAmount)
     const paidAmount = parseNonNegativeNumber(body.paidAmount) ?? 0
     if (weight === null) return NextResponse.json({ error: 'Weight must be a non-negative number' }, { status: 400 })
     if (rate === null) return NextResponse.json({ error: 'Rate must be a non-negative number' }, { status: 400 })
     if (netAmount === null) return NextResponse.json({ error: 'Net amount must be a non-negative number' }, { status: 400 })
-    if (grossAmount === null) return NextResponse.json({ error: 'Gross amount must be a non-negative number' }, { status: 400 })
+
+    const product = await prisma.product.findFirst({
+      where: {
+        id: body.productId,
+        companyId: body.companyId
+      },
+      select: {
+        id: true,
+        gstRate: true
+      }
+    })
+
+    if (!product) {
+      return NextResponse.json({ error: 'Product not found' }, { status: 404 })
+    }
+
+    const tax = calculateTaxBreakdown(netAmount, product.gstRate)
+    const grossAmount = parseNonNegativeNumber(body.grossAmount) ?? roundCurrency(tax.lineTotal + otherAmount)
     if (paidAmount > grossAmount) {
       return NextResponse.json({ error: 'Paid amount cannot exceed gross amount' }, { status: 400 })
     }
@@ -360,6 +398,8 @@ export async function PUT(request: NextRequest) {
         supplierInvoiceNo: body.supplierInvoiceNo,
         billDate: new Date(body.billDate),
         supplierId: supplier.id,
+        subTotalAmount: tax.taxableAmount,
+        gstAmount: tax.gstAmount,
         totalAmount: grossAmount,
         paidAmount,
         balanceAmount,
@@ -379,7 +419,10 @@ export async function PUT(request: NextRequest) {
           noOfBags: body.noOfBags ? parseInt(String(body.noOfBags), 10) : null,
           weight,
           rate,
-          netAmount,
+          taxableAmount: tax.taxableAmount,
+          gstRateSnapshot: tax.gstRate,
+          gstAmount: tax.gstAmount,
+          netAmount: tax.taxableAmount,
           otherAmount,
           grossAmount,
         },
@@ -392,7 +435,10 @@ export async function PUT(request: NextRequest) {
           noOfBags: body.noOfBags ? parseInt(String(body.noOfBags), 10) : null,
           weight,
           rate,
-          netAmount,
+          taxableAmount: tax.taxableAmount,
+          gstRateSnapshot: tax.gstRate,
+          gstAmount: tax.gstAmount,
+          netAmount: tax.taxableAmount,
           otherAmount,
           grossAmount,
         },

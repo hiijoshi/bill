@@ -1,8 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
+import { cookies, headers } from 'next/headers'
+import { getAccessibleCompanies, normalizeAppRole } from '@/lib/api-security'
+import { getCompanyCookieNameCandidates } from '@/lib/session-cookies'
+import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const supabaseSession = await resolveSupabaseAppSession(request)
+    if (supabaseSession) {
+      return supabaseSession.applyCookies(
+        NextResponse.json({
+          success: true,
+          user: {
+            id: supabaseSession.profile.legacy_user_id || supabaseSession.profile.id,
+            userId: supabaseSession.profile.user_code,
+            traderId: supabaseSession.profile.trader_id,
+            name: supabaseSession.profile.full_name,
+            role: supabaseSession.profile.app_role,
+            companyId: supabaseSession.activeCompany?.id || null,
+            assignedCompanyId: supabaseSession.profile.default_company_id || null
+          },
+          trader: {
+            id: supabaseSession.profile.trader_id,
+            name: null
+          },
+          company: supabaseSession.activeCompany
+            ? {
+                id: supabaseSession.activeCompany.id,
+                name: supabaseSession.activeCompany.name
+              }
+            : null
+        })
+      )
+    }
+
     const session = await getSession()
     
     if (!session) {
@@ -35,14 +67,6 @@ export async function GET() {
             locked: true,
             deletedAt: true
           }
-        },
-        company: {
-          select: {
-            id: true,
-            name: true,
-            locked: true,
-            deletedAt: true
-          }
         }
       }
     })
@@ -54,25 +78,30 @@ export async function GET() {
       )
     }
 
-    if (user.locked || user.trader?.locked || user.trader?.deletedAt || user.company?.locked || user.company?.deletedAt) {
+    if (user.locked || user.trader?.locked || user.trader?.deletedAt) {
       return NextResponse.json({ error: 'Account is locked or inactive' }, { status: 403 })
     }
 
-    // Get company for this user
-    const company = user.companyId
-      ? await prisma.company.findFirst({
-          where: {
-            id: user.companyId,
-            traderId: user.traderId,
-            deletedAt: null
-          }
-        })
-      : await prisma.company.findFirst({
-          where: {
-            traderId: user.traderId,
-            deletedAt: null
-          }
-        })
+    const role = normalizeAppRole(user.role || session.role)
+    const cookieStore = await cookies()
+    const headerStore = await headers()
+    const scopeSource = headerStore.get('x-forwarded-host') || headerStore.get('host')
+    const companyCookieId =
+      getCompanyCookieNameCandidates(scopeSource)
+        .map((cookieName) => cookieStore.get(cookieName)?.value?.trim() || '')
+        .find((value) => value.length > 0) || ''
+    const accessibleCompanies = await getAccessibleCompanies({
+      userId: user.userId,
+      traderId: user.traderId,
+      role,
+      companyId: user.companyId,
+      userDbId: user.id
+    })
+    const company =
+      accessibleCompanies.find((entry) => entry.id === companyCookieId && !entry.locked) ||
+      accessibleCompanies.find((entry) => entry.id === user.companyId && !entry.locked) ||
+      accessibleCompanies.find((entry) => !entry.locked) ||
+      null
 
     return NextResponse.json({
       success: true,
@@ -82,7 +111,8 @@ export async function GET() {
         traderId: user.traderId,
         name: user.name,
         role: user.role,
-        companyId: company?.id || null // Add companyId here
+        companyId: company?.id || null,
+        assignedCompanyId: user.companyId || null
       },
       trader: user.trader,
       company: company ? {

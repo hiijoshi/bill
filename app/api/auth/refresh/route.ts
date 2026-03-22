@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyRefreshToken, generateToken } from '@/lib/auth'
+import { verifyRefreshToken, generateRefreshToken, generateToken, normalizeRole } from '@/lib/auth'
 import { setSession, clearSession } from '@/lib/session'
 import { getRequestIp } from '@/lib/api-security'
 import { prisma } from '@/lib/prisma'
+import { getSessionCookieNameCandidates } from '@/lib/session-cookies'
 
 const refreshRateLimit = new Map<string, { count: number; resetTime: number }>()
 const ENABLE_REFRESH_RATE_LIMIT = false
@@ -33,7 +34,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const refreshToken = request.cookies.get('refresh-token')?.value
+    const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+    const refreshToken =
+      getSessionCookieNameCandidates('app', scopeSource)
+        .map((cookieNames) => request.cookies.get(cookieNames.refreshToken)?.value)
+        .find((value): value is string => Boolean(value)) || null
 
     if (!refreshToken) {
       return NextResponse.json(
@@ -47,7 +52,7 @@ export async function POST(request: NextRequest) {
     
     if (!payload) {
       // Clear invalid refresh token
-      await clearSession()
+      await clearSession(undefined, 'app', scopeSource)
       return NextResponse.json(
         { error: 'Invalid or expired refresh token' },
         { status: 401 }
@@ -67,32 +72,33 @@ export async function POST(request: NextRequest) {
             locked: true,
             deletedAt: true
           }
-        },
-        company: {
-          select: {
-            locked: true,
-            deletedAt: true
-          }
         }
       }
     })
 
-    if (!user || user.locked || user.trader?.locked || user.trader?.deletedAt || user.company?.locked || user.company?.deletedAt) {
-      await clearSession()
+    if (!user || user.locked || user.trader?.locked || user.trader?.deletedAt) {
+      await clearSession(undefined, 'app', scopeSource)
       return NextResponse.json(
         { error: 'Account is locked or inactive' },
         { status: 403 }
       )
     }
 
-    const newAccessToken = generateToken(payload)
+    const refreshedPayload = {
+      userId: user.userId,
+      traderId: user.traderId,
+      name: user.name || undefined,
+      role: normalizeRole(user.role) || undefined
+    }
+    const newAccessToken = generateToken(refreshedPayload)
+    const nextRefreshToken = generateRefreshToken(refreshedPayload)
     
     // Set new session with fresh access token on the outgoing response
     const response = NextResponse.json({
       success: true,
       token: newAccessToken
     })
-    await setSession(newAccessToken, refreshToken, response)
+    await setSession(newAccessToken, nextRefreshToken, response, 'app', scopeSource)
 
     return response
 

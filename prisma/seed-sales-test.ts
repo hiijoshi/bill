@@ -33,7 +33,7 @@ async function main() {
       }
     })
 
-    const unitKg = await prisma.unit.create({
+    await prisma.unit.create({
       data: {
         companyId: company.id,
         name: 'Kilogram',

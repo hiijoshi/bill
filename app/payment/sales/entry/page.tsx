@@ -8,8 +8,9 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { ArrowLeft, CreditCard, DollarSign, Search } from 'lucide-react'
+import { ArrowLeft, CreditCard, DollarSign, MessageCircle, Search } from 'lucide-react'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { openWhatsappChat } from '@/lib/whatsapp'
 
 interface SalesBill {
   id: string
@@ -169,6 +170,29 @@ function SalesPaymentEntryPageContent() {
     [selectedPartyBills]
   )
 
+  const receiptSummary = useMemo(() => {
+    const bills = selectedPartyBills.length > 0
+      ? selectedPartyBills
+      : selectedBillData
+        ? [selectedBillData]
+        : []
+
+    const totalAmount = bills.reduce((sum, bill) => sum + Number(bill.totalAmount || 0), 0)
+    const receivedAmount = bills.reduce((sum, bill) => sum + Number(bill.receivedAmount || 0), 0)
+    const balanceAmount = bills.reduce((sum, bill) => sum + Number(bill.balanceAmount || 0), 0)
+
+    const status: 'paid' | 'partial' | 'unpaid' =
+      balanceAmount <= 0 ? 'paid' : receivedAmount > 0 ? 'partial' : 'unpaid'
+
+    return {
+      billCount: bills.length,
+      totalAmount,
+      receivedAmount,
+      balanceAmount,
+      status
+    }
+  }, [selectedBillData, selectedPartyBills])
+
   const selectedMultiBills = useMemo(
     () => selectedPartyBills.filter((bill) => multiBillSelection.includes(bill.id)),
     [multiBillSelection, selectedPartyBills]
@@ -178,6 +202,30 @@ function SalesPaymentEntryPageContent() {
     () => selectedMultiBills.reduce((sum, bill) => sum + Number(bill.balanceAmount || 0), 0),
     [selectedMultiBills]
   )
+
+  const handleWhatsappReminder = () => {
+    const partyPhone =
+      selectedBillData?.party?.phone1 ||
+      selectedPartyBills[0]?.party?.phone1 ||
+      ''
+    const partyLabel =
+      selectedPartyName ||
+      selectedBillData?.party?.name ||
+      selectedPartyBills[0]?.party?.name ||
+      'Customer'
+    const outstandingAmount =
+      paymentFlow === 'multi' && selectedPartyName
+        ? selectedPartyPendingTotal
+        : selectedBillData?.balanceAmount || selectedPartyPendingTotal
+
+    if (!openWhatsappChat(
+      partyPhone,
+      `Dear ${partyLabel}, your outstanding amount is Rs. ${Number(outstandingAmount || 0).toFixed(2)}. Please arrange the pending payment at the earliest. Thank you.`
+    )) {
+      alert('Party mobile number is missing')
+      return
+    }
+  }
 
   useEffect(() => {
     // Keep multi-selection clean when bills refresh
@@ -862,16 +910,14 @@ function SalesPaymentEntryPageContent() {
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <Label>Invoice Number</Label>
-                        <p className="font-semibold">{selectedBillData.billNo}</p>
-                      </div>
-                      <div>
-                        <Label>Invoice Date</Label>
-                        <p className="font-semibold">{formatDateSafe(selectedBillData.billDate)}</p>
-                      </div>
-                      <div>
                         <Label>Party Name</Label>
-                        <p className="font-semibold">{selectedBillData.party.name}</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <p className="font-semibold">{selectedBillData.party.name}</p>
+                          <Button type="button" size="sm" variant="outline" onClick={handleWhatsappReminder}>
+                            <MessageCircle className="mr-2 h-4 w-4" />
+                            WhatsApp Reminder
+                          </Button>
+                        </div>
                       </div>
                       <div>
                         <Label>Party Contact</Label>
@@ -882,27 +928,36 @@ function SalesPaymentEntryPageContent() {
                     <div className="border-t pt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
                       <div>
                         <h3 className="font-semibold mb-3">Receipt Summary</h3>
+                        {receiptSummary.billCount > 1 && (
+                          <p className="text-xs text-gray-500 mb-2">
+                            Combined summary of {receiptSummary.billCount} unpaid bill(s) for {selectedPartyName || selectedBillData.party.name}.
+                          </p>
+                        )}
                         <div className="space-y-2">
                           <div className="flex justify-between">
                             <span>Total Amount:</span>
-                            <span className="font-medium">₹{selectedBillData.totalAmount.toFixed(2)}</span>
+                            <span className="font-medium">₹{receiptSummary.totalAmount.toFixed(2)}</span>
                           </div>
                           <div className="flex justify-between">
                             <span>Already Received:</span>
-                            <span className="font-medium text-green-600">₹{selectedBillData.receivedAmount.toFixed(2)}</span>
+                            <span className="font-medium text-green-600">₹{receiptSummary.receivedAmount.toFixed(2)}</span>
                           </div>
                           <div className="flex justify-between">
                             <span>Balance Amount:</span>
-                            <span className="font-medium text-red-600">₹{selectedBillData.balanceAmount.toFixed(2)}</span>
+                            <span className="font-medium text-red-600">₹{receiptSummary.balanceAmount.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Total Bills:</span>
+                            <span className="font-medium">{receiptSummary.billCount}</span>
                           </div>
                           <div className="flex justify-between">
                             <span>Status:</span>
                             <span className={`font-medium px-2 py-1 rounded text-xs ${
-                              selectedBillData.status === 'paid' ? 'bg-green-100 text-green-800' :
-                              selectedBillData.status === 'partial' ? 'bg-yellow-100 text-yellow-800' :
+                              receiptSummary.status === 'paid' ? 'bg-green-100 text-green-800' :
+                              receiptSummary.status === 'partial' ? 'bg-yellow-100 text-yellow-800' :
                               'bg-red-100 text-red-800'
                             }`}>
-                              {selectedBillData.status}
+                              {receiptSummary.status}
                             </span>
                           </div>
                         </div>

@@ -1,17 +1,22 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Calculator, Save, Plus, Minus } from 'lucide-react'
+import { Calculator, Save } from 'lucide-react'
 import { calculateNetWeight, calculateTaxes } from '@/lib/tenancy'
 
 interface PurchasePageProps {
   params: { companyId: string }
+}
+
+type ProductOption = {
+  id: string
+  name: string
 }
 
 export default function RegularPurchase({ params }: PurchasePageProps) {
@@ -38,30 +43,22 @@ export default function RegularPurchase({ params }: PurchasePageProps) {
     totalAmount: 0
   })
 
-  const [products, setProducts] = useState([])
+  const [products, setProducts] = useState<ProductOption[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  useEffect(() => {
-    loadProducts()
-  }, [])
-
-  useEffect(() => {
-    calculateAmounts()
-  }, [formData])
-
-  const loadProducts = async () => {
+  const loadProducts = useCallback(async () => {
     try {
       const response = await fetch(`/api/products?companyId=${params.companyId}`)
       if (response.ok) {
         const data = await response.json()
-        setProducts(data)
+        setProducts(Array.isArray(data) ? data : [])
       }
     } catch (error) {
       console.error('Error loading products:', error)
     }
-  }
+  }, [params.companyId])
 
-  const calculateAmounts = () => {
+  const calculateAmounts = useCallback(() => {
     const totalBags = parseFloat(formData.totalBags) || 0
     const bagSize = parseFloat(formData.bagSize) || 0
     const manualDeduction = parseFloat(formData.manualDeduction) || 0
@@ -88,7 +85,15 @@ export default function RegularPurchase({ params }: PurchasePageProps) {
       labour: taxes.labour,
       totalAmount: baseAmount + taxes.total
     })
-  }
+  }, [formData])
+
+  useEffect(() => {
+    void loadProducts()
+  }, [loadProducts])
+
+  useEffect(() => {
+    calculateAmounts()
+  }, [calculateAmounts])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -187,7 +192,7 @@ export default function RegularPurchase({ params }: PurchasePageProps) {
                     <SelectValue placeholder="Select product" />
                   </SelectTrigger>
                   <SelectContent>
-                    {products.map((product: any) => (
+                    {products.map((product) => (
                       <SelectItem key={product.id} value={product.name}>
                         {product.name}
                       </SelectItem>

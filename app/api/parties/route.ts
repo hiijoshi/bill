@@ -61,6 +61,8 @@ const postSchema = z.object({
   address: z.string().optional().nullable(),
   phone1: z.string().optional().nullable(),
   phone2: z.string().optional().nullable(),
+  creditLimit: z.union([z.number(), z.string()]).optional().nullable(),
+  creditDays: z.union([z.number(), z.string()]).optional().nullable(),
   ifscCode: z.string().optional().nullable(),
   bankName: z.string().optional().nullable(),
   accountNo: z.string().optional().nullable(),
@@ -73,10 +75,19 @@ const putSchema = z.object({
   address: z.string().optional().nullable(),
   phone1: z.string().optional().nullable(),
   phone2: z.string().optional().nullable(),
+  creditLimit: z.union([z.number(), z.string()]).optional().nullable(),
+  creditDays: z.union([z.number(), z.string()]).optional().nullable(),
   ifscCode: z.string().optional().nullable(),
   bankName: z.string().optional().nullable(),
   accountNo: z.string().optional().nullable()
 }).strict()
+
+function normalizeOptionalNonNegativeNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return null
+  return Math.max(0, parsed)
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -156,6 +167,8 @@ export async function POST(request: NextRequest) {
               address: cleanString(item.address),
               phone1: normalizeTenDigitPhone(item.phone1),
               phone2: normalizeTenDigitPhone(item.phone2),
+              creditLimit: null,
+              creditDays: null,
               ifscCode: cleanString(item.ifscCode)?.toUpperCase(),
               bankName: cleanString(item.bankName),
               accountNo: cleanString(item.accountNo)
@@ -191,6 +204,8 @@ export async function POST(request: NextRequest) {
         address: cleanString(parsed.data.address),
         phone1,
         phone2,
+        creditLimit: normalizeOptionalNonNegativeNumber(parsed.data.creditLimit),
+        creditDays: normalizeOptionalNonNegativeNumber(parsed.data.creditDays),
         ifscCode: cleanString(parsed.data.ifscCode)?.toUpperCase(),
         bankName: cleanString(parsed.data.bankName),
         accountNo: cleanString(parsed.data.accountNo)
@@ -258,6 +273,8 @@ export async function PUT(request: NextRequest) {
         address: cleanString(parsed.data.address),
         phone1,
         phone2,
+        creditLimit: normalizeOptionalNonNegativeNumber(parsed.data.creditLimit),
+        creditDays: normalizeOptionalNonNegativeNumber(parsed.data.creditDays),
         ifscCode: cleanString(parsed.data.ifscCode)?.toUpperCase(),
         bankName: cleanString(parsed.data.bankName),
         accountNo: cleanString(parsed.data.accountNo)

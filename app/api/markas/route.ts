@@ -1,8 +1,8 @@
-import { randomUUID } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { MarkaRecord, withMasterStore } from '@/lib/master-data-store'
+import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
+import { getSupabaseClaimsFromRequest, hasSupabaseAppContext } from '@/lib/supabase/auth-bridge'
 
 function normalizeCompanyId(raw: string | null): string | null {
   if (!raw) return null
@@ -30,11 +30,16 @@ const putSchema = z.object({
   isActive: z.boolean().optional()
 }).strict()
 
-const DUMMY_MARKAS: Array<Omit<MarkaRecord, 'id' | 'companyId' | 'createdAt' | 'updatedAt'>> = [
+const DUMMY_MARKAS = [
   { markaNumber: 'MK-101', description: 'Soyabean first quality', isActive: true },
   { markaNumber: 'MK-102', description: 'Wheat standard quality', isActive: true },
   { markaNumber: 'MK-103', description: 'Chana premium', isActive: true }
-]
+] as const
+
+function supabaseErrorResponse(error: { message: string; code?: string | null }) {
+  const status = error.code === 'PGRST116' ? 404 : 403
+  return NextResponse.json({ error: error.message || 'Forbidden' }, { status })
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -43,14 +48,28 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
     }
 
+    const supabaseContext = await getSupabaseClaimsFromRequest(request)
+    if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
+      const { data, error } = await supabaseContext.supabase
+        .from('Marka')
+        .select('*')
+        .eq('companyId', companyId)
+        .order('markaNumber', { ascending: true })
+
+      if (error) {
+        return supabaseContext.applyCookies(supabaseErrorResponse(error))
+      }
+
+      return supabaseContext.applyCookies(NextResponse.json(data ?? []))
+    }
+
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
-    const markas = await withMasterStore((store) =>
-      store.markas
-        .filter((row) => row.companyId === companyId)
-        .sort((a, b) => a.markaNumber.localeCompare(b.markaNumber))
-    )
+    const markas = await prisma.marka.findMany({
+      where: { companyId },
+      orderBy: { markaNumber: 'asc' }
+    })
 
     return NextResponse.json(markas)
   } catch (error) {
@@ -68,24 +87,67 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
     }
 
+    const supabaseContext = await getSupabaseClaimsFromRequest(request)
+    if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
+      if (parsed.data.seed === true) {
+        const payload = DUMMY_MARKAS.map((item) => ({
+          companyId,
+          markaNumber: item.markaNumber,
+          description: item.description,
+          isActive: item.isActive
+        }))
+
+        const { error } = await supabaseContext.supabase.from('Marka').insert(payload)
+        if (error) {
+          return supabaseContext.applyCookies(supabaseErrorResponse(error))
+        }
+
+        return supabaseContext.applyCookies(
+          NextResponse.json({ success: true, message: `${payload.length} dummy markas added successfully`, count: payload.length })
+        )
+      }
+
+      const markaNumber = clean(parsed.data.markaNumber)?.toUpperCase() || null
+      if (!markaNumber) {
+        return NextResponse.json({ error: 'Marka number is required' }, { status: 400 })
+      }
+
+      const { data, error } = await supabaseContext.supabase
+        .from('Marka')
+        .insert({
+          companyId,
+          markaNumber,
+          description: clean(parsed.data.description),
+          isActive: parsed.data.isActive !== false
+        })
+        .select('*')
+        .single()
+
+      if (error) {
+        return supabaseContext.applyCookies(supabaseErrorResponse(error))
+      }
+
+      return supabaseContext.applyCookies(NextResponse.json({ success: true, message: 'Marka data stored successfully', marka: data }))
+    }
+
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
     if (parsed.data.seed === true) {
-      const count = await withMasterStore((store) => {
-        const now = new Date().toISOString()
-        const rows = DUMMY_MARKAS.map((m) => ({
-          ...m,
-          id: randomUUID(),
-          companyId,
-          markaNumber: m.markaNumber.toUpperCase(),
-          createdAt: now,
-          updatedAt: now
-        }))
-        store.markas.push(...rows)
-        return rows.length
-      })
-      return NextResponse.json({ success: true, message: `${count} dummy markas added successfully`, count })
+      const created = await prisma.$transaction(
+        DUMMY_MARKAS.map((item) =>
+          prisma.marka.create({
+            data: {
+              companyId,
+              markaNumber: item.markaNumber,
+              description: item.description,
+              isActive: item.isActive
+            }
+          })
+        )
+      )
+
+      return NextResponse.json({ success: true, message: `${created.length} dummy markas added successfully`, count: created.length })
     }
 
     const markaNumber = clean(parsed.data.markaNumber)?.toUpperCase() || null
@@ -93,26 +155,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Marka number is required' }, { status: 400 })
     }
 
-    const created = await withMasterStore((store) => {
-      const exists = store.markas.find((row) => row.companyId === companyId && row.markaNumber === markaNumber)
-      if (exists) return null
-      const now = new Date().toISOString()
-      const row: MarkaRecord = {
-        id: randomUUID(),
+    const duplicate = await prisma.marka.findFirst({
+      where: {
+        companyId,
+        markaNumber
+      }
+    })
+
+    if (duplicate) {
+      return NextResponse.json({ error: 'Marka number already exists' }, { status: 400 })
+    }
+
+    const created = await prisma.marka.create({
+      data: {
         companyId,
         markaNumber,
         description: clean(parsed.data.description),
-        isActive: parsed.data.isActive !== false,
-        createdAt: now,
-        updatedAt: now
+        isActive: parsed.data.isActive !== false
       }
-      store.markas.push(row)
-      return row
     })
-
-    if (!created) {
-      return NextResponse.json({ error: 'Marka number already exists' }, { status: 400 })
-    }
 
     return NextResponse.json({ success: true, message: 'Marka data stored successfully', marka: created })
   } catch (error) {
@@ -132,34 +193,60 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Marka ID and Company ID required' }, { status: 400 })
     }
 
+    const supabaseContext = await getSupabaseClaimsFromRequest(request)
+    if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
+      const markaNumber = parsed.data.markaNumber.toUpperCase()
+      const { data, error } = await supabaseContext.supabase
+        .from('Marka')
+        .update({
+          markaNumber,
+          description: clean(parsed.data.description),
+          isActive: parsed.data.isActive !== false
+        })
+        .eq('id', id)
+        .eq('companyId', companyId)
+        .select('*')
+        .single()
+
+      if (error) {
+        return supabaseContext.applyCookies(supabaseErrorResponse(error))
+      }
+
+      return supabaseContext.applyCookies(NextResponse.json({ success: true, message: 'Marka updated successfully', marka: data }))
+    }
+
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
-    const markaNumber = parsed.data.markaNumber.toUpperCase()
-
-    const updated = await withMasterStore((store) => {
-      const index = store.markas.findIndex((row) => row.id === id && row.companyId === companyId)
-      if (index === -1) return null
-      const duplicate = store.markas.find(
-        (row) => row.companyId === companyId && row.markaNumber === markaNumber && row.id !== id
-      )
-      if (duplicate) return undefined
-      store.markas[index] = {
-        ...store.markas[index],
-        markaNumber,
-        description: clean(parsed.data.description),
-        isActive: parsed.data.isActive !== false,
-        updatedAt: new Date().toISOString()
-      }
-      return store.markas[index]
+    const existing = await prisma.marka.findFirst({
+      where: { id, companyId }
     })
 
-    if (updated === undefined) {
-      return NextResponse.json({ error: 'Marka number already exists' }, { status: 400 })
-    }
-    if (!updated) {
+    if (!existing) {
       return NextResponse.json({ error: 'Marka not found' }, { status: 404 })
     }
+
+    const markaNumber = parsed.data.markaNumber.toUpperCase()
+    const duplicate = await prisma.marka.findFirst({
+      where: {
+        companyId,
+        markaNumber,
+        id: { not: id }
+      }
+    })
+
+    if (duplicate) {
+      return NextResponse.json({ error: 'Marka number already exists' }, { status: 400 })
+    }
+
+    const updated = await prisma.marka.update({
+      where: { id },
+      data: {
+        markaNumber,
+        description: clean(parsed.data.description),
+        isActive: parsed.data.isActive !== false
+      }
+    })
 
     return NextResponse.json({ success: true, message: 'Marka updated successfully', marka: updated })
   } catch (error) {
@@ -177,30 +264,63 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
     }
 
+    const supabaseContext = await getSupabaseClaimsFromRequest(request)
+    if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
+      if (all) {
+        const { error, count } = await supabaseContext.supabase
+          .from('Marka')
+          .delete({ count: 'exact' })
+          .eq('companyId', companyId)
+
+        if (error) {
+          return supabaseContext.applyCookies(supabaseErrorResponse(error))
+        }
+
+        return supabaseContext.applyCookies(
+          NextResponse.json({ success: true, message: `${count || 0} markas deleted successfully`, count: count || 0 })
+        )
+      }
+
+      if (!id) {
+        return NextResponse.json({ error: 'Marka ID required' }, { status: 400 })
+      }
+
+      const { error, count } = await supabaseContext.supabase
+        .from('Marka')
+        .delete({ count: 'exact' })
+        .eq('id', id)
+        .eq('companyId', companyId)
+
+      if (error) {
+        return supabaseContext.applyCookies(supabaseErrorResponse(error))
+      }
+
+      if (!count) {
+        return supabaseContext.applyCookies(NextResponse.json({ error: 'Marka not found' }, { status: 404 }))
+      }
+
+      return supabaseContext.applyCookies(NextResponse.json({ success: true, message: 'Marka deleted successfully' }))
+    }
+
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
     if (all) {
-      const count = await withMasterStore((store) => {
-        const before = store.markas.length
-        store.markas = store.markas.filter((row) => row.companyId !== companyId)
-        return before - store.markas.length
+      const deleted = await prisma.marka.deleteMany({
+        where: { companyId }
       })
-      return NextResponse.json({ success: true, message: `${count} markas deleted successfully`, count })
+      return NextResponse.json({ success: true, message: `${deleted.count} markas deleted successfully`, count: deleted.count })
     }
 
     if (!id) {
       return NextResponse.json({ error: 'Marka ID required' }, { status: 400 })
     }
 
-    const deleted = await withMasterStore((store) => {
-      const index = store.markas.findIndex((row) => row.id === id && row.companyId === companyId)
-      if (index === -1) return false
-      store.markas.splice(index, 1)
-      return true
+    const deleted = await prisma.marka.deleteMany({
+      where: { id, companyId }
     })
 
-    if (!deleted) {
+    if (deleted.count === 0) {
       return NextResponse.json({ error: 'Marka not found' }, { status: 404 })
     }
 

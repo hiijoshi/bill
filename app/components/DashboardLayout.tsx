@@ -1,19 +1,23 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { Suspense, useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Button } from '@/components/ui/button'
+import { LogOut, User } from 'lucide-react'
 import Sidebar from './Sidebar'
+import HeaderAccountPanel from '@/components/account/HeaderAccountPanel'
 import { isAbortError } from '@/lib/http'
 
 interface DashboardLayoutProps {
   children: React.ReactNode
   companyId: string
+  headerActions?: React.ReactNode
 }
 
-export default function DashboardLayout({ children, companyId }: DashboardLayoutProps) {
+export default function DashboardLayout({ children, companyId, headerActions }: DashboardLayoutProps) {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [currentUser, setCurrentUser] = useState<string | null>(null)
+  const [currentUserName, setCurrentUserName] = useState<string | null>(null)
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null)
   const [resolvedCompanyId, setResolvedCompanyId] = useState(companyId)
   const [currentCompanyName, setCurrentCompanyName] = useState<string | null>(null)
   const liveSyncMs = Math.max(30000, Number(process.env.NEXT_PUBLIC_LIVE_SYNC_MS || 60000))
@@ -39,6 +43,8 @@ export default function DashboardLayout({ children, companyId }: DashboardLayout
             return
           }
           setCurrentUser(data?.user?.userId || data?.userId || null)
+          setCurrentUserName(data?.user?.name || null)
+          setCurrentUserRole(data?.user?.role || null)
         } else {
           if (response.status === 401) {
             router.push('/login')
@@ -118,12 +124,12 @@ export default function DashboardLayout({ children, companyId }: DashboardLayout
       if (cancelled) return
       if (!Array.isArray(companiesPayload)) {
         setResolvedCompanyId(targetCompanyId)
-        setCurrentCompanyName(targetCompanyName || targetCompanyId)
+        setCurrentCompanyName(targetCompanyName || 'Selected company')
         return
       }
       const currentCompany = companiesPayload.find((row) => String(row?.id) === targetCompanyId)
       setResolvedCompanyId(targetCompanyId)
-      setCurrentCompanyName(targetCompanyName || currentCompany?.name || targetCompanyId)
+      setCurrentCompanyName(targetCompanyName || currentCompany?.name || 'Selected company')
     }
 
     void loadCompanyContext()
@@ -161,40 +167,53 @@ export default function DashboardLayout({ children, companyId }: DashboardLayout
       void error
     }
     setCurrentUser(null)
+    setCurrentUserName(null)
+    setCurrentUserRole(null)
     router.push('/login')
   }
 
   return (
     <div className="flex h-screen bg-gray-50">
-      <Sidebar
-        companyId={resolvedCompanyId}
-        isCollapsed={isSidebarCollapsed}
-        onToggleCollapse={toggleSidebar}
-      />
+      <Suspense fallback={<div className="w-20 border-r bg-white" />}>
+        <Sidebar
+          companyId={resolvedCompanyId}
+          isCollapsed={isSidebarCollapsed}
+          onToggleCollapse={toggleSidebar}
+        />
+      </Suspense>
       <div className="flex-1 flex flex-col overflow-y-auto">
         {/* Top Navigation Bar */}
         <div className="bg-white shadow-sm border-b px-6 py-3">
-          <div className="max-w-7xl mx-auto flex justify-between items-center">
-            <div className="flex items-center space-x-4">
+          <div className="max-w-7xl mx-auto flex justify-between items-center gap-4">
+            <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-xl font-semibold text-gray-900">Dashboard</h1>
-              <span className="text-sm text-gray-500">Multi-company mode</span>
+              <span className="text-sm text-gray-500">User Mode</span>
+              {currentUser ? (
+                <span className="hidden rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 md:inline-flex">
+                  User ID: {currentUser}
+                </span>
+              ) : null}
+              {currentCompanyName && currentCompanyName !== 'Not selected' ? (
+                <span className="hidden rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 md:inline-flex">
+                  Company: {currentCompanyName}
+                </span>
+              ) : null}
             </div>
-            {currentUser && (
-              <div className="flex items-center space-x-2">
-                <span className="text-sm text-gray-600">Logged in as:</span>
-                <span className="font-medium text-blue-600">{currentUser}</span>
-                <span className="text-gray-300">|</span>
-                <span className="text-sm text-gray-600">Company:</span>
-                <span className="font-medium text-slate-700">{currentCompanyName || resolvedCompanyId || companyId || 'Not selected'}</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleLogout}
-                >
-                  Logout
-                </Button>
-              </div>
-            )}
+            <div className="flex items-center gap-2">
+              {headerActions}
+              {currentUser && (
+                <HeaderAccountPanel
+                  name={currentUserName}
+                  userId={currentUser}
+                  role={currentUserRole}
+                  contextLabel={currentCompanyName || 'Workspace not selected'}
+                  menuItems={[
+                    { label: 'Profile', icon: User, onClick: () => router.push('/main/profile') },
+                    { label: 'Logout', icon: LogOut, onClick: handleLogout, tone: 'danger', separatorBefore: true }
+                  ]}
+                />
+              )}
+            </div>
           </div>
         </div>
         {children}

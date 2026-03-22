@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest } from 'next/server'
 
 // Enhanced brute force protection with exponential backoff
 const failedAttempts = new Map<string, { count: number; lastAttempt: number; lockoutUntil: number }>()
@@ -20,7 +20,7 @@ function calculateLockoutDuration(attemptCount: number): number {
   return duration
 }
 
-export function checkBruteForce(request: NextRequest, maxAttempts: number = 5) {
+export function checkBruteForce(request: NextRequest) {
   const identifier = getClientIdentifier(request)
   const now = Date.now()
   

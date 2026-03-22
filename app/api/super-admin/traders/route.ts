@@ -3,10 +3,13 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
+import { normalizeTraderLimitInput } from '@/lib/trader-limits'
 
 const createTraderSchema = z
   .object({
     name: z.string().trim().min(1, 'Trader name is required').max(100),
+    maxCompanies: z.union([z.number().int().min(0), z.string().trim().regex(/^\d+$/)]).optional().nullable(),
+    maxUsers: z.union([z.number().int().min(0), z.string().trim().regex(/^\d+$/)]).optional().nullable(),
     locked: z.boolean().optional()
   })
   .strict()
@@ -23,6 +26,8 @@ export async function GET(request: NextRequest) {
       select: {
         id: true,
         name: true,
+        maxCompanies: true,
+        maxUsers: true,
         locked: true,
         deletedAt: true,
         createdAt: true,
@@ -44,6 +49,8 @@ export async function GET(request: NextRequest) {
     const response = traders.map((trader) => ({
       id: trader.id,
       name: trader.name,
+      maxCompanies: trader.maxCompanies ?? 0,
+      maxUsers: trader.maxUsers ?? 0,
       locked: trader.locked,
       deletedAt: trader.deletedAt,
       createdAt: trader.createdAt,
@@ -79,6 +86,11 @@ export async function POST(request: NextRequest) {
     }
 
     const name = parsed.data.name.trim()
+    const maxCompanies = normalizeTraderLimitInput(parsed.data.maxCompanies)
+    const maxUsers = normalizeTraderLimitInput(parsed.data.maxUsers)
+    if (maxCompanies === undefined || maxUsers === undefined) {
+      return NextResponse.json({ error: 'Trader limits must be whole numbers 0 or above' }, { status: 400 })
+    }
     const existing = await prisma.trader.findFirst({
       where: {
         name,
@@ -94,6 +106,8 @@ export async function POST(request: NextRequest) {
     const trader = await prisma.trader.create({
       data: {
         name,
+        maxCompanies,
+        maxUsers,
         locked: parsed.data.locked ?? false
       }
     })

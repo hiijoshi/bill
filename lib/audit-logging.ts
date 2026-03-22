@@ -18,6 +18,7 @@ export type AuditResourceType =
   | 'USER'
   | 'PAYMENT'
   | 'PAYMENT_BATCH'
+  | 'STOCK'
   | 'SECURITY'
   | 'AUTH'
 

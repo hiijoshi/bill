@@ -11,7 +11,6 @@ import {
   CreditCard, 
   BarChart3, 
   Settings,
-  Users,
   Shield
 } from 'lucide-react'
 

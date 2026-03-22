@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import type { SalesBillPrintData } from '@/lib/sales-print'
@@ -25,6 +25,7 @@ export default function SalesPrintClient({ printData }: Props) {
   const [printType, setPrintType] = useState<PrintType>(
     () => (searchParams.get('type') === 'dispatch' ? 'dispatch' : 'invoice')
   )
+  const shouldAutoPrint = searchParams.get('autoprint') === '1'
 
   const updateType = (nextType: PrintType) => {
     setPrintType(nextType)
@@ -33,12 +34,16 @@ export default function SalesPrintClient({ printData }: Props) {
     window.history.replaceState({}, '', `${currentUrl.pathname}?${currentUrl.searchParams.toString()}`)
   }
 
-  const expenses = useMemo(() => Math.max(0, printData.freightAmount), [printData.freightAmount])
-  const advance = useMemo(() => Math.max(0, printData.advance), [printData.advance])
-  const grandTotal = useMemo(() => Math.max(0, printData.totalAmount + expenses - advance), [printData.totalAmount, expenses, advance])
-
   const invoiceRows = useMemo(() => createRows(printData.items, 18), [printData.items])
   const dispatchRows = useMemo(() => createRows(printData.items, 16), [printData.items])
+
+  useEffect(() => {
+    if (!shouldAutoPrint) return
+    const timeout = window.setTimeout(() => {
+      window.print()
+    }, 350)
+    return () => window.clearTimeout(timeout)
+  }, [shouldAutoPrint, printType])
 
   return (
     <div className="bg-white text-black p-4 print:p-0">
@@ -93,9 +98,6 @@ export default function SalesPrintClient({ printData }: Props) {
         <InvoiceTemplate
           printData={printData}
           rows={invoiceRows}
-          expenses={expenses}
-          advance={advance}
-          grandTotal={grandTotal}
         />
       ) : (
         <DispatchTemplate
@@ -109,16 +111,10 @@ export default function SalesPrintClient({ printData }: Props) {
 
 function InvoiceTemplate({
   printData,
-  rows,
-  expenses,
-  advance,
-  grandTotal
+  rows
 }: {
   printData: SalesBillPrintData
   rows: Array<SalesBillPrintData['items'][number] | null>
-  expenses: number
-  advance: number
-  grandTotal: number
 }) {
   return (
     <div className="print-sheet border border-black bg-white">
@@ -176,7 +172,7 @@ function InvoiceTemplate({
               <td className="border-r border-black px-1 py-0.5 text-right">{item ? toFixed2(item.weightPerBagQt) : ''}</td>
               <td className="border-r border-black px-1 py-0.5 text-right">{item ? toFixed2(item.totalWeightQt) : ''}</td>
               <td className="border-r border-black px-1 py-0.5 text-right">{item ? toFixed2(item.ratePerQt) : ''}</td>
-              <td className="px-1 py-0.5 text-right">{item ? toFixed2(item.amount) : ''}</td>
+              <td className="px-1 py-0.5 text-right">{item ? toFixed2(item.lineTotal) : ''}</td>
             </tr>
           ))}
           <tr className="border-b border-black font-semibold">
@@ -187,22 +183,42 @@ function InvoiceTemplate({
             </td>
             <td className="border-r border-black px-1 py-0.5 text-right">{toFixed2(printData.totalWeightQt)}</td>
             <td className="border-r border-black px-1 py-0.5 text-right">-</td>
-            <td className="px-1 py-0.5 text-right">{toFixed2(printData.totalAmount)}</td>
+            <td className="px-1 py-0.5 text-right">{toFixed2(printData.subTotalAmount + printData.gstAmount)}</td>
           </tr>
           <tr className="border-b border-black">
-            <td className="border-r border-black px-1 py-0.5 font-semibold" colSpan={2}>Expenses</td>
+            <td className="border-r border-black px-1 py-0.5 font-semibold" colSpan={2}>Product Subtotal</td>
             <td className="border-r border-black px-1 py-0.5" colSpan={4}></td>
-            <td className="px-1 py-0.5 text-right">{toFixed2(expenses)}</td>
+            <td className="px-1 py-0.5 text-right">{toFixed2(printData.subTotalAmount)}</td>
           </tr>
           <tr className="border-b border-black">
-            <td className="border-r border-black px-1 py-0.5 font-semibold" colSpan={2}>Advance</td>
+            <td className="border-r border-black px-1 py-0.5 font-semibold" colSpan={2}>GST Total</td>
             <td className="border-r border-black px-1 py-0.5" colSpan={4}></td>
-            <td className="px-1 py-0.5 text-right">{toFixed2(advance)}</td>
+            <td className="px-1 py-0.5 text-right">{toFixed2(printData.gstAmount)}</td>
+          </tr>
+          <tr className="border-b border-black">
+            <td className="border-r border-black px-1 py-0.5 font-semibold" colSpan={2}>Freight</td>
+            <td className="border-r border-black px-1 py-0.5" colSpan={4}></td>
+            <td className="px-1 py-0.5 text-right">{toFixed2(printData.freightAmount)}</td>
+          </tr>
+          <tr className="border-b border-black">
+            <td className="border-r border-black px-1 py-0.5 font-semibold" colSpan={2}>Other Charges</td>
+            <td className="border-r border-black px-1 py-0.5" colSpan={4}></td>
+            <td className="px-1 py-0.5 text-right">{toFixed2(printData.otherAmount)}</td>
+          </tr>
+          <tr className="border-b border-black">
+            <td className="border-r border-black px-1 py-0.5 font-semibold" colSpan={2}>Insurance</td>
+            <td className="border-r border-black px-1 py-0.5" colSpan={4}></td>
+            <td className="px-1 py-0.5 text-right">{toFixed2(printData.insuranceAmount)}</td>
+          </tr>
+          <tr className="border-b border-black">
+            <td className="border-r border-black px-1 py-0.5 font-semibold" colSpan={2}>Transport Advance</td>
+            <td className="border-r border-black px-1 py-0.5" colSpan={4}></td>
+            <td className="px-1 py-0.5 text-right">{toFixed2(printData.advance)}</td>
           </tr>
           <tr className="border-b border-black bg-gray-50">
             <td className="border-r border-black px-1 py-0.5 text-[15px] font-black" colSpan={2}>Grand Total</td>
             <td className="border-r border-black px-1 py-0.5" colSpan={4}></td>
-            <td className="px-1 py-0.5 text-right text-[15px] font-black">{toFixed2(grandTotal)}</td>
+            <td className="px-1 py-0.5 text-right text-[15px] font-black">{toFixed2(printData.totalAmount)}</td>
           </tr>
         </tbody>
       </table>

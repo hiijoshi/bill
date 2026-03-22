@@ -14,8 +14,22 @@ interface RateLimitResult {
   total: number
 }
 
+interface RedisPipeline {
+  zremrangebyscore(key: string, min: number, max: number): void
+  zadd(key: string, score: number, member: string): void
+  zcard(key: string): void
+  expire(key: string, seconds: number): void
+  exec(): Promise<Array<[unknown, number] | null>>
+}
+
+interface RedisClientLike {
+  pipeline(): RedisPipeline
+  del(key: string): Promise<void>
+  quit(): Promise<void>
+}
+
 class RedisRateLimiter {
-  private redis: any // Redis client
+  private redis: RedisClientLike | null = null
   private connected: boolean = false
 
   constructor() {

@@ -2,61 +2,24 @@ import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
 
-async function getCredentials() {
+async function inspectAccountSummary() {
   try {
-    // Get trader
-    const trader = await prisma.trader.findFirst()
-    if (!trader) {
-      console.log('❌ No trader found')
-      return null
-    }
+    const [traderCount, companyCount, userCount] = await Promise.all([
+      prisma.trader.count({ where: { deletedAt: null } }),
+      prisma.company.count({ where: { deletedAt: null } }),
+      prisma.user.count({ where: { deletedAt: null } })
+    ])
 
-    // Get company
-    const company = await prisma.company.findFirst({
-      where: { traderId: trader.id }
-    })
-    if (!company) {
-      console.log('❌ No company found')
-      return null
-    }
-
-    // Get admin user
-    const user = await prisma.user.findFirst({
-      where: { traderId: trader.id }
-    })
-    if (!user) {
-      console.log('❌ No user found')
-      return null
-    }
-
-    console.log('✅ Credentials Found:')
-    console.log(`  - Trader ID: ${trader.id}`)
-    console.log(`  - Company ID: ${company.id}`)
-    console.log(`  - User Email: ${user.userId}`)
-    console.log(`  - User Password: (hashed)`)
-
-    return {
-      traderId: trader.id,
-      companyId: company.id,
-      userEmail: user.userId,
-      userPassword: 'admin123' // For testing
-    }
+    console.log('Account summary')
+    console.log(`  - Active traders: ${traderCount}`)
+    console.log(`  - Active companies: ${companyCount}`)
+    console.log(`  - Active users: ${userCount}`)
+    console.log('  - Passwords are stored as hashes and are not printed by this script.')
   } catch (error) {
-    console.error('❌ Error:', error)
-    return null
+    console.error('Account summary failed:', error)
   } finally {
     await prisma.$disconnect()
   }
 }
 
-getCredentials()
-  .then((credentials) => {
-    if (credentials) {
-      console.log('🎯 Login Credentials:')
-      console.log(`  - URL: http://localhost:3000/sales/entry?companyId=${credentials.companyId}`)
-      console.log(`  - Email: ${credentials.userEmail}`)
-      console.log(`  - Password: ${credentials.userPassword}`)
-    } else {
-      console.log('❌ No credentials found')
-    }
-  })
+void inspectAccountSummary()

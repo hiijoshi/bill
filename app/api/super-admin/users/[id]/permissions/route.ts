@@ -85,6 +85,13 @@ export async function GET(
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
 
+    if (String(user.role || '').toLowerCase().replace(/\s+/g, '_') === 'super_admin') {
+      return NextResponse.json(
+        { error: 'Super Admin does not use company privilege matrix' },
+        { status: 403 }
+      )
+    }
+
     const queryCompanyId = new URL(request.url).searchParams.get('companyId')?.trim()
     const companyId = queryCompanyId || user.companyId
 
@@ -167,6 +174,23 @@ export async function PUT(
 
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
+    }
+
+    const targetUser = await prisma.user.findFirst({
+      where: {
+        id: user.id,
+        deletedAt: null
+      },
+      select: {
+        role: true
+      }
+    })
+
+    if (String(targetUser?.role || '').toLowerCase().replace(/\s+/g, '_') === 'super_admin') {
+      return NextResponse.json(
+        { error: 'Super Admin does not use company privilege matrix' },
+        { status: 403 }
+      )
     }
 
     const companyId = parsedBody.data.companyId?.trim() || user.companyId

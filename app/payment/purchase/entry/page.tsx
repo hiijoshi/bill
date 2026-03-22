@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { ArrowLeft, CreditCard, DollarSign, Search } from 'lucide-react'
+import { ArrowLeft, CreditCard, DollarSign } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Badge } from '@/components/ui/badge'
@@ -35,6 +35,7 @@ interface PurchaseBill {
     name: string
     address: string
     phone1: string
+    krashakAnubandhNumber?: string | null
   } | null
   supplier?: {
     id: string
@@ -42,6 +43,14 @@ interface PurchaseBill {
     address: string
     phone1: string
   } | null
+}
+
+interface Bank {
+  id: string
+  name: string
+  branch?: string
+  ifscCode: string
+  accountNumber?: string
 }
 
 type PartyBillGroup = {
@@ -81,6 +90,27 @@ function getBillPartyKey(bill: PurchaseBill): string {
   if (bill.supplier?.id) return `supplier:${bill.supplier.id}`
   if (bill.farmer?.id) return `farmer:${bill.farmer.id}`
   return `name:${getBillPartyName(bill).trim().toLowerCase()}`
+}
+
+function getBillAnubandhanNo(bill: PurchaseBill): string {
+  return bill.farmer?.krashakAnubandhNumber?.trim() || ''
+}
+
+function normalizeFilterValue(value: unknown): string {
+  return String(value || '').trim().toLowerCase()
+}
+
+function matchesBillFilter(bill: PurchaseBill, query: string, exactBillNoOnly: boolean): boolean {
+  if (!query) return true
+
+  const billNo = normalizeFilterValue(bill.billNo)
+  const anubandhanNo = normalizeFilterValue(getBillAnubandhanNo(bill))
+
+  if (exactBillNoOnly) {
+    return billNo === query
+  }
+
+  return billNo.includes(query) || anubandhanNo.includes(query)
 }
 
 function normalizePaymentStatus(status: string): string {
@@ -155,17 +185,27 @@ function PurchasePaymentEntryPageContent() {
   const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0])
 
   const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>([])
+  const [banks, setBanks] = useState<Bank[]>([])
 
-  const [partySearch, setPartySearch] = useState('')
+  const [billFilter, setBillFilter] = useState('')
   const [selectedPartyKey, setSelectedPartyKey] = useState('')
   const [selectedPartyName, setSelectedPartyName] = useState('')
 
-  const [billTableSearch, setBillTableSearch] = useState('')
   const [selectedBillId, setSelectedBillId] = useState('')
   const [selectedBillIds, setSelectedBillIds] = useState<string[]>([])
 
   const [amount, setAmount] = useState('')
   const [mode, setMode] = useState<'cash' | 'online' | 'bank'>('cash')
+  const [selectedBank, setSelectedBank] = useState('none')
+  const [onlinePayAmount, setOnlinePayAmount] = useState('')
+  const [onlinePaymentDate, setOnlinePaymentDate] = useState(new Date().toISOString().split('T')[0])
+  const [onlineMethod, setOnlineMethod] = useState<'upi' | 'wallet' | 'card' | 'netbanking' | 'other'>('upi')
+  const [onlineHandle, setOnlineHandle] = useState('')
+  const [ifscCode, setIfscCode] = useState('')
+  const [beneficiaryBankAccount, setBeneficiaryBankAccount] = useState('')
+  const [bankNameSnapshot, setBankNameSnapshot] = useState('')
+  const [bankBranchSnapshot, setBankBranchSnapshot] = useState('')
+  const [asFlag, setAsFlag] = useState('A')
   const [txnRef, setTxnRef] = useState('')
   const [note, setNote] = useState('')
 
@@ -176,6 +216,9 @@ function PurchasePaymentEntryPageContent() {
   const [multiPaymentAmount, setMultiPaymentAmount] = useState('')
 
   const [hasAppliedBillQuery, setHasAppliedBillQuery] = useState(false)
+  const isCashMode = mode === 'cash'
+  const isOnlineMode = mode === 'online'
+  const isBankMode = mode === 'bank'
 
   const pendingBills = useMemo(() => {
     return purchaseBills.filter((bill) => Number(bill.balanceAmount || 0) > 0)
@@ -206,37 +249,34 @@ function PurchasePaymentEntryPageContent() {
     return Array.from(grouped.values()).sort((a, b) => b.totalPending - a.totalPending)
   }, [pendingBills])
 
-  const filteredPartyGroups = useMemo(() => {
-    const query = partySearch.trim().toLowerCase()
-    if (!query) return partyGroups
+  const billFilterQuery = normalizeFilterValue(billFilter)
+  const hasExactBillNoMatch = useMemo(() => {
+    if (!billFilterQuery) return false
+    return pendingBills.some((bill) => normalizeFilterValue(bill.billNo) === billFilterQuery)
+  }, [billFilterQuery, pendingBills])
 
-    return partyGroups.filter((group) => group.partyName.toLowerCase().includes(query))
-  }, [partyGroups, partySearch])
+  const filteredPartyGroups = useMemo(() => {
+    if (!billFilterQuery) return partyGroups
+
+    return partyGroups.filter((group) =>
+      group.bills.some((bill) => matchesBillFilter(bill, billFilterQuery, hasExactBillNoMatch))
+    )
+  }, [billFilterQuery, hasExactBillNoMatch, partyGroups])
 
   const selectedPartyBills = useMemo(() => {
     if (!selectedPartyKey) return []
 
     const bills = pendingBills.filter((bill) => getBillPartyKey(bill) === selectedPartyKey)
-    return getSortedOldestFirstBills(bills)
-  }, [pendingBills, selectedPartyKey])
+    const filteredBills = bills.filter((bill) => matchesBillFilter(bill, billFilterQuery, hasExactBillNoMatch))
+
+    return getSortedOldestFirstBills(filteredBills)
+  }, [billFilterQuery, hasExactBillNoMatch, pendingBills, selectedPartyKey])
 
   const selectedPartyPendingTotal = useMemo(() => {
     return selectedPartyBills.reduce((sum, bill) => sum + Number(bill.balanceAmount || 0), 0)
   }, [selectedPartyBills])
 
-  const filteredPartyBills = useMemo(() => {
-    const query = billTableSearch.trim().toLowerCase()
-    if (!query) return selectedPartyBills
-
-    return selectedPartyBills.filter((bill) => {
-      const dateLabel = formatDateSafe(bill.billDate).toLowerCase()
-      return (
-        (bill.billNo || '').toLowerCase().includes(query) ||
-        dateLabel.includes(query) ||
-        String(bill.totalAmount || '').toLowerCase().includes(query)
-      )
-    })
-  }, [billTableSearch, selectedPartyBills])
+  const filteredPartyBills = selectedPartyBills
 
   const selectedBillData = useMemo(() => {
     if (!selectedBillId) return null
@@ -266,13 +306,6 @@ function PurchasePaymentEntryPageContent() {
   const totalAllocatedInPreview = useMemo(() => {
     return allocationPreview.reduce((sum, row) => sum + row.allocatedAmount, 0)
   }, [allocationPreview])
-
-  const hiddenSelectedCount = useMemo(() => {
-    if (!billTableSearch.trim()) return 0
-
-    const visibleBillIds = new Set(filteredPartyBills.map((bill) => bill.id))
-    return selectedMultiBills.filter((bill) => !visibleBillIds.has(bill.id)).length
-  }, [billTableSearch, filteredPartyBills, selectedMultiBills])
 
   const toNonNegative = (value: string) => {
     if (value === '') return ''
@@ -331,6 +364,21 @@ function PurchasePaymentEntryPageContent() {
     [dateFrom, dateTo, router]
   )
 
+  const fetchBanks = useCallback(async (targetCompanyId: string) => {
+    try {
+      const response = await fetch(`/api/banks?companyId=${targetCompanyId}`)
+      if (!response.ok) {
+        setBanks([])
+        return
+      }
+      const payload = await response.json()
+      setBanks(Array.isArray(payload) ? payload : [])
+    } catch (error) {
+      console.error('Error fetching banks:', error)
+      setBanks([])
+    }
+  }, [])
+
   useEffect(() => {
     ;(async () => {
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
@@ -349,7 +397,78 @@ function PurchasePaymentEntryPageContent() {
     if (!companyId) return
     setLoading(true)
     void fetchPurchaseBills(companyId)
-  }, [companyId, fetchPurchaseBills])
+    void fetchBanks(companyId)
+  }, [companyId, fetchBanks, fetchPurchaseBills])
+
+  useEffect(() => {
+    if (isCashMode) {
+      setOnlinePayAmount('')
+      return
+    }
+    if (!amount) {
+      setOnlinePayAmount('')
+      return
+    }
+    setOnlinePayAmount(toNonNegative(amount))
+  }, [amount, isCashMode])
+
+  useEffect(() => {
+    if (isCashMode) return
+    setOnlinePaymentDate(payDate)
+  }, [isCashMode, payDate])
+
+  useEffect(() => {
+    if (!isBankMode) {
+      setSelectedBank('none')
+      setIfscCode('')
+      setBeneficiaryBankAccount('')
+      setBankNameSnapshot('')
+      setBankBranchSnapshot('')
+      return
+    }
+    if (!selectedBank || selectedBank === 'none') {
+      setIfscCode('')
+      setBeneficiaryBankAccount('')
+      setBankNameSnapshot('')
+      setBankBranchSnapshot('')
+      return
+    }
+
+    const selected = banks.find((bank) => bank.id === selectedBank)
+    if (!selected) return
+    setIfscCode(selected.ifscCode || '')
+    setBeneficiaryBankAccount(selected.accountNumber || '')
+    setBankNameSnapshot(selected.name || '')
+    setBankBranchSnapshot(selected.branch || '')
+  }, [banks, isBankMode, selectedBank])
+
+  useEffect(() => {
+    if (!isOnlineMode) {
+      setOnlineMethod('upi')
+      setOnlineHandle('')
+    }
+  }, [isOnlineMode])
+
+  useEffect(() => {
+    if (filteredPartyGroups.length === 0) {
+      setSelectedPartyKey('')
+      setSelectedPartyName('')
+      setSelectedBillId('')
+      setSelectedBillIds([])
+      return
+    }
+
+    if (selectedPartyKey && filteredPartyGroups.some((group) => group.partyKey === selectedPartyKey)) {
+      return
+    }
+
+    const firstGroup = filteredPartyGroups[0]
+    if (!firstGroup) return
+    setSelectedPartyKey(firstGroup.partyKey)
+    setSelectedPartyName(firstGroup.partyName)
+    setSelectedBillId(firstGroup.bills[0]?.id || '')
+    setSelectedBillIds([])
+  }, [filteredPartyGroups, selectedPartyKey])
 
   useEffect(() => {
     if (!selectedPartyKey) {
@@ -375,32 +494,24 @@ function PurchasePaymentEntryPageContent() {
   }, [selectedPartyBills, selectedPartyKey, selectedBillId])
 
   useEffect(() => {
-    if (partyGroups.length === 0) {
-      setSelectedPartyKey('')
-      setSelectedPartyName('')
-      setSelectedBillId('')
+    if (!billFilterQuery || !hasExactBillNoMatch) return
+
+    const exactBill = pendingBills.find((bill) => normalizeFilterValue(bill.billNo) === billFilterQuery)
+    if (!exactBill) return
+
+    const partyKey = getBillPartyKey(exactBill)
+    const partyName = getBillPartyName(exactBill)
+
+    if (selectedPartyKey !== partyKey) {
+      setSelectedPartyKey(partyKey)
+      setSelectedPartyName(partyName)
       setSelectedBillIds([])
-      return
     }
 
-    if (selectedPartyKey && partyGroups.some((group) => group.partyKey === selectedPartyKey)) {
-      return
+    if (selectedBillId !== exactBill.id) {
+      setSelectedBillId(exactBill.id)
     }
-
-    setSelectedPartyKey('')
-    setSelectedPartyName('')
-    setSelectedBillId('')
-    setSelectedBillIds([])
-  }, [partyGroups, selectedPartyKey])
-
-  useEffect(() => {
-    if (selectedPartyKey || partyGroups.length === 0) return
-    const firstGroup = partyGroups[0]
-    if (!firstGroup) return
-    setSelectedPartyKey(firstGroup.partyKey)
-    setSelectedPartyName(firstGroup.partyName)
-    setSelectedBillId(firstGroup.bills[0]?.id || '')
-  }, [partyGroups, selectedPartyKey])
+  }, [billFilterQuery, hasExactBillNoMatch, pendingBills, selectedBillId, selectedPartyKey])
 
   useEffect(() => {
     if (!billIdFromQuery || hasAppliedBillQuery || pendingBills.length === 0) return
@@ -417,14 +528,6 @@ function PurchasePaymentEntryPageContent() {
     setHasAppliedBillQuery(true)
   }, [billIdFromQuery, hasAppliedBillQuery, pendingBills])
 
-  const handleSelectParty = (group: PartyBillGroup) => {
-    setSelectedPartyKey(group.partyKey)
-    setSelectedPartyName(group.partyName)
-    setSelectedBillId(group.bills[0]?.id || '')
-    setSelectedBillIds([])
-    setBillTableSearch('')
-  }
-
   const handleToggleBillSelection = (billId: string) => {
     setSelectedBillIds((current) => {
       if (current.includes(billId)) {
@@ -435,7 +538,23 @@ function PurchasePaymentEntryPageContent() {
     setSelectedBillId(billId)
   }
 
+  const buildPaymentNote = () => {
+    const lines: string[] = []
+    const baseNote = note.trim()
+    if (baseNote) lines.push(baseNote)
+
+    if (isOnlineMode) {
+      lines.push(`Online method: ${onlineMethod.toUpperCase()}`)
+      if (onlineHandle.trim()) {
+        lines.push(`Online ID: ${onlineHandle.trim()}`)
+      }
+    }
+
+    return lines.join(' | ') || null
+  }
+
   const submitSinglePayment = async (targetBillId: string, targetAmount: number) => {
+    const finalNote = buildPaymentNote()
     const paymentData = {
       companyId,
       billType: 'purchase',
@@ -443,8 +562,16 @@ function PurchasePaymentEntryPageContent() {
       payDate,
       amount: targetAmount,
       mode,
+      bankId: !isBankMode || selectedBank === 'none' ? null : selectedBank,
+      onlinePayAmount: isCashMode ? null : Number(onlinePayAmount || targetAmount),
+      onlinePaymentDate: isCashMode ? null : onlinePaymentDate || payDate,
+      ifscCode: isBankMode ? ifscCode || null : null,
+      beneficiaryBankAccount: isBankMode ? beneficiaryBankAccount || null : null,
+      bankNameSnapshot: isBankMode ? bankNameSnapshot || null : null,
+      bankBranchSnapshot: isBankMode ? bankBranchSnapshot || null : null,
+      asFlag: isBankMode ? asFlag || 'A' : 'A',
       txnRef,
-      note
+      note: finalNote
     }
 
     const response = await fetch('/api/payments', {
@@ -560,6 +687,8 @@ function PurchasePaymentEntryPageContent() {
       return
     }
 
+    const finalNote = buildPaymentNote()
+
     setIsSubmittingMulti(true)
     try {
       const response = await fetch('/api/payments/allocate', {
@@ -574,8 +703,16 @@ function PurchasePaymentEntryPageContent() {
           payDate,
           amount: paymentAmount,
           mode,
+          bankId: !isBankMode || selectedBank === 'none' ? null : selectedBank,
+          onlinePayAmount: isCashMode ? null : Number(onlinePayAmount || paymentAmount),
+          onlinePaymentDate: isCashMode ? null : onlinePaymentDate || payDate,
+          ifscCode: isBankMode ? ifscCode || null : null,
+          beneficiaryBankAccount: isBankMode ? beneficiaryBankAccount || null : null,
+          bankNameSnapshot: isBankMode ? bankNameSnapshot || null : null,
+          bankBranchSnapshot: isBankMode ? bankBranchSnapshot || null : null,
+          asFlag: isBankMode ? asFlag || 'A' : 'A',
           txnRef,
-          note,
+          note: finalNote,
           rule: 'oldest'
         })
       })
@@ -663,42 +800,18 @@ function PurchasePaymentEntryPageContent() {
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="partySearch">Select Party</Label>
-                    <div className="relative">
+                  <div className="space-y-3 rounded-md border bg-gray-50 p-3">
+                    <p className="text-sm font-semibold">Filter Bills</p>
+                    <div>
+                      <Label htmlFor="billFilter">Bill No. / Anubandhan No.</Label>
                       <Input
-                        id="partySearch"
-                        value={partySearch}
-                        onChange={(e) => setPartySearch(e.target.value)}
-                        placeholder="Search farmer/supplier..."
-                        className="pr-9"
+                        id="billFilter"
+                        value={billFilter}
+                        onChange={(e) => setBillFilter(e.target.value)}
+                        placeholder="Search by bill no. or anubandhan no."
                       />
-                      <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
                     </div>
 
-                    <div className="grid max-h-40 grid-cols-1 gap-2 overflow-y-auto rounded-md border bg-gray-50 p-2 md:grid-cols-2">
-                      {filteredPartyGroups.length === 0 ? (
-                        <p className="col-span-full text-sm text-gray-500">No parties found.</p>
-                      ) : (
-                        filteredPartyGroups.map((group) => (
-                          <button
-                            key={group.partyKey}
-                            type="button"
-                            onClick={() => handleSelectParty(group)}
-                            className={`rounded-md border px-3 py-2 text-left transition ${
-                              selectedPartyKey === group.partyKey
-                                ? 'border-blue-500 bg-blue-50'
-                                : 'border-gray-200 bg-white hover:bg-gray-100'
-                            }`}
-                          >
-                            <p className="truncate text-sm font-medium">{group.partyName}</p>
-                            <p className="text-xs text-gray-500">
-                              {group.bills.length} bill(s) | {formatAmount(group.totalPending)}
-                            </p>
-                          </button>
-                        ))
-                      )}
-                    </div>
                   </div>
 
                   {selectedBillData ? (
@@ -765,6 +878,140 @@ function PurchasePaymentEntryPageContent() {
                     </Select>
                   </div>
 
+                  {isOnlineMode && (
+                    <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-sm font-semibold text-slate-700">Online Details</p>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <div>
+                          <Label htmlFor="onlineMethod">Online Method</Label>
+                          <Select value={onlineMethod} onValueChange={(value: 'upi' | 'wallet' | 'card' | 'netbanking' | 'other') => setOnlineMethod(value)}>
+                            <SelectTrigger id="onlineMethod">
+                              <SelectValue placeholder="Select online method" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="upi">UPI</SelectItem>
+                              <SelectItem value="wallet">Wallet</SelectItem>
+                              <SelectItem value="card">Card</SelectItem>
+                              <SelectItem value="netbanking">Net Banking</SelectItem>
+                              <SelectItem value="other">Other</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div>
+                          <Label htmlFor="onlinePayAmount">Online Amount</Label>
+                          <Input
+                            id="onlinePayAmount"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={onlinePayAmount}
+                            onChange={(e) => setOnlinePayAmount(toNonNegative(e.target.value))}
+                            placeholder="Enter online amount"
+                          />
+                        </div>
+
+                        <div>
+                          <Label htmlFor="onlinePaymentDate">Online Payment Date</Label>
+                          <Input
+                            id="onlinePaymentDate"
+                            type="date"
+                            value={onlinePaymentDate}
+                            onChange={(e) => setOnlinePaymentDate(e.target.value)}
+                          />
+                        </div>
+
+                        <div>
+                          <Label htmlFor="onlineHandle">{onlineMethod === 'upi' ? 'UPI ID' : 'Online Reference'}</Label>
+                          <Input
+                            id="onlineHandle"
+                            value={onlineHandle}
+                            onChange={(e) => setOnlineHandle(e.target.value)}
+                            placeholder={onlineMethod === 'upi' ? 'example@upi' : 'Enter reference'}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {isBankMode && (
+                    <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-sm font-semibold text-slate-700">Bank Transfer Details</p>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <div>
+                          <Label htmlFor="selectedBank">Bank</Label>
+                          <Select value={selectedBank} onValueChange={setSelectedBank}>
+                            <SelectTrigger id="selectedBank">
+                              <SelectValue placeholder="Select bank" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">No Bank</SelectItem>
+                              {banks.map((bank) => (
+                                <SelectItem key={bank.id} value={bank.id}>
+                                  {bank.name} ({bank.branch || 'Branch N/A'})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div>
+                          <Label htmlFor="onlinePayAmount">Transfer Amount</Label>
+                          <Input
+                            id="onlinePayAmount"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={onlinePayAmount}
+                            onChange={(e) => setOnlinePayAmount(toNonNegative(e.target.value))}
+                            placeholder="Enter transfer amount"
+                          />
+                        </div>
+
+                        <div>
+                          <Label htmlFor="onlinePaymentDate">Transfer Date</Label>
+                          <Input
+                            id="onlinePaymentDate"
+                            type="date"
+                            value={onlinePaymentDate}
+                            onChange={(e) => setOnlinePaymentDate(e.target.value)}
+                          />
+                        </div>
+
+                        <div>
+                          <Label htmlFor="ifscCode">IFSC Code</Label>
+                          <Input
+                            id="ifscCode"
+                            value={ifscCode}
+                            onChange={(e) => setIfscCode(e.target.value.toUpperCase())}
+                            placeholder="Enter IFSC code"
+                          />
+                        </div>
+
+                        <div>
+                          <Label htmlFor="beneficiaryBankAccount">Bank Account</Label>
+                          <Input
+                            id="beneficiaryBankAccount"
+                            value={beneficiaryBankAccount}
+                            onChange={(e) => setBeneficiaryBankAccount(e.target.value)}
+                            placeholder="Enter beneficiary account"
+                          />
+                        </div>
+
+                        <div>
+                          <Label htmlFor="asFlag">AS Flag</Label>
+                          <Input
+                            id="asFlag"
+                            value={asFlag}
+                            onChange={(e) => setAsFlag(e.target.value.toUpperCase())}
+                            maxLength={10}
+                            placeholder="A / S flag"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <Label htmlFor="txnRef">Transaction Reference</Label>
                     <Input
@@ -827,16 +1074,6 @@ function PurchasePaymentEntryPageContent() {
                       </div>
                     )}
 
-                    <div className="relative">
-                      <Input
-                        value={billTableSearch}
-                        onChange={(e) => setBillTableSearch(e.target.value)}
-                        placeholder="Search bills in this party..."
-                        className="pr-9"
-                      />
-                      <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                    </div>
-
                     <div className="rounded-md border">
                       <Table>
                         <TableHeader>
@@ -856,9 +1093,7 @@ function PurchasePaymentEntryPageContent() {
                               <TableCell colSpan={7} className="py-6 text-center text-sm text-gray-500">
                                 {selectedPartyBills.length === 0
                                   ? 'No unpaid bills found for this party and date range.'
-                                  : selectedBillId || selectedBillIds.length > 0
-                                    ? 'No rows match current search. Selected bills are kept.'
-                                    : 'No bills found for current search.'}
+                                  : 'No bills match current Bill No./Anubandhan filters.'}
                               </TableCell>
                             </TableRow>
                           ) : (
@@ -896,10 +1131,6 @@ function PurchasePaymentEntryPageContent() {
                         </TableBody>
                       </Table>
                     </div>
-
-                    {hiddenSelectedCount > 0 && (
-                      <p className="text-xs text-gray-500">{hiddenSelectedCount} selected bill(s) are hidden by current search filter.</p>
-                    )}
 
                     <div className="sticky top-4 rounded-md border bg-gray-50 p-3">
                       <p className="text-sm font-semibold">Selection Summary</p>

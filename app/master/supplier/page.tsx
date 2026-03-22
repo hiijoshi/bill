@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -41,28 +41,7 @@ export default function SupplierMasterPage() {
     phone1: ''
   })
 
-  useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
-      if (!resolvedCompanyId) {
-        setLoading(false)
-        setMessage({ type: 'error', text: 'Failed to resolve active company. Please re-login.' })
-        return
-      }
-      setCompanyId(resolvedCompanyId)
-      stripCompanyParamsFromUrl()
-      const permission = await fetchSupplierPermissions(resolvedCompanyId)
-      if (!permission.canRead) {
-        setLoading(false)
-        setSuppliers([])
-        setMessage({ type: 'error', text: 'No access to supplier master for this user.' })
-        return
-      }
-      await fetchSuppliers(resolvedCompanyId)
-    })()
-  }, [])
-
-  const fetchSupplierPermissions = async (id: string) => {
+  const fetchSupplierPermissions = useCallback(async (id: string) => {
     const denied = { canRead: false, canWrite: false }
     try {
       const response = await fetch(`/api/auth/permissions?companyId=${encodeURIComponent(id)}&includeMeta=true`, {
@@ -86,9 +65,9 @@ export default function SupplierMasterPage() {
       setCanWriteSupplier(false)
       return denied
     }
-  }
+  }, [])
 
-  const fetchSuppliers = async (id = companyId) => {
+  const fetchSuppliers = useCallback(async (id = companyId) => {
     if (!id) return
     try {
       const response = await fetch(`/api/suppliers?companyId=${id}`)
@@ -113,7 +92,28 @@ export default function SupplierMasterPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [companyId])
+
+  useEffect(() => {
+    ;(async () => {
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (!resolvedCompanyId) {
+        setLoading(false)
+        setMessage({ type: 'error', text: 'Failed to resolve active company. Please re-login.' })
+        return
+      }
+      setCompanyId(resolvedCompanyId)
+      stripCompanyParamsFromUrl()
+      const permission = await fetchSupplierPermissions(resolvedCompanyId)
+      if (!permission.canRead) {
+        setLoading(false)
+        setSuppliers([])
+        setMessage({ type: 'error', text: 'No access to supplier master for this user.' })
+        return
+      }
+      await fetchSuppliers(resolvedCompanyId)
+    })()
+  }, [fetchSupplierPermissions, fetchSuppliers])
 
   const filteredSuppliers = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()

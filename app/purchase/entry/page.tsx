@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { kgToQuintal, round4, toKg } from '@/lib/unit-conversion'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
@@ -19,6 +20,7 @@ import {
 interface Product {
   id: string
   name: string
+  gstRate?: number | null
 }
 
 interface UserUnit {
@@ -51,6 +53,7 @@ export default function PurchaseEntryPage() {
   const [weight, setWeight] = useState('')
   const [rate, setRate] = useState('')
   const [payableAmount, setPayableAmount] = useState('')
+  const [manualTotalAmount, setManualTotalAmount] = useState('')
   const [paidAmount, setPaidAmount] = useState('')
   const [balance, setBalance] = useState('')
   const [paidAmountError, setPaidAmountError] = useState('')
@@ -63,6 +66,14 @@ export default function PurchaseEntryPage() {
     if (!Number.isFinite(parsed)) return ''
     return String(Math.max(0, parsed))
   }
+  const currencyText = (value: number) => `₹${roundCurrency(Number(value || 0)).toFixed(2)}`
+
+  const getCurrentFinalTotalValue = useCallback(() => {
+    const taxableAmount = parseFloat(payableAmount) || 0
+    const selectedProductRecord = products.find((product) => product.id === selectedProduct)
+    const calculatedTotal = calculateTaxBreakdown(taxableAmount, selectedProductRecord?.gstRate || 0).lineTotal
+    return manualTotalAmount !== '' ? roundCurrency(parseFloat(manualTotalAmount) || 0) : calculatedTotal
+  }, [manualTotalAmount, payableAmount, products, selectedProduct])
 
   const handlePaidAmountChange = (value: string) => {
     const normalized = toNonNegative(value)
@@ -73,12 +84,12 @@ export default function PurchaseEntryPage() {
     }
 
     const nextPaid = Number(normalized)
-    const maxPayable = Number(payableAmount || 0)
-    const hasPayable = payableAmount !== ''
+    const maxPayable = getCurrentFinalTotalValue()
+    const hasPayable = maxPayable > 0
 
     if (hasPayable && nextPaid > maxPayable) {
       setPaidAmount(String(maxPayable))
-      setPaidAmountError('Paid amount cannot be greater than payable amount')
+      setPaidAmountError('Paid amount cannot be greater than final invoice total')
       return
     }
 
@@ -197,24 +208,24 @@ export default function PurchaseEntryPage() {
 
   // Calculate balance when payable or paid changes
   useEffect(() => {
-    const payable = parseFloat(payableAmount) || 0
+    const payable = getCurrentFinalTotalValue()
     const paid = parseFloat(paidAmount) || 0
 
-    if (payableAmount !== '' && paidAmount && paid > payable) {
+    if (payable > 0 && paidAmount && paid > payable) {
       setPaidAmount(String(payable))
-      setPaidAmountError('Paid amount cannot be greater than payable amount')
+      setPaidAmountError('Paid amount cannot be greater than final invoice total')
       setBalance('0')
       return
     } else {
       setPaidAmountError('')
     }
 
-    if (payableAmount && paidAmount) {
+    if (payable > 0 && paidAmount) {
       setBalance(Math.max(0, payable - paid).toString())
       return
     }
     setBalance('')
-  }, [payableAmount, paidAmount])
+  }, [getCurrentFinalTotalValue, paidAmount])
 
   useEffect(() => {
     const bags = parseFloat(noOfBags) || 0
@@ -239,12 +250,12 @@ export default function PurchaseEntryPage() {
     }
 
     // Payment validation
-    const payable = parseFloat(payableAmount) || 0
+    const payable = getCurrentFinalTotalValue()
     const paid = parseFloat(paidAmount) || 0
 
     // Check if paid amount exceeds payable amount
     if (paid > payable) {
-      setPaidAmountError('Paid amount cannot be greater than payable amount')
+      setPaidAmountError('Paid amount cannot be greater than final invoice total')
       return
     }
 
@@ -282,6 +293,7 @@ export default function PurchaseEntryPage() {
         weight: Math.max(0, parseFloat(weight) || 0),
         rate: Math.max(0, parseFloat(rate) || 0),
         payableAmount: Math.max(0, parseFloat(payableAmount) || 0),
+        totalAmount: Math.max(0, payable),
         paidAmount: Math.max(0, parseFloat(paidAmount) || 0),
         balance: Math.max(0, parseFloat(balance) || 0),
         status,
@@ -329,6 +341,9 @@ export default function PurchaseEntryPage() {
     )
   }
   const defaultProductName = products.find((product) => product.id === defaultProductId)?.name || ''
+  const selectedProductRecord = products.find((product) => product.id === selectedProduct) || null
+  const taxPreview = calculateTaxBreakdown(parseFloat(payableAmount) || 0, selectedProductRecord?.gstRate || 0)
+  const finalTotalAmount = getCurrentFinalTotalValue()
 
   return (
     <DashboardLayout companyId={companyId}>
@@ -449,6 +464,11 @@ export default function PurchaseEntryPage() {
                     {defaultProductName ? (
                       <p className="mt-1 text-xs text-slate-600">Default from Product Master: {defaultProductName}</p>
                     ) : null}
+                    {selectedProductRecord ? (
+                      <p className="mt-1 text-xs text-slate-600">
+                        Tax rule: {Number(selectedProductRecord.gstRate || 0) > 0 ? `${Number(selectedProductRecord.gstRate || 0).toFixed(2)}% GST` : 'Non-GST / tax-free'}
+                      </p>
+                    ) : null}
                   </div>
 
                   {/* User Unit */}
@@ -510,7 +530,7 @@ export default function PurchaseEntryPage() {
 
                   {/* Rate */}
                   <div>
-                    <Label htmlFor="rate">Rate</Label>
+                    <Label htmlFor="rate">Average Rate / Qt</Label>
                     <Input
                       id="rate"
                       type="number"
@@ -525,7 +545,7 @@ export default function PurchaseEntryPage() {
 
                   {/* Payable Amount */}
                   <div>
-                    <Label htmlFor="payableAmount">Payable Amount</Label>
+                    <Label htmlFor="payableAmount">Taxable Amount</Label>
                     <Input
                       id="payableAmount"
                       value={payableAmount}
@@ -535,6 +555,44 @@ export default function PurchaseEntryPage() {
                     />
                   </div>
 
+                  <div>
+                    <Label htmlFor="gstAmount">GST Amount</Label>
+                    <Input
+                      id="gstAmount"
+                      value={taxPreview.gstAmount.toFixed(2)}
+                      readOnly
+                      className="bg-gray-100"
+                      placeholder="Calculated automatically"
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="calculatedTotalAmount">Calculated Total</Label>
+                    <Input
+                      id="calculatedTotalAmount"
+                      value={taxPreview.lineTotal.toFixed(2)}
+                      readOnly
+                      className="bg-gray-100"
+                      placeholder="Calculated automatically"
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="manualTotalAmount">Final Invoice Total</Label>
+                    <Input
+                      id="manualTotalAmount"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={manualTotalAmount}
+                      onChange={(e) => setManualTotalAmount(toNonNegative(e.target.value))}
+                      placeholder={taxPreview.lineTotal.toFixed(2)}
+                    />
+                    <p className="mt-1 text-xs text-slate-500">
+                      Leave blank to keep the GST-calculated total. Enter a value only when the final bill total needs a manual override.
+                    </p>
+                  </div>
+
                   {/* Paid Amount */}
                   <div>
                     <Label htmlFor="paidAmount">Paid Amount</Label>
@@ -542,7 +600,7 @@ export default function PurchaseEntryPage() {
                       id="paidAmount"
                       type="number"
                       min="0"
-                      max={payableAmount || undefined}
+                      max={finalTotalAmount || undefined}
                       step="0.01"
                       value={paidAmount}
                       onChange={(e) => handlePaidAmountChange(e.target.value)}
@@ -567,9 +625,29 @@ export default function PurchaseEntryPage() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <div className="rounded-[1rem] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-xs text-slate-500">GST Status</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900">
+                      {taxPreview.gstRate > 0 ? `${taxPreview.gstRate.toFixed(2)}% GST` : 'Non-GST'}
+                    </p>
+                  </div>
+                  <div className="rounded-[1rem] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-xs text-slate-500">Calculated Total</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900">{currencyText(taxPreview.lineTotal)}</p>
+                  </div>
+                  <div className="rounded-[1rem] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-xs text-slate-500">Final Invoice Total</p>
+                    <p className="mt-1 text-lg font-semibold text-emerald-700">{currencyText(finalTotalAmount)}</p>
+                  </div>
+                </div>
+
                 <div className="flex justify-end space-x-4">
                   <Button type="button" variant="outline" onClick={() => router.back()}>
                     Cancel
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => setManualTotalAmount('')} disabled={manualTotalAmount === ''}>
+                    Reset Total
                   </Button>
                   <Button type="button" variant="outline" disabled={submitting} onClick={() => void submitPurchase(true)}>
                     Save & Print

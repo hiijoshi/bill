@@ -4,6 +4,7 @@ import { verifyToken } from '@/lib/auth'
 import { env } from '@/lib/config'
 import { prisma } from '@/lib/prisma'
 import { normalizeAppRole } from '@/lib/api-security'
+import { getCompanyCookieNameCandidates, getSessionCookieNameCandidates } from '@/lib/session-cookies'
 
 const mutatingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const ENABLE_RATE_LIMIT = process.env.DISABLE_RATE_LIMIT !== 'true'
@@ -12,7 +13,8 @@ const alwaysPublicApiRoutes = new Set([
   '/api/auth/login',
   '/api/auth/refresh',
   '/api/login',
-  '/api/super-admin/auth'
+  '/api/super-admin/auth',
+  '/api/super-admin/refresh'
 ])
 
 const lockBypassApiRoutes = new Set([
@@ -41,6 +43,19 @@ const businessAppRoutePrefixes = [
   '/reports',
   '/company'
 ]
+
+function getRequestHost(request: NextRequest): string {
+  return request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host || ''
+}
+
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase().split(':')[0]
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '[::1]' || normalized === '::1'
+}
+
+function isLocalSuperAdminAccessAllowed(request: NextRequest): boolean {
+  return env.NODE_ENV !== 'production' && isLoopbackHost(getRequestHost(request))
+}
 
 function consumeRateLimit(key: string, max: number, windowMs: number): { allowed: boolean; retryAfter?: number } {
   const now = Date.now()
@@ -114,13 +129,14 @@ function isBusinessAppRoute(pathname: string): boolean {
 
 async function ensureCompanyScope(
   requestedCompanyId: string,
-  auth: { role: string; traderId: string; companyId: string | null }
+  auth: { role: string; traderId: string; companyId: string | null; userDbId: string | null }
 ): Promise<boolean> {
   if (auth.role === 'super_admin') {
     const company = await prisma.company.findFirst({
       where: {
         id: requestedCompanyId,
-        deletedAt: null
+        deletedAt: null,
+        locked: false
       },
       select: { id: true }
     })
@@ -131,23 +147,50 @@ async function ensureCompanyScope(
     const company = await prisma.company.findFirst({
       where: {
         id: requestedCompanyId,
-        traderId: auth.traderId,
-        deletedAt: null
+        deletedAt: null,
+        locked: false,
+        OR: [{ traderId: auth.traderId }, { traderId: null }]
       },
       select: { id: true }
     })
     return !!company
   }
 
-  if (!auth.companyId || auth.companyId !== requestedCompanyId) {
+  const candidateIds = new Set<string>()
+  if (auth.companyId) {
+    candidateIds.add(auth.companyId)
+  }
+
+  if (auth.userDbId) {
+    const permissionRows = await prisma.userPermission.findMany({
+      where: {
+        userId: auth.userDbId,
+        companyId: requestedCompanyId,
+        OR: [{ canRead: true }, { canWrite: true }],
+        company: {
+          deletedAt: null,
+          locked: false,
+          OR: [{ traderId: auth.traderId }, { traderId: null }]
+        }
+      },
+      select: { companyId: true }
+    })
+
+    permissionRows.forEach((row) => {
+      if (row.companyId) candidateIds.add(row.companyId)
+    })
+  }
+
+  if (!candidateIds.has(requestedCompanyId)) {
     return false
   }
 
   const company = await prisma.company.findFirst({
     where: {
       id: requestedCompanyId,
-      traderId: auth.traderId,
-      deletedAt: null
+      deletedAt: null,
+      locked: false,
+      OR: [{ traderId: auth.traderId }, { traderId: null }]
     },
     select: { id: true }
   })
@@ -158,7 +201,24 @@ async function ensureCompanyScope(
 export async function middleware(request: NextRequest) {
   const pathname = normalizePath(request.nextUrl.pathname)
   const isApiRoute = pathname.startsWith('/api/')
+  const isSuperAdminApiRoute = pathname.startsWith('/api/super-admin/')
+  const isSuperAdminPageRoute = !isApiRoute && pathname.startsWith('/super-admin')
   const requestId = request.headers.get('x-request-id') || crypto.randomUUID()
+
+  if ((isSuperAdminApiRoute || isSuperAdminPageRoute) && !isLocalSuperAdminAccessAllowed(request)) {
+    if (isSuperAdminApiRoute) {
+      return NextResponse.json({ error: 'Super admin is restricted to local development access' }, { status: 404 })
+    }
+    return NextResponse.redirect(new URL('/', request.url))
+  }
+
+  if (!isApiRoute && (pathname === '/login' || pathname === '/super-admin/login')) {
+    const sanitizedUrl = request.nextUrl.clone()
+    if (sanitizedUrl.searchParams.has('password')) {
+      sanitizedUrl.searchParams.delete('password')
+      return NextResponse.redirect(sanitizedUrl)
+    }
+  }
 
   if (request.method === 'OPTIONS') {
     return NextResponse.next()
@@ -168,7 +228,16 @@ export async function middleware(request: NextRequest) {
     const ip = getRequestIp(request)
     const isPublic = isPublicApi(pathname)
     const authHeader = request.headers.get('Authorization')?.replace('Bearer ', '')
-    const token = authHeader || request.cookies.get('auth-token')?.value
+    const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+    const sessionCookieCandidates = getSessionCookieNameCandidates(
+      isSuperAdminApiRoute ? 'super_admin' : 'app',
+      scopeSource
+    )
+    const token =
+      authHeader ||
+      sessionCookieCandidates
+        .map((cookieNames) => request.cookies.get(cookieNames.authToken)?.value)
+        .find((value): value is string => Boolean(value))
     const payload = token ? verifyToken(token) : null
     const isSuperAdminRequest =
       !isPublic && !!payload && normalizeAppRole(String(payload.role || '')) === 'super_admin'
@@ -231,7 +300,10 @@ export async function middleware(request: NextRequest) {
     }
 
     if (!authHeader && mutatingMethods.has(request.method)) {
-      const csrfCookie = request.cookies.get('csrf-token')?.value
+      const csrfCookie =
+        sessionCookieCandidates
+          .map((cookieNames) => request.cookies.get(cookieNames.csrfToken)?.value)
+          .find((value): value is string => Boolean(value)) || null
       const csrfHeader = request.headers.get('x-csrf-token')
       if (!csrfCookie || !csrfHeader || csrfCookie !== csrfHeader) {
         return NextResponse.json({ error: 'Invalid CSRF token' }, { status: 403 })
@@ -289,11 +361,9 @@ export async function middleware(request: NextRequest) {
 
     const deletedReason = user.trader?.deletedAt
       ? 'Trader is deleted'
-      : user.companyId && user.company?.deletedAt
-        ? 'Company is deleted'
-        : user.deletedAt
-          ? 'User is deleted'
-          : null
+      : user.deletedAt
+        ? 'User is deleted'
+        : null
 
     if (deletedReason && !isLockBypassApiRoute(pathname)) {
       return NextResponse.json({ error: deletedReason }, { status: 403 })
@@ -301,11 +371,9 @@ export async function middleware(request: NextRequest) {
 
     const lockedReason = user.trader?.locked
       ? 'Trader is locked'
-      : user.companyId && user.company?.locked
-        ? 'Company is locked'
-        : user.locked
-          ? 'User is locked'
-          : null
+      : user.locked
+        ? 'User is locked'
+        : null
 
     if (lockedReason && !isLockBypassApiRoute(pathname)) {
       return NextResponse.json({ error: lockedReason }, { status: 403 })
@@ -313,7 +381,10 @@ export async function middleware(request: NextRequest) {
 
     const urlCompanyId = request.nextUrl.searchParams.get('companyId')
     const urlCompanyIds = request.nextUrl.searchParams.get('companyIds')
-    const lockedCompanyId = request.cookies.get('companyId')?.value
+    const lockedCompanyId =
+      getCompanyCookieNameCandidates(scopeSource)
+        .map((cookieName) => request.cookies.get(cookieName)?.value)
+        .find((value): value is string => Boolean(value)) || null
 
     if (urlCompanyId) {
       if (lockedCompanyId && urlCompanyId !== lockedCompanyId && role !== 'super_admin') {
@@ -326,7 +397,8 @@ export async function middleware(request: NextRequest) {
       const companyAllowed = await ensureCompanyScope(urlCompanyId, {
         role,
         traderId: user.traderId,
-        companyId: user.companyId
+        companyId: user.companyId,
+        userDbId: user.id
       })
 
       if (!companyAllowed) {
@@ -343,7 +415,8 @@ export async function middleware(request: NextRequest) {
         const companyAllowed = await ensureCompanyScope(id, {
           role,
           traderId: user.traderId,
-          companyId: user.companyId
+          companyId: user.companyId,
+          userDbId: user.id
         })
         if (!companyAllowed) {
           return NextResponse.json({ error: 'One or more company IDs are out of scope' }, { status: 403 })
@@ -351,6 +424,7 @@ export async function middleware(request: NextRequest) {
       }
     }
 
+    const activeCompanyId = lockedCompanyId || user.companyId || ''
     const requestHeaders = new Headers(request.headers)
     requestHeaders.set('x-user-id', user.userId)
     requestHeaders.set('x-user-db-id', user.id)
@@ -358,7 +432,7 @@ export async function middleware(request: NextRequest) {
     requestHeaders.set('x-user-role', legacyRole)
     requestHeaders.set('x-user-role-raw', rawRole)
     requestHeaders.set('x-user-role-normalized', role)
-    requestHeaders.set('x-company-id', user.companyId || '')
+    requestHeaders.set('x-company-id', activeCompanyId)
     requestHeaders.set('x-request-id', requestId)
 
     return NextResponse.next({
@@ -369,7 +443,12 @@ export async function middleware(request: NextRequest) {
   }
 
   if (!isApiRoute && isBusinessAppRoute(pathname)) {
-    const token = request.cookies.get('auth-token')?.value
+    const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+    const appCookieCandidates = getSessionCookieNameCandidates('app', scopeSource)
+    const token =
+      appCookieCandidates
+        .map((cookieNames) => request.cookies.get(cookieNames.authToken)?.value)
+        .find((value): value is string => Boolean(value)) || null
     if (!token) {
       return NextResponse.redirect(new URL('/login', request.url))
     }
@@ -409,9 +488,7 @@ export async function middleware(request: NextRequest) {
       user.locked ||
       user.deletedAt ||
       user.trader?.locked ||
-      user.trader?.deletedAt ||
-      user.company?.locked ||
-      user.company?.deletedAt
+      user.trader?.deletedAt
     ) {
       return NextResponse.redirect(new URL('/login', request.url))
     }
@@ -422,8 +499,13 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  if (!isApiRoute && pathname.startsWith('/super-admin') && pathname !== '/super-admin/login') {
-    const token = request.cookies.get('auth-token')?.value
+  if (isSuperAdminPageRoute && pathname !== '/super-admin/login') {
+    const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+    const superAdminCookieCandidates = getSessionCookieNameCandidates('super_admin', scopeSource)
+    const token =
+      superAdminCookieCandidates
+        .map((cookieNames) => request.cookies.get(cookieNames.authToken)?.value)
+        .find((value): value is string => Boolean(value)) || null
     if (!token) {
       return NextResponse.redirect(new URL('/super-admin/login', request.url))
     }
@@ -467,16 +549,18 @@ export async function middleware(request: NextRequest) {
       user.locked ||
       user.deletedAt ||
       user.trader?.locked ||
-      user.trader?.deletedAt ||
-      user.company?.locked ||
-      user.company?.deletedAt
+      user.trader?.deletedAt
     ) {
       return NextResponse.redirect(new URL('/super-admin/login', request.url))
     }
   }
 
   const urlCompanyId = request.nextUrl.searchParams.get('companyId')
-  const lockedCompanyId = request.cookies.get('companyId')?.value
+  const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+  const lockedCompanyId =
+    getCompanyCookieNameCandidates(scopeSource)
+      .map((cookieName) => request.cookies.get(cookieName)?.value)
+      .find((value): value is string => Boolean(value)) || null
 
   if (!isApiRoute && urlCompanyId && lockedCompanyId && urlCompanyId !== lockedCompanyId) {
     const redirectUrl = request.nextUrl.clone()

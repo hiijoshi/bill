@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 interface Supplier {
@@ -20,6 +21,7 @@ interface Supplier {
 interface Product {
   id: string
   name: string
+  gstRate?: number | null
 }
 
 interface SpecialPurchaseItem {
@@ -62,7 +64,6 @@ function SpecialPurchaseEditPageContent() {
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [products, setProducts] = useState<Product[]>([])
-  const [purchaseBill, setPurchaseBill] = useState<SpecialPurchaseBill | null>(null)
   const [loading, setLoading] = useState(true)
 
   // Form state
@@ -103,6 +104,61 @@ function SpecialPurchaseEditPageContent() {
 
   useEffect(() => {
     let cancelled = false
+
+    const fetchData = async (targetCompanyId: string) => {
+      try {
+        const suppliersRes = await fetch(`/api/suppliers?companyId=${targetCompanyId}`)
+        const suppliersData = await parseApiJson<Supplier[]>(suppliersRes, [])
+        if (cancelled) return
+        setSuppliers(suppliersData)
+
+        const productsRes = await fetch(`/api/products?companyId=${targetCompanyId}`)
+        const productsData = await parseApiJson<Product[]>(productsRes, [])
+        if (cancelled) return
+        setProducts(productsData)
+
+        const billRes = await fetch(`/api/special-purchase-bills?companyId=${targetCompanyId}&billId=${billId}`)
+        if (!billRes.ok) {
+          throw new Error('Special purchase bill not found')
+        }
+        const billData = await parseApiJson<SpecialPurchaseBill | null>(billRes, null)
+        if (cancelled) return
+        if (!billData?.id) {
+          throw new Error('Special purchase bill not found')
+        }
+
+        setSupplierInvoiceNo(billData.supplierInvoiceNo)
+        setBillDate(new Date(billData.billDate).toISOString().split('T')[0])
+        setSelectedSupplier(billData.supplier?.id || '')
+        setSupplierName(billData.supplier?.name || '')
+        setSupplierAddress(billData.supplier?.address || '')
+        setSupplierGst(billData.supplier?.gstNumber || '')
+
+        setTotalAmount(billData.totalAmount.toString())
+        setPaidAmount(billData.paidAmount.toString())
+        setBalanceAmount(billData.balanceAmount.toString())
+
+        if (billData.specialPurchaseItems && billData.specialPurchaseItems.length > 0) {
+          const item = billData.specialPurchaseItems[0]
+          setSelectedProduct(item.productId || '')
+          setItemData({
+            noOfBags: item.noOfBags.toString(),
+            weight: item.weight.toString(),
+            rate: item.rate.toString(),
+            otherAmount: item.otherAmount.toString()
+          })
+        }
+
+        setLoading(false)
+      } catch (error) {
+        if (cancelled) return
+        console.error('Error fetching data:', error)
+        setLoading(false)
+        alert('Error loading special purchase bill')
+        router.back()
+      }
+    }
+
     ;(async () => {
       if (!billId) {
         setLoading(false)
@@ -122,72 +178,12 @@ function SpecialPurchaseEditPageContent() {
 
       setCompanyId(resolvedCompanyId)
       stripCompanyParamsFromUrl()
-      await fetchData(resolvedCompanyId, () => cancelled)
+      await fetchData(resolvedCompanyId)
     })()
     return () => {
       cancelled = true
     }
   }, [billId, router])
-
-  const fetchData = async (targetCompanyId: string, isCancelled: () => boolean = () => false) => {
-    try {
-      // Fetch suppliers
-      const suppliersRes = await fetch(`/api/suppliers?companyId=${targetCompanyId}`)
-      const suppliersData = await parseApiJson<Supplier[]>(suppliersRes, [])
-      if (isCancelled()) return
-      setSuppliers(suppliersData)
-
-      // Fetch products
-      const productsRes = await fetch(`/api/products?companyId=${targetCompanyId}`)
-      const productsData = await parseApiJson<Product[]>(productsRes, [])
-      if (isCancelled()) return
-      setProducts(productsData)
-
-      // Fetch special purchase bill
-      const billRes = await fetch(`/api/special-purchase-bills?companyId=${targetCompanyId}&billId=${billId}`)
-      if (!billRes.ok) {
-        throw new Error('Special purchase bill not found')
-      }
-      const billData = await parseApiJson<SpecialPurchaseBill | null>(billRes, null)
-      if (isCancelled()) return
-      if (!billData?.id) {
-        throw new Error('Special purchase bill not found')
-      }
-      setPurchaseBill(billData)
-
-      // Populate form with existing data
-      setSupplierInvoiceNo(billData.supplierInvoiceNo)
-      setBillDate(new Date(billData.billDate).toISOString().split('T')[0])
-      setSelectedSupplier(billData.supplier?.id || '')
-      setSupplierName(billData.supplier?.name || '')
-      setSupplierAddress(billData.supplier?.address || '')
-      setSupplierGst(billData.supplier?.gstNumber || '')
-      
-      setTotalAmount(billData.totalAmount.toString())
-      setPaidAmount(billData.paidAmount.toString())
-      setBalanceAmount(billData.balanceAmount.toString())
-      
-      // Populate item data (API expects single item)
-      if (billData.specialPurchaseItems && billData.specialPurchaseItems.length > 0) {
-        const item = billData.specialPurchaseItems[0]
-        setSelectedProduct(item.productId || '')
-        setItemData({
-          noOfBags: item.noOfBags.toString(),
-          weight: item.weight.toString(),
-          rate: item.rate.toString(),
-          otherAmount: item.otherAmount.toString()
-        })
-      }
-
-      setLoading(false)
-    } catch (error) {
-      if (isCancelled()) return
-      console.error('Error fetching data:', error)
-      setLoading(false)
-      alert('Error loading special purchase bill')
-      router.back()
-    }
-  }
 
   const handleSupplierChange = (supplierId: string) => {
     setSelectedSupplier(supplierId)
@@ -200,15 +196,35 @@ function SpecialPurchaseEditPageContent() {
   }
 
   const calculateItemAmounts = () => {
-    const noOfBags = Math.max(0, parseFloat(itemData.noOfBags) || 0)
     const weight = parseFloat(itemData.weight) || 0
     const rate = parseFloat(itemData.rate) || 0
     const otherAmount = parseFloat(itemData.otherAmount) || 0
     
     const netAmount = weight * rate
-    const grossAmount = netAmount + otherAmount
+    const selectedProductRecord = products.find((product) => product.id === selectedProduct)
+    const tax = calculateTaxBreakdown(netAmount, selectedProductRecord?.gstRate || 0)
+    const grossAmount = roundCurrency(tax.lineTotal + otherAmount)
     
     return { netAmount, grossAmount }
+  }
+
+  const getFinalInvoiceTotal = () => {
+    const manualTotal = parseFloat(totalAmount)
+    if (Number.isFinite(manualTotal)) {
+      return roundCurrency(Math.max(0, manualTotal))
+    }
+    return roundCurrency(calculateItemAmounts().grossAmount)
+  }
+
+  const getFinalBalanceAmount = (finalTotal: number, paidValue: string) => {
+    const paid = Math.max(0, parseFloat(paidValue) || 0)
+    return roundCurrency(Math.max(0, finalTotal - paid))
+  }
+
+  const derivePaymentStatus = (finalTotal: number, paid: number) => {
+    if (paid <= 0) return 'unpaid'
+    if (paid >= finalTotal) return 'paid'
+    return 'partial'
   }
 
   const handleUpdateItem = () => {
@@ -217,7 +233,7 @@ function SpecialPurchaseEditPageContent() {
       return
     }
 
-    const { netAmount, grossAmount } = calculateItemAmounts()
+    const { grossAmount } = calculateItemAmounts()
     setTotalAmount(grossAmount.toString())
     
     const paid = parseFloat(paidAmount) || 0
@@ -225,20 +241,36 @@ function SpecialPurchaseEditPageContent() {
       alert('Paid amount cannot be more than gross amount')
       return
     }
-    setBalanceAmount(Math.max(0, grossAmount - paid).toString())
+    setBalanceAmount(roundCurrency(Math.max(0, grossAmount - paid)).toString())
   }
 
   const handlePaidAmountChange = (value: string) => {
     const normalized = toNonNegative(value)
     setPaidAmount(normalized)
-    const total = parseFloat(totalAmount) || 0
+    const total = getFinalInvoiceTotal()
     const paid = parseFloat(normalized) || 0
     if (paid > total) {
-      alert('Paid amount cannot be more than gross amount')
+      alert('Paid amount cannot be more than final invoice total')
+      setBalanceAmount(total.toString())
+      return
+    }
+    setBalanceAmount(getFinalBalanceAmount(total, normalized).toString())
+  }
+
+  const handleTotalAmountChange = (value: string) => {
+    const normalized = toNonNegative(value)
+    setTotalAmount(normalized)
+
+    const finalTotal = normalized === '' ? roundCurrency(calculateItemAmounts().grossAmount) : roundCurrency(parseFloat(normalized) || 0)
+    const paid = Math.max(0, parseFloat(paidAmount) || 0)
+
+    if (paid > finalTotal) {
+      alert('Paid amount cannot be more than final invoice total')
       setBalanceAmount('0')
       return
     }
-    setBalanceAmount(Math.max(0, total - paid).toString())
+
+    setBalanceAmount(getFinalBalanceAmount(finalTotal, paidAmount).toString())
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -250,12 +282,14 @@ function SpecialPurchaseEditPageContent() {
     }
 
     try {
-      const { netAmount, grossAmount } = calculateItemAmounts()
+      const { netAmount } = calculateItemAmounts()
+      const finalTotal = getFinalInvoiceTotal()
       const paid = parseFloat(paidAmount) || 0
-      if (paid > grossAmount) {
-        alert('Paid amount cannot be more than gross amount')
+      if (paid > finalTotal) {
+        alert('Paid amount cannot be more than final invoice total')
         return
       }
+      const finalBalance = roundCurrency(Math.max(0, finalTotal - paid))
       
       const requestData = {
         id: billId,
@@ -271,10 +305,10 @@ function SpecialPurchaseEditPageContent() {
         rate: Math.max(0, parseFloat(itemData.rate) || 0),
         netAmount,
         otherAmount: Math.max(0, parseFloat(itemData.otherAmount) || 0),
-        grossAmount,
+        grossAmount: finalTotal,
         paidAmount: Math.max(0, paid),
-        balanceAmount: Math.max(0, parseFloat(balanceAmount) || 0),
-        status: parseFloat(balanceAmount) <= 0 ? 'paid' : 'pending'
+        balanceAmount: finalBalance,
+        status: derivePaymentStatus(finalTotal, paid)
       }
 
       const response = await fetch('/api/special-purchase-bills', {
@@ -373,9 +407,14 @@ function SpecialPurchaseEditPageContent() {
                         <SelectItem key={product.id} value={product.id}>
                           {product.name}
                         </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {products.find((product) => product.id === selectedProduct) ? (
+                      <p className="mt-1 text-xs text-slate-600">
+                        Tax rule: {Number(products.find((product) => product.id === selectedProduct)?.gstRate || 0) > 0 ? `${Number(products.find((product) => product.id === selectedProduct)?.gstRate || 0).toFixed(2)}% GST` : 'Non-GST / tax-free'}
+                      </p>
+                    ) : null}
                 </div>
               </div>
               
@@ -426,7 +465,7 @@ function SpecialPurchaseEditPageContent() {
                     />
                   </div>
                   <div>
-                    <Label htmlFor="rate">Rate / Qt</Label>
+                    <Label htmlFor="rate">Average Rate / Qt</Label>
                     <Input
                       id="rate"
                       type="number"
@@ -463,6 +502,15 @@ function SpecialPurchaseEditPageContent() {
                       <span className="font-medium ml-2">₹{calculateItemAmounts().netAmount.toFixed(2)}</span>
                     </div>
                     <div>
+                      <span className="text-gray-600">GST Amount:</span>
+                      <span className="font-medium ml-2">
+                        ₹{calculateTaxBreakdown(
+                          calculateItemAmounts().netAmount,
+                          products.find((product) => product.id === selectedProduct)?.gstRate || 0
+                        ).gstAmount.toFixed(2)}
+                      </span>
+                    </div>
+                    <div>
                       <span className="text-gray-600">Other Amount:</span>
                       <span className="font-medium ml-2">₹{parseFloat(itemData.otherAmount || '0').toFixed(2)}</span>
                     </div>
@@ -484,12 +532,11 @@ function SpecialPurchaseEditPageContent() {
             <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <Label htmlFor="totalAmount">Total Amount</Label>
+                  <Label htmlFor="totalAmount">Final Invoice Total</Label>
                   <Input
                     id="totalAmount"
                     value={totalAmount}
-                    readOnly
-                    className="bg-gray-50"
+                    onChange={(e) => handleTotalAmountChange(e.target.value)}
                   />
                 </div>
                 <div>
@@ -512,6 +559,20 @@ function SpecialPurchaseEditPageContent() {
                     readOnly
                     className="bg-gray-50"
                   />
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-xs text-slate-500">Calculated Gross Amount</p>
+                  <p className="mt-1 text-lg font-semibold text-slate-900">₹{roundCurrency(calculateItemAmounts().grossAmount).toFixed(2)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-xs text-slate-500">Final Invoice Total</p>
+                  <p className="mt-1 text-lg font-semibold text-slate-900">₹{getFinalInvoiceTotal().toFixed(2)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-xs text-slate-500">Current Balance</p>
+                  <p className="mt-1 text-lg font-semibold text-amber-700">₹{(parseFloat(balanceAmount) || 0).toFixed(2)}</p>
                 </div>
               </div>
             </CardContent>

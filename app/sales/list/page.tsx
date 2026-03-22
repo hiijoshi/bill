@@ -8,11 +8,13 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { Eye, Edit, Trash2, Printer, FileText, Download } from 'lucide-react'
+import { Eye, Edit, Trash2, Printer, FileText, Download, MessageCircle } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
+import { openWhatsappChat } from '@/lib/whatsapp'
 
 interface SalesBill {
   id: string
@@ -46,28 +48,77 @@ interface SalesBill {
   }>
 }
 
+interface RawSalesItem {
+  weight?: unknown
+  qty?: unknown
+  bags?: unknown
+  rate?: unknown
+  amount?: unknown
+  product?: {
+    name?: unknown
+  }
+}
+
+interface RawTransportBill {
+  transportName?: unknown
+  lorryNo?: unknown
+  freightAmount?: unknown
+  otherAmount?: unknown
+  insuranceAmount?: unknown
+}
+
+interface RawSalesBill {
+  id?: unknown
+  invoiceNo?: unknown
+  billNo?: unknown
+  invoiceDate?: unknown
+  billDate?: unknown
+  totalAmount?: unknown
+  receivedAmount?: unknown
+  party?: {
+    name?: unknown
+    address?: unknown
+    phone1?: unknown
+  }
+  salesItems?: RawSalesItem[]
+  transportBills?: RawTransportBill[]
+}
+
+type BillViewTab = 'active' | 'paid' | 'all'
+
 const clampNonNegative = (value: number): number => {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return 0
   return Math.max(0, parsed)
 }
 
-function normalizeSalesBill(raw: any): SalesBill {
+function normalizeBillStatus(totalAmount: number, receivedAmount: number): 'paid' | 'partial' | 'unpaid' {
+  if (totalAmount > 0 && receivedAmount >= totalAmount) return 'paid'
+  if (receivedAmount > 0) return 'partial'
+  return 'unpaid'
+}
+
+function normalizeSalesBill(raw: RawSalesBill): SalesBill {
+  const totalAmount = clampNonNegative(Number(raw?.totalAmount || 0))
+  const receivedAmount = clampNonNegative(Number(raw?.receivedAmount || 0))
+  const balanceAmount = Math.max(0, totalAmount - receivedAmount)
+  const status = normalizeBillStatus(totalAmount, receivedAmount)
+
   return {
     id: String(raw?.id || ''),
     invoiceNo: String(raw?.invoiceNo || raw?.billNo || ''),
     invoiceDate: String(raw?.invoiceDate || raw?.billDate || ''),
-    totalAmount: clampNonNegative(Number(raw?.totalAmount || 0)),
-    receivedAmount: clampNonNegative(Number(raw?.receivedAmount || 0)),
-    balanceAmount: clampNonNegative(Number(raw?.balanceAmount || 0)),
-    status: String(raw?.status || 'unpaid'),
+    totalAmount,
+    receivedAmount,
+    balanceAmount,
+    status,
     party: {
       name: String(raw?.party?.name || ''),
       address: String(raw?.party?.address || ''),
       phone1: String(raw?.party?.phone1 || '')
     },
     salesItems: Array.isArray(raw?.salesItems)
-      ? raw.salesItems.map((item: any) => ({
+      ? raw.salesItems.map((item) => ({
           weight: clampNonNegative(Number(item?.weight || item?.qty || 0)),
           qty: clampNonNegative(Number(item?.qty || item?.weight || 0)),
           bags: clampNonNegative(Number(item?.bags || 0)),
@@ -77,7 +128,7 @@ function normalizeSalesBill(raw: any): SalesBill {
         }))
       : [],
     transportBills: Array.isArray(raw?.transportBills)
-      ? raw.transportBills.map((item: any) => ({
+      ? raw.transportBills.map((item) => ({
           transportName: String(item?.transportName || ''),
           lorryNo: String(item?.lorryNo || ''),
           freightAmount: clampNonNegative(Number(item?.freightAmount || 0)),
@@ -147,11 +198,33 @@ function getPrimaryTransport(bill: SalesBill) {
   return bill.transportBills[0] || null
 }
 
+function formatTransportCell(bill: SalesBill): string {
+  const transport = getPrimaryTransport(bill)
+  if (!transport) return '-'
+  const name = String(transport.transportName || '').trim()
+  const lorry = String(transport.lorryNo || '').trim()
+  if (name && lorry) return `${name} / ${lorry}`
+  return name || lorry || '-'
+}
+
+function openWhatsappReminder(bill: SalesBill) {
+  const opened = openWhatsappChat(
+    bill.party.phone1 || '',
+    `Dear ${bill.party.name || 'Customer'}, your outstanding amount is Rs. ${Number(bill.balanceAmount || 0).toFixed(2)} against invoice ${bill.invoiceNo || bill.id}. Please arrange the pending payment at the earliest. Thank you.`
+  )
+
+  if (!opened) {
+    window.alert('Party mobile number is missing')
+    return
+  }
+}
+
 export default function SalesListPage() {
   const router = useRouter()
   const [salesBills, setSalesBills] = useState<SalesBill[]>([])
   const [loading, setLoading] = useState(true)
   const [companyId, setCompanyId] = useState('')
+  const [billView, setBillView] = useState<BillViewTab>('active')
 
   // Filter states
   const [invoiceNumber, setInvoiceNumber] = useState('')
@@ -269,6 +342,22 @@ export default function SalesListPage() {
     return filtered
   }, [salesBills, invoiceNumber, partyName, partyAddress, dateFrom, dateTo, weight, rate, partyContact, payable])
 
+  const paidBills = useMemo(
+    () => filteredBills.filter((bill) => bill.status === 'paid'),
+    [filteredBills]
+  )
+
+  const activeBills = useMemo(
+    () => filteredBills.filter((bill) => bill.status !== 'paid'),
+    [filteredBills]
+  )
+
+  const visibleBills = useMemo(() => {
+    if (billView === 'paid') return paidBills
+    if (billView === 'all') return filteredBills
+    return activeBills
+  }, [activeBills, billView, filteredBills, paidBills])
+
   const clearFilters = () => {
     setInvoiceNumber('')
     setPartyName('')
@@ -383,7 +472,7 @@ export default function SalesListPage() {
   }
 
   const exportToExcel = () => {
-    if (filteredBills.length === 0) {
+    if (visibleBills.length === 0) {
       alert('No sales bills to export')
       return
     }
@@ -405,7 +494,7 @@ export default function SalesListPage() {
         'Balance',
         'Status'
       ],
-      ...filteredBills.map((bill) => {
+      ...visibleBills.map((bill) => {
         const transport = getPrimaryTransport(bill)
         return [
           bill.invoiceNo,
@@ -431,7 +520,7 @@ export default function SalesListPage() {
   }
 
   const exportToPdf = () => {
-    if (filteredBills.length === 0) {
+    if (visibleBills.length === 0) {
       alert('No sales bills to export')
       return
     }
@@ -441,7 +530,7 @@ export default function SalesListPage() {
       return
     }
 
-    const bodyRows = filteredBills
+    const bodyRows = visibleBills
       .map((bill) => {
         const transport = getPrimaryTransport(bill)
         return `<tr>
@@ -493,10 +582,10 @@ export default function SalesListPage() {
     popup.print()
   }
 
-  const totalBills = filteredBills.length
+  const totalBills = visibleBills.length
   const totalAmount = useMemo(
-    () => filteredBills.reduce((sum, bill) => sum + (bill.totalAmount || 0), 0),
-    [filteredBills]
+    () => visibleBills.reduce((sum, bill) => sum + (bill.totalAmount || 0), 0),
+    [visibleBills]
   )
 
   if (loading) {
@@ -623,7 +712,22 @@ export default function SalesListPage() {
         {/* Sales Bills Table */}
         <Card>
           <CardHeader>
-            <CardTitle>Sales Bills</CardTitle>
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <CardTitle>Sales Bills</CardTitle>
+              <Tabs defaultValue="active" className="w-full lg:w-auto">
+                <TabsList className="w-full lg:w-auto">
+                  <TabsTrigger value="active" onClick={() => setBillView('active')}>
+                    Active ({activeBills.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="paid" onClick={() => setBillView('paid')}>
+                    Paid ({paidBills.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="all" onClick={() => setBillView('all')}>
+                    All ({filteredBills.length})
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
@@ -649,68 +753,85 @@ export default function SalesListPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredBills.map((bill) => (
-                    <TableRow key={bill.id}>
-                      <TableCell>{bill.invoiceNo || '-'}</TableCell>
-                      <TableCell>{formatDateSafe(bill.invoiceDate)}</TableCell>
-                      <TableCell>{bill.party.name}</TableCell>
-                      <TableCell>{bill.party.address}</TableCell>
-                      <TableCell>{bill.party.phone1}</TableCell>
-                      <TableCell>{getBillTotalBags(bill).toFixed(2)}</TableCell>
-                      <TableCell>{getBillTotalWeight(bill).toFixed(2)}</TableCell>
-                      <TableCell>{getBillAverageRate(bill).toFixed(2)}</TableCell>
-                      <TableCell>₹{Number(getPrimaryTransport(bill)?.otherAmount || 0).toFixed(2)}</TableCell>
-                      <TableCell>₹{Number(getPrimaryTransport(bill)?.insuranceAmount || 0).toFixed(2)}</TableCell>
-                      <TableCell>
-                        {getPrimaryTransport(bill)
-                          ? `${getPrimaryTransport(bill)?.transportName || '-'} / ${getPrimaryTransport(bill)?.lorryNo || '-'}`
-                          : '-'}
-                      </TableCell>
-                      <TableCell>₹{(bill.totalAmount || 0).toFixed(2)}</TableCell>
-                      <TableCell>₹{(bill.receivedAmount || 0).toFixed(2)}</TableCell>
-                      <TableCell>₹{(bill.balanceAmount || 0).toFixed(2)}</TableCell>
-                      <TableCell>
-                        <Badge variant={
-                          bill.status === 'paid' ? 'default' :
-                          bill.status === 'partial' ? 'secondary' : 'destructive'
-                        }>
-                          {bill.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex gap-1">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleView(bill.id)}
-                          >
-                            <Eye className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleEdit(bill.id)}
-                          >
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleDelete(bill.id)}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handlePrint(bill.id)}
-                          >
-                            <Printer className="w-4 h-4" />
-                          </Button>
-                        </div>
+                  {visibleBills.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={16} className="py-8 text-center text-gray-500">
+                        No bills found in this tab.
                       </TableCell>
                     </TableRow>
-                  ))}
+                  ) : (
+                    visibleBills.map((bill) => (
+                      <TableRow key={bill.id}>
+                        <TableCell>{bill.invoiceNo || '-'}</TableCell>
+                        <TableCell>{formatDateSafe(bill.invoiceDate)}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <span>{bill.party.name}</span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => openWhatsappReminder(bill)}
+                              disabled={!bill.party.phone1}
+                              title="Open WhatsApp reminder"
+                            >
+                              <MessageCircle className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                        <TableCell>{bill.party.address}</TableCell>
+                        <TableCell>{bill.party.phone1}</TableCell>
+                        <TableCell>{getBillTotalBags(bill).toFixed(2)}</TableCell>
+                        <TableCell>{getBillTotalWeight(bill).toFixed(2)}</TableCell>
+                        <TableCell>{getBillAverageRate(bill).toFixed(2)}</TableCell>
+                        <TableCell>₹{Number(getPrimaryTransport(bill)?.otherAmount || 0).toFixed(2)}</TableCell>
+                        <TableCell>₹{Number(getPrimaryTransport(bill)?.insuranceAmount || 0).toFixed(2)}</TableCell>
+                        <TableCell>{formatTransportCell(bill)}</TableCell>
+                        <TableCell>₹{(bill.totalAmount || 0).toFixed(2)}</TableCell>
+                        <TableCell>₹{(bill.receivedAmount || 0).toFixed(2)}</TableCell>
+                        <TableCell>₹{(bill.balanceAmount || 0).toFixed(2)}</TableCell>
+                        <TableCell>
+                          <Badge variant={
+                            bill.status === 'paid' ? 'default' :
+                            bill.status === 'partial' ? 'secondary' : 'destructive'
+                          }>
+                            {bill.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleView(bill.id)}
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleEdit(bill.id)}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleDelete(bill.id)}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handlePrint(bill.id)}
+                            >
+                              <Printer className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </div>

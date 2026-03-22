@@ -12,6 +12,7 @@ import {
 } from '@/lib/api-security'
 import { normalizeTenDigitPhone, parseNonNegativeNumber } from '@/lib/field-validation'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
+import { calculateTaxBreakdown } from '@/lib/billing-calculations'
 
 type PaymentStatus = 'unpaid' | 'partial' | 'paid'
 
@@ -31,6 +32,7 @@ const purchaseCreateSchema = z.object({
   weight: z.union([z.string(), z.number()]),
   rate: z.union([z.string(), z.number()]),
   payableAmount: z.union([z.string(), z.number()]).optional(),
+  totalAmount: z.union([z.string(), z.number()]).optional(),
   paidAmount: z.union([z.string(), z.number()]).optional(),
   balance: z.union([z.string(), z.number()]).optional(),
   paymentStatus: z.string().optional(),
@@ -223,16 +225,8 @@ export async function POST(request: NextRequest) {
     const parsedPayable = parseRequiredNonNegative(payableAmount ?? fallbackPayable, 'Payable amount')
     if (parsedPayable instanceof NextResponse) return parsedPayable
 
-    const parsedPaid = parseNonNegativeNumber(paidAmount) ?? 0
-    if (parsedPaid > parsedPayable) {
-      return NextResponse.json({ error: 'Paid amount cannot exceed payable amount' }, { status: 400 })
-    }
-
-    const parsedBalance = Math.max(0, parsedPayable - parsedPaid)
     const parsedKgEquivalent = parseNonNegativeNumber(kgEquivalent)
     const parsedTotalWeightQt = parseNonNegativeNumber(totalWeightQt) ?? parsedWeight
-
-    const finalStatus = deriveStatus(parsedPaid, parsedPayable)
     const auth = getRequestAuthContext(request)
     const userId = auth?.userId || 'system'
 
@@ -244,7 +238,7 @@ export async function POST(request: NextRequest) {
         }),
         tx.product.findFirst({
           where: { id: productId, companyId },
-          select: { id: true, name: true }
+          select: { id: true, name: true, gstRate: true }
         })
       ])
 
@@ -284,6 +278,16 @@ export async function POST(request: NextRequest) {
         })
       }
 
+      const tax = calculateTaxBreakdown(parsedPayable, product.gstRate)
+      const parsedFinalTotal = parseNonNegativeNumber(body.totalAmount) ?? tax.lineTotal
+      const parsedPaid = parseNonNegativeNumber(paidAmount) ?? 0
+      if (parsedPaid > parsedFinalTotal) {
+        throw new Error('Paid amount cannot exceed total amount')
+      }
+
+      const parsedBalance = Math.max(0, parsedFinalTotal - parsedPaid)
+      const finalStatus = deriveStatus(parsedPaid, parsedFinalTotal)
+
       const createdBill = await tx.purchaseBill.create({
         data: {
           companyId,
@@ -296,7 +300,9 @@ export async function POST(request: NextRequest) {
           krashakAnubandhSnapshot: krashakAnubandhNumber || null,
           companyNameSnapshot: company.name,
           mandiAccountNumberSnapshot: company.mandiAccountNumber || null,
-          totalAmount: parsedPayable,
+          subTotalAmount: tax.taxableAmount,
+          gstAmount: tax.gstAmount,
+          totalAmount: parsedFinalTotal,
           paidAmount: parsedPaid,
           balanceAmount: parsedBalance,
           status: finalStatus,
@@ -314,6 +320,10 @@ export async function POST(request: NextRequest) {
           hammali: parsedHammali,
           bags: noOfBags ? parseInt(String(noOfBags), 10) : null,
           markaNo: markaNumber || null,
+          taxableAmount: tax.taxableAmount,
+          gstRateSnapshot: tax.gstRate,
+          gstAmount: tax.gstAmount,
+          lineTotal: tax.lineTotal,
           amount: parsedPayable,
           userUnitName: userUnitName || null,
           kgEquivalent: parsedKgEquivalent,
@@ -339,7 +349,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, id: purchaseBill.id, purchaseBill })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Internal server error'
-    const status = message.includes('not found') ? 404 : 500
+    const status = message.includes('cannot exceed') ? 400 : message.includes('not found') ? 404 : 500
     return NextResponse.json(
       {
         error: message
@@ -582,16 +592,8 @@ export async function PUT(request: NextRequest) {
     const parsedPayable = parseRequiredNonNegative(payableAmount ?? fallbackPayable, 'Payable amount')
     if (parsedPayable instanceof NextResponse) return parsedPayable
 
-    const parsedPaid = parseNonNegativeNumber(paidAmount) ?? 0
-    if (parsedPaid > parsedPayable) {
-      return NextResponse.json({ error: 'Paid amount cannot exceed payable amount' }, { status: 400 })
-    }
-
-    const parsedBalance = Math.max(0, parsedPayable - parsedPaid)
     const parsedKgEquivalent = parseNonNegativeNumber(kgEquivalent)
     const parsedTotalWeightQt = parseNonNegativeNumber(totalWeightQt) ?? parsedWeight
-
-    const finalStatus = deriveStatus(parsedPaid, parsedPayable)
 
     const purchaseBill = await prisma.$transaction(async (tx) => {
       const existingBill = await tx.purchaseBill.findFirst({
@@ -612,7 +614,7 @@ export async function PUT(request: NextRequest) {
         }),
         tx.product.findFirst({
           where: { id: productId, companyId },
-          select: { id: true, name: true }
+          select: { id: true, name: true, gstRate: true }
         })
       ])
 
@@ -652,6 +654,16 @@ export async function PUT(request: NextRequest) {
         })
       }
 
+    const tax = calculateTaxBreakdown(parsedPayable, product.gstRate)
+    const parsedFinalTotal = parseNonNegativeNumber(body.totalAmount) ?? tax.lineTotal
+    const parsedPaid = parseNonNegativeNumber(paidAmount) ?? 0
+    if (parsedPaid > parsedFinalTotal) {
+      throw new Error('Paid amount cannot exceed total amount')
+    }
+
+    const parsedBalance = Math.max(0, parsedFinalTotal - parsedPaid)
+    const finalStatus = deriveStatus(parsedPaid, parsedFinalTotal)
+
       const updatedBill = await tx.purchaseBill.update({
         where: { id },
         data: {
@@ -665,7 +677,9 @@ export async function PUT(request: NextRequest) {
           krashakAnubandhSnapshot: krashakAnubandhNumber || null,
           companyNameSnapshot: company.name,
           mandiAccountNumberSnapshot: company.mandiAccountNumber || null,
-          totalAmount: parsedPayable,
+          subTotalAmount: tax.taxableAmount,
+          gstAmount: tax.gstAmount,
+          totalAmount: parsedFinalTotal,
           paidAmount: parsedPaid,
           balanceAmount: parsedBalance,
           status: finalStatus
@@ -684,6 +698,10 @@ export async function PUT(request: NextRequest) {
             hammali: parsedHammali,
             bags: noOfBags ? parseInt(String(noOfBags), 10) : null,
             markaNo: markaNumber || null,
+            taxableAmount: tax.taxableAmount,
+            gstRateSnapshot: tax.gstRate,
+            gstAmount: tax.gstAmount,
+            lineTotal: tax.lineTotal,
             amount: parsedPayable,
             userUnitName: userUnitName || null,
             kgEquivalent: parsedKgEquivalent,
@@ -701,6 +719,10 @@ export async function PUT(request: NextRequest) {
             hammali: parsedHammali,
             bags: noOfBags ? parseInt(String(noOfBags), 10) : null,
             markaNo: markaNumber || null,
+            taxableAmount: tax.taxableAmount,
+            gstRateSnapshot: tax.gstRate,
+            gstAmount: tax.gstAmount,
+            lineTotal: tax.lineTotal,
             amount: parsedPayable,
             userUnitName: userUnitName || null,
             kgEquivalent: parsedKgEquivalent,
@@ -746,7 +768,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ success: true, id: purchaseBill.id, purchaseBill })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Internal server error'
-    const status = message.includes('not found') ? 404 : 500
+    const status = message.includes('cannot exceed') ? 400 : message.includes('not found') ? 404 : 500
     return NextResponse.json(
       {
         error: message

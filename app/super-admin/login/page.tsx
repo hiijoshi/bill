@@ -1,17 +1,46 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Shield, User, Lock, AlertCircle } from 'lucide-react'
+import { markSuperAdminTabUnlocked } from '@/lib/super-admin-tab'
 
 export default function SuperAdminLogin() {
+  return (
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-gray-50">Loading...</div>}>
+      <SuperAdminLoginContent />
+    </Suspense>
+  )
+}
+
+function SuperAdminLoginContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [userId, setUserId] = useState('')
+  const [password, setPassword] = useState('')
+  const [secondSecret, setSecondSecret] = useState('')
+
+  useEffect(() => {
+    const queryUserId = searchParams.get('userId')?.trim() || ''
+    const hasPasswordParam = searchParams.has('password')
+
+    if (hasPasswordParam) {
+      const safeParams = new URLSearchParams()
+      if (queryUserId) safeParams.set('userId', queryUserId)
+      const nextUrl = safeParams.toString() ? `/super-admin/login?${safeParams.toString()}` : '/super-admin/login'
+      router.replace(nextUrl)
+    }
+
+    setUserId(queryUserId)
+    setPassword('')
+    setSecondSecret('')
+  }, [router, searchParams])
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -19,10 +48,6 @@ export default function SuperAdminLogin() {
     setLoading(true)
 
     try {
-      const formData = new FormData(e.currentTarget)
-      const userId = (formData.get('userId') as string)?.trim()
-      const password = formData.get('password') as string
-
       if (!userId || !password) {
         setError('User ID and password are required')
         return
@@ -31,7 +56,7 @@ export default function SuperAdminLogin() {
       const response = await fetch('/api/super-admin/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, password })
+        body: JSON.stringify({ userId, password, secondSecret })
       })
 
       if (!response.ok) {
@@ -39,9 +64,9 @@ export default function SuperAdminLogin() {
         throw new Error(err.error || 'Login failed')
       }
 
+      markSuperAdminTabUnlocked()
       router.push('/super-admin/crud')
     } catch (err) {
-      console.error('Super admin login error:', err)
       setError(err instanceof Error ? err.message : 'Login failed')
     } finally {
       setLoading(false)
@@ -72,10 +97,13 @@ export default function SuperAdminLogin() {
                     id="userId"
                     name="userId"
                     type="text"
+                    autoComplete="username"
                     required
                     className="pl-10"
                     placeholder="Enter super admin user ID"
                     disabled={loading}
+                    value={userId}
+                    onChange={(event) => setUserId(event.target.value)}
                   />
                 </div>
               </div>
@@ -88,10 +116,30 @@ export default function SuperAdminLogin() {
                     id="password"
                     name="password"
                     type="password"
+                    autoComplete="current-password"
                     required
                     className="pl-10"
                     placeholder="Enter password"
                     disabled={loading}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="secondSecret">Second Secret</Label>
+                <div className="relative">
+                  <Shield className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                  <Input
+                    id="secondSecret"
+                    name="secondSecret"
+                    type="password"
+                    className="pl-10"
+                    placeholder="Optional extra secret"
+                    disabled={loading}
+                    value={secondSecret}
+                    onChange={(event) => setSecondSecret(event.target.value)}
                   />
                 </div>
               </div>

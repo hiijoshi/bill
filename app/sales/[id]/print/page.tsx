@@ -1,8 +1,8 @@
-import { cookies } from 'next/headers'
+import { Suspense } from 'react'
 import { prisma } from '@/lib/prisma'
-import { verifyToken } from '@/lib/auth'
 import { normalizeAppRole } from '@/lib/api-security'
 import { mapSalesBillToPrintData } from '@/lib/sales-print'
+import { getSession } from '@/lib/session'
 import SalesPrintClient from './SalesPrintClient'
 
 type PageProps = {
@@ -24,7 +24,6 @@ async function canViewSalesBill(user: {
   if (role === 'trader_admin') {
     if (!billTraderId || user.traderId !== billTraderId) return false
   } else {
-    if (!user.companyId || user.companyId !== billCompanyId) return false
     if (!billTraderId || user.traderId !== billTraderId) return false
   }
 
@@ -57,15 +56,9 @@ async function canViewSalesBill(user: {
 export default async function SalesPrintPage({ params }: PageProps) {
   const { id } = await params
 
-  const cookieStore = await cookies()
-  const token = cookieStore.get('auth-token')?.value
-  if (!token) {
-    return <div className="p-6 text-red-600">Authentication required</div>
-  }
-
-  const payload = verifyToken(token)
+  const payload = await getSession()
   if (!payload?.userId || !payload?.traderId) {
-    return <div className="p-6 text-red-600">Invalid session</div>
+    return <div className="p-6 text-red-600">Authentication required</div>
   }
 
   const user = await prisma.user.findFirst({
@@ -101,7 +94,7 @@ export default async function SalesPrintPage({ params }: PageProps) {
     return <div className="p-6 text-red-600">Invalid session user</div>
   }
 
-  if (user.locked || user.trader?.locked || user.trader?.deletedAt || user.company?.locked || user.company?.deletedAt) {
+  if (user.locked || user.trader?.locked || user.trader?.deletedAt) {
     return <div className="p-6 text-red-600">Account is locked or inactive</div>
   }
 
@@ -149,5 +142,9 @@ export default async function SalesPrintPage({ params }: PageProps) {
   }
 
   const printData = mapSalesBillToPrintData(bill)
-  return <SalesPrintClient printData={printData} />
+  return (
+    <Suspense fallback={<div className="p-6">Loading print preview...</div>}>
+      <SalesPrintClient printData={printData} />
+    </Suspense>
+  )
 }

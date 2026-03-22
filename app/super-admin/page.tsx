@@ -4,7 +4,7 @@ import { prisma } from '@/lib/prisma'
 import SuperAdminOverviewClient from '@/app/super-admin/components/SuperAdminOverviewClient'
 
 export default async function SuperAdminDashboardPage() {
-  const session = await getSession()
+  const session = await getSession('super_admin')
   if (!session || session.role?.toLowerCase().replace(/\s+/g, '_') !== 'super_admin') {
     redirect('/super-admin/login')
   }
@@ -12,7 +12,12 @@ export default async function SuperAdminDashboardPage() {
   const [traders, companies, users] = await Promise.all([
     prisma.trader.count({ where: { deletedAt: null } }),
     prisma.company.count({ where: { deletedAt: null } }),
-    prisma.user.count({ where: { deletedAt: null } })
+    prisma.user.count({
+      where: {
+        deletedAt: null,
+        NOT: [{ role: 'SUPER_ADMIN' }, { role: 'super_admin' }]
+      }
+    })
   ])
 
   return (

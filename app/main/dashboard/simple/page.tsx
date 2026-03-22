@@ -1,8 +1,7 @@
 'use client'
 
 import { useState, Suspense } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
-import { Button } from '@/components/ui/button'
+import { useSearchParams } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { ShoppingCart, Receipt, Package, CreditCard, FileText } from 'lucide-react'
@@ -16,7 +15,6 @@ export default function SimpleDashboardPage() {
 }
 
 function SimpleDashboardPageContent() {
-  const router = useRouter()
   const searchParams = useSearchParams()
   const companyId = searchParams.get('companyId') || ''
   const [activeTab, setActiveTab] = useState('purchase')

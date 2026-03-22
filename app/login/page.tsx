@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -9,9 +9,46 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Building2, User, Lock, AlertCircle } from 'lucide-react'
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-gray-50">Loading...</div>}>
+      <LoginPageContent />
+    </Suspense>
+  )
+}
+
+function LoginPageContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [traderId, setTraderId] = useState('')
+  const [userId, setUserId] = useState('')
+  const [password, setPassword] = useState('')
+
+  useEffect(() => {
+    const queryTraderId = searchParams.get('traderId')?.trim() || ''
+    const queryUserId = searchParams.get('userId')?.trim() || ''
+    const hasPasswordParam = searchParams.has('password')
+
+    if (queryUserId.toLowerCase() === 'superadmin') {
+      const nextParams = new URLSearchParams()
+      nextParams.set('userId', queryUserId)
+      router.replace(`/super-admin/login?${nextParams.toString()}`)
+      return
+    }
+
+    if (hasPasswordParam) {
+      const safeParams = new URLSearchParams()
+      if (queryTraderId) safeParams.set('traderId', queryTraderId)
+      if (queryUserId) safeParams.set('userId', queryUserId)
+      const nextUrl = safeParams.toString() ? `/login?${safeParams.toString()}` : '/login'
+      router.replace(nextUrl)
+    }
+
+    setTraderId(queryTraderId)
+    setUserId(queryUserId)
+    setPassword('')
+  }, [router, searchParams])
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -19,11 +56,6 @@ export default function LoginPage() {
     setLoading(true)
 
     try {
-      const formData = new FormData(e.currentTarget)
-      const traderId = formData.get('traderId') as string
-      const userId = formData.get('userId') as string
-      const password = formData.get('password') as string
-
       // Validate trader ID is not empty
       if (!traderId || traderId.trim() === '') {
         setError('Trader ID is required')
@@ -99,10 +131,13 @@ export default function LoginPage() {
                     id="traderId"
                     name="traderId"
                     type="text"
+                    autoComplete="organization"
                     required
                     className="pl-10"
                     placeholder="Enter your trader ID"
                     disabled={loading}
+                    value={traderId}
+                    onChange={(event) => setTraderId(event.target.value)}
                   />
                 </div>
               </div>
@@ -116,10 +151,13 @@ export default function LoginPage() {
                     id="userId"
                     name="userId"
                     type="text"
+                    autoComplete="username"
                     required
                     className="pl-10"
                     placeholder="Enter your user ID"
                     disabled={loading}
+                    value={userId}
+                    onChange={(event) => setUserId(event.target.value)}
                   />
                 </div>
               </div>
@@ -133,10 +171,13 @@ export default function LoginPage() {
                     id="password"
                     name="password"
                     type="password"
+                    autoComplete="current-password"
                     required
                     className="pl-10"
                     placeholder="Enter your password"
                     disabled={loading}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
                   />
                 </div>
               </div>

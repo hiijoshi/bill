@@ -4,6 +4,8 @@ import { validateStockBeforeSale } from '@/lib/stock-automation'
 import { z } from 'zod'
 import { ensureCompanyAccess, getRequestAuthContext, normalizeId, parseJsonWithSchema } from '@/lib/api-security'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
+import { calculateTaxBreakdown, calculateTotalsBreakdown, normalizeNonNegative } from '@/lib/billing-calculations'
+import { getPartyCreditSnapshot } from '@/lib/party-credit'
 
 const salesItemSchema = z.object({
   productId: z.string().min(1),
@@ -42,7 +44,8 @@ const salesCreateSchema = z.object({
   totalAmount: z.union([z.string(), z.number()]).optional(),
   receivedAmount: z.union([z.string(), z.number()]).optional(),
   balanceAmount: z.union([z.string(), z.number()]).optional(),
-  status: z.string().optional()
+  status: z.string().optional(),
+  allowRiskOverride: z.boolean().optional()
 })
 
 const salesUpdateSchema = salesCreateSchema.extend({
@@ -104,8 +107,87 @@ function normalizeSalesItems(items: Array<z.infer<typeof salesItemSchema>>) {
   })
 }
 
-function sumItemsAmount(items: Array<{ amount: number }>): number {
-  return Number(items.reduce((sum, item) => sum + toNonNegativeNumber(item.amount, 0), 0).toFixed(2))
+async function enrichSalesItemsWithTax(
+  companyId: string,
+  items: Array<{ productId: string; weight: number; rate: number; bags: number | null; amount: number }>
+) {
+  const productIds = Array.from(new Set(items.map((item) => item.productId)))
+  const [products, salesItemMasters] = await Promise.all([
+    prisma.product.findMany({
+      where: {
+        companyId,
+        id: { in: productIds }
+      },
+      select: {
+        id: true,
+        gstRate: true
+      }
+    }),
+    prisma.salesItemMaster.findMany({
+      where: {
+        companyId,
+        productId: { in: productIds }
+      },
+      select: {
+        productId: true,
+        gstRate: true
+      }
+    })
+  ])
+
+  const productMap = new Map(products.map((product) => [product.id, product]))
+  const salesItemMasterMap = new Map(salesItemMasters.map((item) => [item.productId, item]))
+
+  return items.map((item) => {
+    const product = productMap.get(item.productId)
+    const salesItemMaster = salesItemMasterMap.get(item.productId)
+    if (!product) {
+      throw new Error('Selected product not found')
+    }
+
+    const tax = calculateTaxBreakdown(item.amount, salesItemMaster?.gstRate ?? product.gstRate)
+    return {
+      ...item,
+      taxableAmount: tax.taxableAmount,
+      gstRateSnapshot: tax.gstRate,
+      gstAmount: tax.gstAmount,
+      lineTotal: tax.lineTotal
+    }
+  })
+}
+
+async function assertPartyCreditRisk(args: {
+  companyId: string
+  partyId: string
+  pendingSaleAmount: number
+  referenceDate: Date
+  excludeBillId?: string | null
+  allowRiskOverride?: boolean
+}) {
+  const snapshot = await getPartyCreditSnapshot({
+    companyId: args.companyId,
+    partyId: args.partyId,
+    pendingSaleAmount: args.pendingSaleAmount,
+    referenceDate: args.referenceDate,
+    excludeBillId: args.excludeBillId,
+  })
+
+  if (!snapshot) {
+    throw new Error('Selected party not found')
+  }
+
+  if (snapshot.warning && !args.allowRiskOverride) {
+    return NextResponse.json(
+      {
+        error: 'Buyer limit warning',
+        message: 'Party has overdue balance or exceeds the configured credit limit.',
+        creditRisk: snapshot,
+      },
+      { status: 409 }
+    )
+  }
+
+  return null
 }
 
 function sanitizeSalesBill<T extends {
@@ -274,9 +356,9 @@ export async function POST(request: NextRequest) {
     if (denied) return denied
 
     const normalizedItems = normalizeSalesItems(body.salesItems)
-    const invalidItem = normalizedItems.find((item) => item.weight <= 0 || item.rate <= 0 || !item.productId)
+    const invalidItem = normalizedItems.find((item) => item.weight <= 0 || !item.productId)
     if (invalidItem) {
-      return NextResponse.json({ error: 'Each sales item must have product, weight > 0 and rate > 0' }, { status: 400 })
+      return NextResponse.json({ error: 'Each sales item must have product and weight > 0' }, { status: 400 })
     }
 
     const stockValidation = await validateStockBeforeSale(
@@ -307,14 +389,18 @@ export async function POST(request: NextRequest) {
     })
 
     const transportData = normalizeTransportBillData(body.transportBill)
-    const itemsTotal = sumItemsAmount(normalizedItems)
-    const defaultTotalFromItems = Number(
-      (itemsTotal + toNonNegativeNumber(transportData?.otherAmount, 0) + toNonNegativeNumber(transportData?.insuranceAmount, 0)).toFixed(2)
-    )
+    const taxedItems = await enrichSalesItemsWithTax(companyId, normalizedItems)
+    const totals = calculateTotalsBreakdown({
+      taxableAmounts: taxedItems.map((item) => item.taxableAmount),
+      gstAmounts: taxedItems.map((item) => item.gstAmount),
+      freightAmount: transportData?.freightAmount,
+      otherAmount: transportData?.otherAmount,
+      insuranceAmount: transportData?.insuranceAmount
+    })
 
     const nextTotal = body.totalAmount !== undefined
-      ? toNonNegativeNumber(body.totalAmount, defaultTotalFromItems)
-      : defaultTotalFromItems
+      ? toNonNegativeNumber(body.totalAmount, totals.grandTotal)
+      : totals.grandTotal
 
     const nextReceived = body.receivedAmount !== undefined ? toNonNegativeNumber(body.receivedAmount, 0) : 0
     if (nextReceived > nextTotal) {
@@ -329,6 +415,15 @@ export async function POST(request: NextRequest) {
     const billDateValue = safeToDate(body.invoiceDate || body.billDate)
     const billNo = normalizeBillNo(body.invoiceNo, body.billNo)
 
+    const riskDenied = await assertPartyCreditRisk({
+      companyId,
+      partyId: party.id,
+      pendingSaleAmount: nextBalance,
+      referenceDate: billDateValue,
+      allowRiskOverride: body.allowRiskOverride === true
+    })
+    if (riskDenied) return riskDenied
+
     const auth = getRequestAuthContext(request)
     const userId = auth?.userId || 'system'
 
@@ -339,6 +434,8 @@ export async function POST(request: NextRequest) {
           billNo,
           billDate: billDateValue,
           partyId: party.id,
+          subTotalAmount: totals.subTotalAmount,
+          gstAmount: totals.gstAmount,
           totalAmount: nextTotal,
           receivedAmount: nextReceived,
           balanceAmount: nextBalance,
@@ -347,7 +444,7 @@ export async function POST(request: NextRequest) {
         }
       })
 
-      for (const item of normalizedItems) {
+      for (const item of taxedItems) {
         await tx.salesItem.create({
           data: {
             salesBillId: salesBill.id,
@@ -355,6 +452,10 @@ export async function POST(request: NextRequest) {
             weight: item.weight,
             bags: item.bags,
             rate: item.rate,
+            taxableAmount: item.taxableAmount,
+            gstRateSnapshot: item.gstRateSnapshot,
+            gstAmount: item.gstAmount,
+            lineTotal: item.lineTotal,
             amount: item.amount
           }
         })
@@ -540,9 +641,9 @@ export async function PUT(request: NextRequest) {
     const normalizedItems = hasSalesItems ? normalizeSalesItems(body.salesItems) : null
 
     if (normalizedItems) {
-      const invalidItem = normalizedItems.find((item) => item.weight <= 0 || item.rate <= 0 || !item.productId)
+      const invalidItem = normalizedItems.find((item) => item.weight <= 0 || !item.productId)
       if (invalidItem) {
-        return NextResponse.json({ error: 'Each sales item must have product, weight > 0 and rate > 0' }, { status: 400 })
+        return NextResponse.json({ error: 'Each sales item must have product and weight > 0' }, { status: 400 })
       }
     }
 
@@ -564,15 +665,28 @@ export async function PUT(request: NextRequest) {
         })
       : existing.party
 
-    const itemsTotal = normalizedItems ? sumItemsAmount(normalizedItems) : toNonNegativeNumber(existing.totalAmount, 0)
-    const defaultTotalFromItems = Number(
-      (itemsTotal + toNonNegativeNumber(transportData?.otherAmount, 0) + toNonNegativeNumber(transportData?.insuranceAmount, 0)).toFixed(2)
-    )
+    const taxedItems = normalizedItems ? await enrichSalesItemsWithTax(companyId, normalizedItems) : null
+    const totals = taxedItems
+      ? calculateTotalsBreakdown({
+          taxableAmounts: taxedItems.map((item) => item.taxableAmount),
+          gstAmounts: taxedItems.map((item) => item.gstAmount),
+          freightAmount: transportData?.freightAmount ?? existing.transportBills[0]?.freightAmount,
+          otherAmount: transportData?.otherAmount ?? existing.transportBills[0]?.otherAmount,
+          insuranceAmount: transportData?.insuranceAmount ?? existing.transportBills[0]?.insuranceAmount
+        })
+      : {
+          subTotalAmount: normalizeNonNegative((existing as { subTotalAmount?: number }).subTotalAmount),
+          gstAmount: normalizeNonNegative((existing as { gstAmount?: number }).gstAmount),
+          freightAmount: normalizeNonNegative(existing.transportBills[0]?.freightAmount),
+          otherAmount: normalizeNonNegative(existing.transportBills[0]?.otherAmount),
+          insuranceAmount: normalizeNonNegative(existing.transportBills[0]?.insuranceAmount),
+          grandTotal: toNonNegativeNumber(existing.totalAmount, 0)
+        }
 
     const nextTotal = body.totalAmount !== undefined
-      ? toNonNegativeNumber(body.totalAmount, defaultTotalFromItems)
+      ? toNonNegativeNumber(body.totalAmount, totals.grandTotal)
       : normalizedItems
-        ? defaultTotalFromItems
+        ? totals.grandTotal
         : toNonNegativeNumber(existing.totalAmount, 0)
 
     const nextReceived = body.receivedAmount !== undefined
@@ -592,6 +706,16 @@ export async function PUT(request: NextRequest) {
     const hasBillNoInput = String(body.invoiceNo || '').trim() || String(body.billNo || '').trim()
     const nextBillNo = hasBillNoInput ? normalizeBillNo(body.invoiceNo, body.billNo) : existing.billNo
 
+    const riskDenied = await assertPartyCreditRisk({
+      companyId,
+      partyId: party.id,
+      pendingSaleAmount: nextBalance,
+      referenceDate: nextBillDate,
+      excludeBillId: existing.id,
+      allowRiskOverride: body.allowRiskOverride === true
+    })
+    if (riskDenied) return riskDenied
+
     const updated = await prisma.$transaction(async (tx) => {
       const bill = await tx.salesBill.update({
         where: { id: existing.id },
@@ -599,6 +723,8 @@ export async function PUT(request: NextRequest) {
           billNo: nextBillNo,
           billDate: nextBillDate,
           partyId: party.id,
+          subTotalAmount: totals.subTotalAmount,
+          gstAmount: totals.gstAmount,
           totalAmount: nextTotal,
           receivedAmount: nextReceived,
           balanceAmount: nextBalance,
@@ -607,6 +733,7 @@ export async function PUT(request: NextRequest) {
       })
 
       if (normalizedItems) {
+        const nextItems = taxedItems || []
         await tx.salesItem.deleteMany({ where: { salesBillId: existing.id } })
         await tx.stockLedger.deleteMany({
           where: {
@@ -616,7 +743,7 @@ export async function PUT(request: NextRequest) {
           }
         })
 
-        for (const item of normalizedItems) {
+        for (const item of nextItems) {
           await tx.salesItem.create({
             data: {
               salesBillId: existing.id,
@@ -624,6 +751,10 @@ export async function PUT(request: NextRequest) {
               weight: item.weight,
               bags: item.bags,
               rate: item.rate,
+              taxableAmount: item.taxableAmount,
+              gstRateSnapshot: item.gstRateSnapshot,
+              gstAmount: item.gstAmount,
+              lineTotal: item.lineTotal,
               amount: item.amount
             }
           })

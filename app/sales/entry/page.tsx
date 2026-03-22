@@ -1,15 +1,18 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, Trash2, Search } from 'lucide-react'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { AlertTriangle, MessageCircle, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
+import { openWhatsappChat } from '@/lib/whatsapp'
 
 interface Party {
   id: string
@@ -18,6 +21,8 @@ interface Party {
   phone1: string
   phone2: string
   type: string
+  creditLimit?: number | null
+  creditDays?: number | null
 }
 
 interface SalesItem {
@@ -30,6 +35,9 @@ interface SalesItem {
   bags: number
   rate: number
   amount: number
+  gstRate: number
+  gstAmount: number
+  lineTotal: number
   discount: number
 }
 
@@ -37,15 +45,47 @@ interface SalesItemMasterOption {
   id: string
   productId: string
   salesItemName: string
+  gstRate?: number | null
   product?: {
     name?: string
   }
 }
 
+interface PartyRiskResponse {
+  party?: {
+    id?: string
+    name?: string
+    phone1?: string
+    creditLimit?: number | null
+    creditDays?: number | null
+  }
+  outstandingAmount?: number
+  overdueAmount?: number
+  pendingSaleAmount?: number
+  projectedOutstanding?: number
+  remainingLimit?: number | null
+  hasOverdue?: boolean
+  isOverLimit?: boolean
+}
+
+type ItemPricingMode = 'rate' | 'amount'
+
+const createEmptyCurrentItem = () => ({
+  salesItemId: '',
+  noOfBags: '',
+  weightPerBag: '',
+  rate: '',
+  amount: '',
+  pricingMode: 'rate' as ItemPricingMode
+})
+
 interface ExistingSalesBill {
   id: string
   billNo: string
   billDate: string
+  subTotalAmount?: number
+  gstAmount?: number
+  totalAmount?: number
   partyId: string
   party?: {
     id: string
@@ -56,6 +96,9 @@ interface ExistingSalesBill {
   salesItems?: Array<{
     id: string
     productId: string
+    gstRateSnapshot?: number
+    gstAmount?: number
+    lineTotal?: number
     product?: {
       name?: string
     }
@@ -76,6 +119,48 @@ interface ExistingSalesBill {
   }>
 }
 
+interface TransportOption {
+  id: string
+  transporterName?: string
+  vehicleNumber?: string
+}
+
+interface SalesBillSaveResponse {
+  salesBillId?: string
+  salesBill?: {
+    id?: string
+  }
+  error?: string
+  message?: string
+}
+
+async function parseApiJson<T>(response: Response, fallback: T, context: string): Promise<T> {
+  const raw = await response.text()
+  if (!raw) return fallback
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    console.error(`${context}: expected JSON but got non-JSON response`, {
+      status: response.status,
+      preview: raw.slice(0, 120)
+    })
+    return fallback
+  }
+}
+
+function formatRemainingLimitText(value: number | null): string {
+  if (typeof value !== 'number') return 'Unlimited'
+
+  const normalized = roundCurrency(value)
+  const amountText = `₹${Math.abs(normalized).toFixed(2)}`
+
+  if (normalized < 0) {
+    return `Over by ${amountText}`
+  }
+
+  return amountText
+}
+
 export default function SalesEntryPage() {
   const router = useRouter()
   const itemIdSequence = useRef(0)
@@ -87,13 +172,14 @@ export default function SalesEntryPage() {
 
   // Transport search state
   const [transportSearchTerm, setTransportSearchTerm] = useState('')
-  const [transports, setTransports] = useState<any[]>([])
-  const [filteredTransports, setFilteredTransports] = useState<any[]>([])
+  const [transports, setTransports] = useState<TransportOption[]>([])
+  const [filteredTransports, setFilteredTransports] = useState<TransportOption[]>([])
   const [showTransportDropdown, setShowTransportDropdown] = useState(false)
 
   // Sales Items state
   const [salesItems, setSalesItems] = useState<SalesItemMasterOption[]>([])
   const [currentFormItems, setCurrentFormItems] = useState<SalesItem[]>([])
+  const [editingItemId, setEditingItemId] = useState<string | null>(null)
   const [partySearchTerm, setPartySearchTerm] = useState('')
   const [salesItemSearchTerm, setSalesItemSearchTerm] = useState('')
 
@@ -115,12 +201,7 @@ export default function SalesEntryPage() {
   const [advanceError, setAdvanceError] = useState('')
 
   // Invoice Tab 3 - Items
-  const [currentItem, setCurrentItem] = useState({
-    salesItemId: '',
-    noOfBags: '',
-    weightPerBag: '',
-    rate: ''
-  })
+  const [currentItem, setCurrentItem] = useState(createEmptyCurrentItem)
 
   // Invoice Tab 4 - Totals
   const [totalProductItemQty, setTotalProductItemQty] = useState(0)
@@ -129,6 +210,10 @@ export default function SalesEntryPage() {
   const [totalAmount, setTotalAmount] = useState(0)
   const [advanceExpense, setAdvanceExpense] = useState('')
   const [insurance, setInsurance] = useState('')
+  const [manualGrandTotal, setManualGrandTotal] = useState('')
+  const [partyRisk, setPartyRisk] = useState<PartyRiskResponse | null>(null)
+  const [riskDialogOpen, setRiskDialogOpen] = useState(false)
+  const [pendingRequestData, setPendingRequestData] = useState<Record<string, unknown> | null>(null)
 
   const onlyDigits = (value: string, max = 10) => value.replace(/\D/g, '').slice(0, max)
   const toNonNegative = (value: string) => {
@@ -138,22 +223,20 @@ export default function SalesEntryPage() {
     return String(Math.max(0, parsed))
   }
 
-  const additionalTotal = (parseFloat(advanceExpense) || 0) + (parseFloat(insurance) || 0)
-  const grandTotal = totalAmount + additionalTotal
-
-  const parseApiJson = async <T,>(response: Response, fallback: T, context: string): Promise<T> => {
-    const raw = await response.text()
-    if (!raw) return fallback
-    try {
-      return JSON.parse(raw) as T
-    } catch {
-      console.error(`${context}: expected JSON but got non-JSON response`, {
-        status: response.status,
-        preview: raw.slice(0, 120)
-      })
-      return fallback
-    }
-  }
+  const freightTotal = parseFloat(freightAmount) || 0
+  const extraChargesTotal = (parseFloat(advanceExpense) || 0) + (parseFloat(insurance) || 0)
+  const additionalTotal = freightTotal + extraChargesTotal
+  const totalGstAmount = useMemo(
+    () => roundCurrency(currentFormItems.reduce((sum, item) => sum + (item.gstAmount || 0), 0)),
+    [currentFormItems]
+  )
+  const computedGrandTotal = useMemo(
+    () => roundCurrency(totalAmount + totalGstAmount + additionalTotal),
+    [additionalTotal, totalAmount, totalGstAmount]
+  )
+  const grandTotal = manualGrandTotal !== ''
+    ? roundCurrency(parseFloat(manualGrandTotal) || 0)
+    : computedGrandTotal
 
   const isEditMode = editBillId !== ''
 
@@ -176,9 +259,42 @@ export default function SalesEntryPage() {
     })
   }, [salesItems, salesItemSearchTerm, currentItem.salesItemId])
 
-  useEffect(() => {
-    void fetchData()
-  }, [])
+  const selectedPartyRecord = useMemo(
+    () => parties.find((party) => party.id === selectedParty) || null,
+    [parties, selectedParty]
+  )
+
+  const selectedCurrentSalesItem = useMemo(
+    () => salesItems.find((item) => item.id === currentItem.salesItemId) || null,
+    [currentItem.salesItemId, salesItems]
+  )
+
+  const fetchPartyRisk = useCallback(
+    async (partyId: string, pendingSaleAmount: number) => {
+      if (!companyId || !partyId) return null
+
+      try {
+        const params = new URLSearchParams({
+          companyId,
+          partyId,
+          pendingSaleAmount: String(roundCurrency(pendingSaleAmount)),
+          referenceDate: invoiceDate,
+        })
+        if (editBillId) {
+          params.set('excludeBillId', editBillId)
+        }
+        const response = await fetch(
+          `/api/sales-bills/risk?${params.toString()}`
+        )
+        if (!response.ok) return null
+        return (await response.json()) as PartyRiskResponse
+      } catch (error) {
+        console.error('Failed to load party risk:', error)
+        return null
+      }
+    },
+    [companyId, editBillId, invoiceDate]
+  )
 
   useEffect(() => {
     // Calculate to pay when freight amount or advance changes
@@ -240,6 +356,22 @@ export default function SalesEntryPage() {
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
+
+  useEffect(() => {
+    if (!selectedParty || !companyId) {
+      setPartyRisk(null)
+      return
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void (async () => {
+        const risk = await fetchPartyRisk(selectedParty, grandTotal)
+        setPartyRisk(risk)
+      })()
+    }, 250)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [companyId, fetchPartyRisk, grandTotal, selectedParty])
 
   // Handle party selection with auto-fetch
   const handlePartySelect = (partyId: string) => {
@@ -313,10 +445,11 @@ export default function SalesEntryPage() {
 
   const handleTransportSearch = (term: string) => {
     setTransportSearchTerm(term)
+    setTransportName(term.trim())
     setShowTransportDropdown(true)
   }
 
-  const handleTransportSelect = (transport: any) => {
+  const handleTransportSelect = (transport: TransportOption) => {
     setTransportName(transport.transporterName || '')
     setTransportSearchTerm(transport.transporterName || '')
     setLorryNo(transport.vehicleNumber || '')
@@ -327,7 +460,50 @@ export default function SalesEntryPage() {
     router.push('/master/transport')
   }
 
-  const populateFromExistingBill = (bill: ExistingSalesBill, allSalesItems: SalesItemMasterOption[]) => {
+  const handleSendWhatsappReminder = useCallback(async () => {
+    if (!selectedParty) {
+      alert('Select a party first')
+      return
+    }
+
+    const selectedPartyRecord = parties.find((party) => party.id === selectedParty)
+    const risk = await fetchPartyRisk(selectedParty, 0)
+    const phone = String(risk?.party?.phone1 || selectedPartyRecord?.phone1 || '').replace(/\D/g, '')
+    if (!phone) {
+      alert('Party mobile number is missing')
+      return
+    }
+
+    const partyLabel = risk?.party?.name || selectedPartyRecord?.name || 'Customer'
+    const outstandingAmount = roundCurrency(Number(risk?.outstandingAmount || 0))
+    const message =
+      `Dear ${partyLabel}, your outstanding amount is Rs. ${outstandingAmount.toFixed(2)}.` +
+      ' Please arrange the pending payment at the earliest. Thank you.'
+    if (!openWhatsappChat(phone, message)) {
+      alert('Party mobile number is missing')
+      return
+    }
+  }, [fetchPartyRisk, parties, selectedParty])
+
+  const updateTotals = useCallback((items: SalesItem[]) => {
+    const totalQty = items.length
+    const totalBags = items.reduce((sum, item) => sum + (item.bags || 0), 0)
+    const totalWeightValue = items.reduce((sum, item) => sum + (item.weight || 0), 0)
+    const totalAmt = items.reduce((sum, item) => sum + (item.amount || 0), 0)
+
+    setTotalProductItemQty(totalQty)
+    setTotalNoOfBags(totalBags)
+    setTotalWeight(totalWeightValue)
+    setTotalAmount(totalAmt)
+  }, [])
+
+  const resetCurrentItemForm = useCallback(() => {
+    setCurrentItem(createEmptyCurrentItem())
+    setSalesItemSearchTerm('')
+    setEditingItemId(null)
+  }, [])
+
+  const populateFromExistingBill = useCallback((bill: ExistingSalesBill, allSalesItems: SalesItemMasterOption[]) => {
     setEditBillId(bill.id)
     setInvoiceNo(String(bill.billNo || ''))
     {
@@ -368,6 +544,9 @@ export default function SalesEntryPage() {
             bags: Math.max(0, Number(item.bags || 0)),
             rate: Math.max(0, Number(item.rate || 0)),
             amount: Math.max(0, Number(item.amount || 0)),
+            gstRate: Math.max(0, Number(item.gstRateSnapshot || mappedMaster?.gstRate || 0)),
+            gstAmount: Math.max(0, Number(item.gstAmount || 0)),
+            lineTotal: Math.max(0, Number(item.lineTotal || item.amount || 0)),
             discount: 0
           }
         })
@@ -376,9 +555,10 @@ export default function SalesEntryPage() {
     itemIdSequence.current = mappedItems.length
     setCurrentFormItems(mappedItems)
     updateTotals(mappedItems)
-  }
+    setManualGrandTotal(String(Math.max(0, Number(bill.totalAmount || 0))))
+  }, [updateTotals])
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
 
@@ -407,9 +587,9 @@ export default function SalesEntryPage() {
       }
 
       const [partiesData, transportsData, salesItemsData] = await Promise.all([
-        parseApiJson<any[]>(partiesRes, [], 'Parties API'),
-        parseApiJson<any[]>(transportsRes, [], 'Transports API'),
-        parseApiJson<any[]>(salesItemsRes, [], 'Sales item masters API')
+        parseApiJson<Party[]>(partiesRes, [], 'Parties API'),
+        parseApiJson<TransportOption[]>(transportsRes, [], 'Transports API'),
+        parseApiJson<SalesItemMasterOption[]>(salesItemsRes, [], 'Sales item masters API')
       ])
 
       const nextParties = Array.isArray(partiesData) ? partiesData : []
@@ -456,22 +636,39 @@ export default function SalesEntryPage() {
       console.error('Error fetching data:', error)
       setLoading(false)
     }
-  }
+  }, [populateFromExistingBill, router])
+
+  useEffect(() => {
+    void fetchData()
+  }, [fetchData])
 
   const calculateItemTotals = () => {
     const noOfBags = parseFloat(currentItem.noOfBags) || 0
     const weightPerBag = parseFloat(currentItem.weightPerBag) || 0
-    const rate = parseFloat(currentItem.rate) || 0
-    
+    const enteredRate = parseFloat(currentItem.rate) || 0
+    const enteredAmount = parseFloat(currentItem.amount) || 0
+
     // Mandi calculations: Weight in kg, then convert to Qt (100kg = 1Qt)
     const totalWeightKg = noOfBags * weightPerBag
-    const totalWeightQt = totalWeightKg / 100 // Convert kg to Qt
-    const amount = totalWeightQt * rate // Amount = Qt × Rate
-    
-    return { totalWeight: totalWeightQt, amount }
+    const totalWeightQt = totalWeightKg / 100
+
+    if (currentItem.pricingMode === 'amount') {
+      const effectiveRate = totalWeightQt > 0 ? enteredAmount / totalWeightQt : 0
+      return {
+        totalWeight: totalWeightQt,
+        rate: effectiveRate,
+        amount: enteredAmount
+      }
+    }
+
+    return {
+      totalWeight: totalWeightQt,
+      rate: enteredRate,
+      amount: totalWeightQt * enteredRate
+    }
   }
 
-  const handleAddItem = () => {
+  const handleSaveItem = () => {
     if (!currentItem.salesItemId) {
       alert('Sales item is required')
       return
@@ -484,10 +681,7 @@ export default function SalesEntryPage() {
       alert('Weight / Bag is required')
       return
     }
-    if (!currentItem.rate) {
-      alert('Rate / Qt is mandatory')
-      return
-    }
+    
 
     if (salesItems.length === 0) {
       alert('No Sales Item Master found. Please add sales items in Master > Sales Item.')
@@ -495,16 +689,24 @@ export default function SalesEntryPage() {
     }
 
     const salesItem = salesItems.find((s) => s.id === currentItem.salesItemId)
-    const { totalWeight, amount } = calculateItemTotals()
+    const { totalWeight, amount, rate } = calculateItemTotals()
     const bags = parseFloat(currentItem.noOfBags) || 0
-    const rate = parseFloat(currentItem.rate) || 0
-    if (bags <= 0 || totalWeight <= 0 || rate <= 0 || amount < 0) {
-      alert('Bags, weight and rate must be greater than 0')
+
+    if (totalWeight <= 0) {
+      alert('Total weight must be greater than 0')
       return
     }
 
-    const newItem: SalesItem = {
-      id: `item-${++itemIdSequence.current}`,
+    
+
+    
+    
+
+    const gstRate = Math.max(0, Number(salesItem?.gstRate || 0))
+    const tax = calculateTaxBreakdown(amount || 0, gstRate)
+
+    const nextItem: SalesItem = {
+      id: editingItemId || `item-${++itemIdSequence.current}`,
       salesItemId: salesItem?.id || '',
       salesItemName: salesItem?.salesItemName || salesItem?.product?.name || '',
       productName: salesItem?.product?.name || '',
@@ -513,134 +715,60 @@ export default function SalesEntryPage() {
       bags,
       rate,
       amount: amount || 0,
+      gstRate: tax.gstRate,
+      gstAmount: tax.gstAmount,
+      lineTotal: tax.lineTotal,
       discount: 0 // Default discount to 0
     }
 
-    if (!newItem.productId) {
+    if (!nextItem.productId) {
       alert('Invalid product selection. Please select a valid sales item from the dropdown.')
       return
     }
 
-    setCurrentFormItems([...currentFormItems, newItem])
-    updateTotals([...currentFormItems, newItem])
+    const updatedItems = editingItemId
+      ? currentFormItems.map((item) => (item.id === editingItemId ? nextItem : item))
+      : [...currentFormItems, nextItem]
 
-    // Reset current item
-    setCurrentItem({
-      salesItemId: '',
-      noOfBags: '',
-      weightPerBag: '',
-      rate: ''
-    })
-  }
-
-  const updateTotals = (items: SalesItem[]) => {
-    const totalQty = items.length
-    const totalBags = items.reduce((sum, item) => sum + (item.bags || 0), 0)
-    const totalWeight = items.reduce((sum, item) => sum + (item.weight || 0), 0)
-    const totalAmt = items.reduce((sum, item) => sum + (item.amount || 0), 0)
-
-    setTotalProductItemQty(totalQty)
-    setTotalNoOfBags(totalBags)
-    setTotalWeight(totalWeight)
-    setTotalAmount(totalAmt)
+    setCurrentFormItems(updatedItems)
+    updateTotals(updatedItems)
+    resetCurrentItemForm()
   }
 
   const handleRemoveItem = (id: string) => {
     const updatedItems = currentFormItems.filter(item => item.id !== id)
     setCurrentFormItems(updatedItems)
     updateTotals(updatedItems)
+    if (editingItemId === id) {
+      resetCurrentItemForm()
+    }
   }
 
   const handleClearItems = () => {
     setCurrentFormItems([])
     updateTotals([])
+    resetCurrentItemForm()
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    
-    // Comprehensive validation
-    if (!selectedParty) {
-      alert('Party selection is required')
-      return
-    }
-    
-    if (!invoiceDate) {
-      alert('Invoice date is required')
-      return
-    }
-    
-    if (currentFormItems.length === 0) {
-      alert('At least one sales item is required')
-      return
-    }
-    
-    // Validate each item
-    for (const item of currentFormItems) {
-      if (item.bags <= 0) {
-        alert('Number of bags must be greater than 0')
-        return
-      }
-      if (item.weight <= 0) {
-        alert('Weight must be greater than 0')
-        return
-      }
-      if (item.rate <= 0) {
-        alert('Rate must be greater than 0')
-        return
-      }
-    }
+  const handleEditItem = (item: SalesItem) => {
+    const matchedSalesItem = salesItems.find((entry) => entry.id === item.salesItemId || entry.productId === item.productId)
+    const computedWeightPerBag = item.bags > 0 ? (item.weight * 100) / item.bags : 0
+    const nextPricingMode: ItemPricingMode = item.rate > 0 ? 'rate' : 'amount'
 
-    const freight = parseFloat(freightAmount) || 0
-    const adv = parseFloat(advance) || 0
-    if (adv > freight) {
-      setAdvanceError('Advance amount cannot be greater than freight amount')
-      return
-    }
-    
+    setEditingItemId(item.id)
+    setCurrentItem({
+      salesItemId: matchedSalesItem?.id || item.salesItemId || '',
+      noOfBags: item.bags ? String(item.bags) : '',
+      weightPerBag: computedWeightPerBag > 0 ? computedWeightPerBag.toFixed(2) : '',
+      rate: nextPricingMode === 'rate' ? String(item.rate || '') : '',
+      amount: nextPricingMode === 'amount' ? String(item.amount || '') : '',
+      pricingMode: nextPricingMode
+    })
+    setSalesItemSearchTerm(matchedSalesItem?.salesItemName || item.salesItemName || item.productName || '')
+  }
+
+  const saveSalesBill = useCallback(async (requestData: Record<string, unknown>) => {
     try {
-      if (!companyId) {
-        alert('Company ID is missing')
-        return
-      }
-
-      const salesBillItems = currentFormItems.map(item => ({
-        productId: item.productId,
-        weight: item.weight,
-        bags: item.bags,
-        rate: item.rate,
-        amount: item.amount
-      }))
-
-      const finalTotalAmount = Math.max(0, grandTotal)
-
-      const requestData: Record<string, unknown> = {
-        companyId,
-        invoiceNo,
-        invoiceDate,
-        partyId: selectedParty,
-        partyAddress,
-        partyContact,
-        salesItems: salesBillItems,
-        totalAmount: finalTotalAmount,
-        transportBill: {
-          transportName,
-          lorryNo,
-          freightPerQt: Math.max(0, parseFloat(freightPerQt) || 0),
-          freightAmount: Math.max(0, parseFloat(freightAmount) || 0),
-          advance: Math.max(0, parseFloat(advance) || 0),
-          toPay: Math.max(0, parseFloat(toPay) || 0),
-          otherAmount: Math.max(0, parseFloat(advanceExpense) || 0),
-          insuranceAmount: Math.max(0, parseFloat(insurance) || 0)
-        }
-      }
-
-      if (isEditMode) {
-        requestData.id = editBillId
-      } else {
-        requestData.status = 'unpaid'
-      }
-
       setSubmitting(true)
 
       const response = await fetch('/api/sales-bills', {
@@ -652,9 +780,9 @@ export default function SalesEntryPage() {
       })
 
       const responseText = await response.text()
-      let parsedResponse: any = {}
+      let parsedResponse: SalesBillSaveResponse = {}
       try {
-        parsedResponse = responseText ? JSON.parse(responseText) : {}
+        parsedResponse = responseText ? (JSON.parse(responseText) as SalesBillSaveResponse & { creditRisk?: PartyRiskResponse }) : {}
       } catch {
         parsedResponse = {}
       }
@@ -670,20 +798,121 @@ export default function SalesEntryPage() {
         } else {
           router.push('/sales/list')
         }
-      } else {
-        const errorMessage =
-          parsedResponse?.error ||
-          parsedResponse?.message ||
-          response.statusText ||
-          'Unknown error'
-        alert(`Error saving sales bill: ${errorMessage}`)
+        return
       }
+
+      if (response.status === 409 && 'creditRisk' in parsedResponse && parsedResponse.creditRisk) {
+        setPartyRisk(parsedResponse.creditRisk)
+        setPendingRequestData(requestData)
+        setRiskDialogOpen(true)
+        return
+      }
+
+      const errorMessage =
+        parsedResponse?.error ||
+        parsedResponse?.message ||
+        response.statusText ||
+        'Unknown error'
+      alert(`Error saving sales bill: ${errorMessage}`)
     } catch (error) {
       console.error('Error:', error)
       alert('Error saving sales bill')
     } finally {
       setSubmitting(false)
     }
+  }, [companyId, editBillId, isEditMode, router])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!selectedParty) {
+      alert('Party selection is required')
+      return
+    }
+
+    if (!invoiceDate) {
+      alert('Invoice date is required')
+      return
+    }
+
+    if (currentFormItems.length === 0) {
+      alert('At least one sales item is required')
+      return
+    }
+
+    const sanitizedItems = currentFormItems
+      .map((item) => ({
+        ...item,
+        bags: Math.max(0, Number(item.bags || 0)),
+        weight: Math.max(0, Number(item.weight || 0)),
+        rate: Math.max(0, Number(item.rate || 0)),
+        amount: Math.max(0, Number(item.amount || 0))
+      }))
+      .filter((item) => item.productId && item.weight > 0)
+
+    if (sanitizedItems.length === 0) {
+      alert('At least one sales item with weight greater than 0 is required')
+      return
+    }
+
+    const freight = parseFloat(freightAmount) || 0
+    const adv = parseFloat(advance) || 0
+    if (adv > freight) {
+      setAdvanceError('Advance amount cannot be greater than freight amount')
+      return
+    }
+
+    if (!companyId) {
+      alert('Company ID is missing')
+      return
+    }
+
+    const salesBillItems = sanitizedItems.map((item) => ({
+      productId: item.productId,
+      weight: item.weight,
+      bags: item.bags,
+      rate: item.rate,
+      amount: item.amount
+    }))
+
+    const finalTotalAmount = Math.max(0, grandTotal)
+
+    const requestData: Record<string, unknown> = {
+      companyId,
+      invoiceNo,
+      invoiceDate,
+      partyId: selectedParty,
+      partyAddress,
+      partyContact,
+      salesItems: salesBillItems,
+      totalAmount: finalTotalAmount,
+      transportBill: {
+        transportName,
+        lorryNo,
+        freightPerQt: Math.max(0, parseFloat(freightPerQt) || 0),
+        freightAmount: Math.max(0, parseFloat(freightAmount) || 0),
+        advance: Math.max(0, parseFloat(advance) || 0),
+        toPay: Math.max(0, parseFloat(toPay) || 0),
+        otherAmount: Math.max(0, parseFloat(advanceExpense) || 0),
+        insuranceAmount: Math.max(0, parseFloat(insurance) || 0)
+      }
+    }
+
+    if (isEditMode) {
+      requestData.id = editBillId
+    } else {
+      requestData.status = 'unpaid'
+    }
+
+    const risk = await fetchPartyRisk(selectedParty, finalTotalAmount)
+    if (risk && (risk.hasOverdue || risk.isOverLimit)) {
+      setPartyRisk(risk)
+      setPendingRequestData(requestData)
+      setRiskDialogOpen(true)
+      return
+    }
+
+    await saveSalesBill(requestData)
   }
 
   if (loading) {
@@ -692,6 +921,51 @@ export default function SalesEntryPage() {
         <div className="flex justify-center items-center h-screen">Loading...</div>
       </DashboardLayout>
     )
+  }
+
+  const itemTotals = calculateItemTotals()
+  const displayedRate =
+    currentItem.pricingMode === 'amount'
+      ? itemTotals.rate > 0
+        ? itemTotals.rate.toFixed(2)
+        : ''
+      : currentItem.rate
+  const displayedAmount =
+    currentItem.pricingMode === 'rate'
+      ? currentItem.rate || currentItem.noOfBags || currentItem.weightPerBag
+        ? itemTotals.amount.toFixed(2)
+        : ''
+      : currentItem.amount
+  const previewTax = calculateTaxBreakdown(itemTotals.amount || 0, selectedCurrentSalesItem?.gstRate || 0)
+  const itemAmountHint =
+    currentItem.pricingMode === 'amount' && itemTotals.totalWeight > 0
+      ? `Average rate auto-calculated: ₹${itemTotals.rate.toFixed(2)} / Qt`
+      : currentItem.pricingMode === 'rate' && itemTotals.totalWeight > 0
+        ? `Amount auto-calculated from ${itemTotals.totalWeight.toFixed(2)} Qt`
+        : 'Enter either Rate / Qt or Amount. The other value will auto-calculate.'
+  const outstandingAmount = roundCurrency(Number(partyRisk?.outstandingAmount || 0))
+  const overdueAmount = roundCurrency(Number(partyRisk?.overdueAmount || 0))
+  const creditLimit = partyRisk?.party?.creditLimit ?? selectedPartyRecord?.creditLimit ?? null
+  const remainingLimit =
+    typeof partyRisk?.remainingLimit === 'number'
+      ? roundCurrency(partyRisk.remainingLimit)
+      : typeof creditLimit === 'number'
+        ? roundCurrency(creditLimit - outstandingAmount)
+        : null
+  const hasRisk = Boolean(partyRisk?.hasOverdue || partyRisk?.isOverLimit)
+
+  const handleRiskContinue = async () => {
+    if (!pendingRequestData) {
+      setRiskDialogOpen(false)
+      return
+    }
+    setRiskDialogOpen(false)
+    const requestData = {
+      ...pendingRequestData,
+      allowRiskOverride: true,
+    }
+    setPendingRequestData(null)
+    await saveSalesBill(requestData)
   }
 
   return (
@@ -739,14 +1013,26 @@ export default function SalesEntryPage() {
                       <div className="lg:col-span-6">
                         <Label htmlFor="party">Party</Label>
                         <div className="space-y-2">
-                          <div className="relative">
-                            <Input
-                              value={partySearchTerm}
-                              onChange={(e) => setPartySearchTerm(e.target.value)}
-                              placeholder="Search party name..."
-                              className="pr-10"
-                            />
-                            <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                          <div className="flex flex-col gap-2 xl:flex-row">
+                            <div className="relative flex-1">
+                              <Input
+                                value={partySearchTerm}
+                                onChange={(e) => setPartySearchTerm(e.target.value)}
+                                placeholder="Search party name..."
+                                className="pr-10"
+                              />
+                              <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => void handleSendWhatsappReminder()}
+                              disabled={!selectedParty}
+                              className="gap-2 xl:w-auto"
+                            >
+                              <MessageCircle className="h-4 w-4" />
+                              WhatsApp Reminder
+                            </Button>
                           </div>
                           <Select value={selectedParty} onValueChange={handlePartySelect}>
                             <SelectTrigger className="flex-1">
@@ -808,6 +1094,57 @@ export default function SalesEntryPage() {
                         </div>
                       )}
                     </div>
+                    {selectedParty ? (
+                      <div
+                        className={`rounded-xl border px-4 py-3 ${
+                          hasRisk
+                            ? 'border-amber-300 bg-amber-50'
+                            : 'border-emerald-200 bg-emerald-50'
+                        }`}
+                      >
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              {hasRisk ? (
+                                <AlertTriangle className="h-4 w-4 text-amber-600" />
+                              ) : null}
+                              <p className="text-sm font-semibold text-slate-900">
+                                {hasRisk ? 'Buyer risk alert' : 'Buyer credit status'}
+                              </p>
+                            </div>
+                            <p className="mt-1 text-sm text-slate-600">
+                              {hasRisk
+                                ? 'This party has overdue or limit pressure. Review before confirming the sale.'
+                                : 'Outstanding and credit position look within the configured limit right now.'}
+                            </p>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-sm lg:min-w-[420px] lg:grid-cols-4">
+                            <div className="rounded-lg border border-white/70 bg-white/80 px-3 py-2">
+                              <p className="text-xs text-slate-500">Outstanding</p>
+                              <p className="font-semibold text-slate-900">₹{outstandingAmount.toFixed(2)}</p>
+                            </div>
+                            <div className="rounded-lg border border-white/70 bg-white/80 px-3 py-2">
+                              <p className="text-xs text-slate-500">Overdue</p>
+                              <p className={`font-semibold ${overdueAmount > 0 ? 'text-amber-700' : 'text-slate-900'}`}>
+                                ₹{overdueAmount.toFixed(2)}
+                              </p>
+                            </div>
+                            <div className="rounded-lg border border-white/70 bg-white/80 px-3 py-2">
+                              <p className="text-xs text-slate-500">Credit Limit</p>
+                              <p className="font-semibold text-slate-900">
+                                {typeof creditLimit === 'number' ? `₹${roundCurrency(creditLimit).toFixed(2)}` : 'Not set'}
+                              </p>
+                            </div>
+                            <div className="rounded-lg border border-white/70 bg-white/80 px-3 py-2">
+                              <p className="text-xs text-slate-500">Remaining</p>
+                              <p className={`font-semibold ${typeof remainingLimit === 'number' && remainingLimit < 0 ? 'text-red-600' : 'text-slate-900'}`}>
+                                {formatRemainingLimitText(remainingLimit)}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
@@ -937,7 +1274,12 @@ export default function SalesEntryPage() {
                   <div className="space-y-6">
                     {/* Add Item Form */}
                     <div className="border rounded-lg p-4">
-                      <h3 className="font-semibold mb-4">Add Item</h3>
+                      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <h3 className="font-semibold">{editingItemId ? 'Edit Item' : 'Add Item'}</h3>
+                        {editingItemId ? (
+                          <p className="text-sm text-slate-500">Update the selected row and save it back into the bill.</p>
+                        ) : null}
+                      </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-4">
                         <div className="lg:col-span-2">
                           <Label htmlFor="itemProduct">Sales Items</Label>
@@ -1001,22 +1343,27 @@ export default function SalesEntryPage() {
                         </div>
                         <div>
                           <Label htmlFor="itemRate">
-                            Rate / Qt <span className="text-red-600">*</span>
+                            Rate / Qt
                           </Label>
                           <Input
                             id="itemRate"
                             type="number"
                             min="0"
                             step="0.01"
-                            value={currentItem.rate}
-                            onChange={(e) => setCurrentItem({...currentItem, rate: toNonNegative(e.target.value)})}
-                            placeholder="Enter rate"
+                            value={displayedRate}
+                            onChange={(e) => setCurrentItem({
+                              ...currentItem,
+                              rate: toNonNegative(e.target.value),
+                              amount: '',
+                              pricingMode: 'rate'
+                            })}
+                            placeholder="Enter rate or use amount"
                           />
                         </div>
                         <div>
                           <Label>Total Weight (Qt.)</Label>
                           <Input
-                            value={calculateItemTotals().totalWeight.toFixed(2)}
+                            value={itemTotals.totalWeight.toFixed(2)}
                             readOnly
                             className="bg-gray-100"
                           />
@@ -1024,15 +1371,49 @@ export default function SalesEntryPage() {
                         <div>
                           <Label>Amount</Label>
                           <Input
-                            value={calculateItemTotals().amount.toFixed(2)}
-                            readOnly
-                            className="bg-gray-100"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={displayedAmount}
+                            onChange={(e) => setCurrentItem({
+                              ...currentItem,
+                              rate: '',
+                              amount: toNonNegative(e.target.value),
+                              pricingMode: 'amount'
+                            })}
+                            placeholder="Enter amount or use rate"
                           />
                         </div>
                       </div>
+                      <p className="mt-3 text-sm text-slate-500">{itemAmountHint}</p>
+                      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+                        <div className="rounded-lg border bg-slate-50 px-3 py-2">
+                          <p className="text-xs text-slate-500">Product GST</p>
+                          <p className="font-medium text-slate-900">
+                            {previewTax.gstRate > 0 ? `${previewTax.gstRate.toFixed(2)}% GST` : 'Non-GST / tax-free'}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border bg-slate-50 px-3 py-2">
+                          <p className="text-xs text-slate-500">GST on current line</p>
+                          <p className="font-medium text-slate-900">₹{previewTax.gstAmount.toFixed(2)}</p>
+                        </div>
+                        <div className="rounded-lg border bg-slate-50 px-3 py-2">
+                          <p className="text-xs text-slate-500">Line total preview</p>
+                          <p className="font-medium text-slate-900">₹{previewTax.lineTotal.toFixed(2)}</p>
+                        </div>
+                      </div>
                       <div className="flex gap-2 mt-4">
-                        <Button type="button" onClick={handleAddItem}>Add</Button>
-                        <Button type="button" variant="outline" onClick={handleClearItems}>Clear</Button>
+                        <Button type="button" onClick={handleSaveItem}>
+                          {editingItemId ? 'Update Item' : 'Add'}
+                        </Button>
+                        <Button type="button" variant="outline" onClick={resetCurrentItemForm}>
+                          {editingItemId ? 'Cancel Edit' : 'Clear Form'}
+                        </Button>
+                        {currentFormItems.length > 0 ? (
+                          <Button type="button" variant="outline" onClick={handleClearItems}>
+                            Clear All Items
+                          </Button>
+                        ) : null}
                       </div>
                     </div>
 
@@ -1050,6 +1431,8 @@ export default function SalesEntryPage() {
                                 <th className="text-right p-2">Weight (Qt.)</th>
                                 <th className="text-right p-2">Rate / Qt</th>
                                 <th className="text-right p-2">Amount</th>
+                                <th className="text-right p-2">GST</th>
+                                <th className="text-right p-2">Line Total</th>
                                 <th className="text-center p-2">Action</th>
                               </tr>
                             </thead>
@@ -1062,15 +1445,32 @@ export default function SalesEntryPage() {
                                   <td className="p-2 text-right">{(item.weight || 0).toFixed(2)}</td>
                                   <td className="p-2 text-right">{(item.rate || 0).toFixed(2)}</td>
                                   <td className="p-2 text-right">{(item.amount || 0).toFixed(2)}</td>
+                                  <td className="p-2 text-right">
+                                    <div className="flex flex-col items-end">
+                                      <span>{(item.gstAmount || 0).toFixed(2)}</span>
+                                      <span className="text-xs text-slate-500">{(item.gstRate || 0).toFixed(2)}%</span>
+                                    </div>
+                                  </td>
+                                  <td className="p-2 text-right font-medium">{(item.lineTotal || 0).toFixed(2)}</td>
                                   <td className="p-2 text-center">
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => handleRemoveItem(item.id)}
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </Button>
+                                    <div className="flex items-center justify-center gap-2">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => handleEditItem(item)}
+                                      >
+                                        <Pencil className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => handleRemoveItem(item.id)}
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
+                                    </div>
                                   </td>
                                 </tr>
                               ))}
@@ -1085,7 +1485,16 @@ export default function SalesEntryPage() {
                 {/* Section 4 - Additional Charges */}
                 <div className="mt-2">
                   <h3 className="text-lg font-semibold mb-2 pb-2 border-b">4. Additional Charges</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                    <div>
+                      <Label htmlFor="freightAmountTotal">Freight Amount</Label>
+                      <Input
+                        id="freightAmountTotal"
+                        value={freightTotal.toFixed(2)}
+                        readOnly
+                        className="bg-gray-100"
+                      />
+                    </div>
                     <div>
                       <Label htmlFor="advanceExpense">Other Amount</Label>
                       <Input
@@ -1125,7 +1534,7 @@ export default function SalesEntryPage() {
                 {/* Section 5 - Totals */}
                 <div className="mt-3">
                   <h3 className="text-lg font-semibold mb-2 pb-2 border-b">5. Totals</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
                     <div className="text-center p-2 bg-blue-50 rounded-lg border border-blue-200">
                       <Label className="text-xs text-gray-600 block">Total Sales Item Qty</Label>
                       <p className="text-lg font-bold text-blue-600">{totalProductItemQty}</p>
@@ -1142,9 +1551,65 @@ export default function SalesEntryPage() {
                       <Label className="text-xs text-gray-600 block">Items Total</Label>
                       <p className="text-lg font-bold text-purple-600">₹{totalAmount.toFixed(2)}</p>
                     </div>
+                    <div className="text-center p-2 bg-orange-50 rounded-lg border border-orange-200">
+                      <Label className="text-xs text-gray-600 block">GST Total</Label>
+                      <p className="text-lg font-bold text-orange-600">₹{totalGstAmount.toFixed(2)}</p>
+                    </div>
                     <div className="text-center p-2 bg-emerald-50 rounded-lg border border-emerald-200">
                       <Label className="text-xs text-gray-600 block">Grand Total</Label>
                       <p className="text-lg font-bold text-emerald-700">₹{grandTotal.toFixed(2)}</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+                    <div className="rounded-xl border bg-slate-50 p-4">
+                      <p className="text-sm font-medium text-slate-900">Grand total calculation</p>
+                      <div className="mt-3 space-y-2 text-sm text-slate-600">
+                        <div className="flex items-center justify-between">
+                          <span>Item subtotal</span>
+                          <span>₹{totalAmount.toFixed(2)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span>GST total</span>
+                          <span>₹{totalGstAmount.toFixed(2)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span>Freight</span>
+                          <span>₹{freightTotal.toFixed(2)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span>Other + insurance</span>
+                          <span>₹{extraChargesTotal.toFixed(2)}</span>
+                        </div>
+                        <div className="flex items-center justify-between border-t border-slate-200 pt-2 font-semibold text-slate-900">
+                          <span>Calculated total</span>
+                          <span>₹{computedGrandTotal.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-xl border p-4">
+                      <Label htmlFor="manualGrandTotal">Final Invoice Total</Label>
+                      <Input
+                        id="manualGrandTotal"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={manualGrandTotal}
+                        onChange={(e) => setManualGrandTotal(toNonNegative(e.target.value))}
+                        placeholder={computedGrandTotal.toFixed(2)}
+                        className="mt-2"
+                      />
+                      <p className="mt-2 text-xs text-slate-500">
+                        Leave blank to use the calculated total automatically. Enter a value here only when the final invoice total needs a manual override.
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="mt-3"
+                        onClick={() => setManualGrandTotal('')}
+                        disabled={manualGrandTotal === ''}
+                      >
+                        Reset to Calculated Total
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -1163,6 +1628,56 @@ export default function SalesEntryPage() {
           </Card>
         </div>
       </div>
+      <Dialog open={riskDialogOpen} onOpenChange={setRiskDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Buyer limit warning</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              This sale pushes the selected party into a risky position. Review the outstanding figures before you continue.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-lg border bg-slate-50 px-3 py-2">
+                <p className="text-xs text-slate-500">Outstanding</p>
+                <p className="font-semibold text-slate-900">₹{outstandingAmount.toFixed(2)}</p>
+              </div>
+              <div className="rounded-lg border bg-slate-50 px-3 py-2">
+                <p className="text-xs text-slate-500">Overdue</p>
+                <p className="font-semibold text-amber-700">₹{overdueAmount.toFixed(2)}</p>
+              </div>
+              <div className="rounded-lg border bg-slate-50 px-3 py-2">
+                <p className="text-xs text-slate-500">Credit Limit</p>
+                <p className="font-semibold text-slate-900">
+                  {typeof creditLimit === 'number' ? `₹${roundCurrency(creditLimit).toFixed(2)}` : 'Not set'}
+                </p>
+              </div>
+              <div className="rounded-lg border bg-slate-50 px-3 py-2">
+                <p className="text-xs text-slate-500">Remaining Limit</p>
+                <p className={`font-semibold ${typeof remainingLimit === 'number' && remainingLimit < 0 ? 'text-red-600' : 'text-slate-900'}`}>
+                  {formatRemainingLimitText(remainingLimit)}
+                </p>
+              </div>
+              <div className="rounded-lg border bg-slate-50 px-3 py-2">
+                <p className="text-xs text-slate-500">Pending Sale</p>
+                <p className="font-semibold text-slate-900">₹{roundCurrency(Number(partyRisk?.pendingSaleAmount || grandTotal)).toFixed(2)}</p>
+              </div>
+              <div className="rounded-lg border bg-slate-50 px-3 py-2">
+                <p className="text-xs text-slate-500">Projected Outstanding</p>
+                <p className="font-semibold text-slate-900">₹{roundCurrency(Number(partyRisk?.projectedOutstanding || 0)).toFixed(2)}</p>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setRiskDialogOpen(false)}>
+              Review Sale
+            </Button>
+            <Button type="button" onClick={() => void handleRiskContinue()}>
+              Save Anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
     )
   }

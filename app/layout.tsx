@@ -5,6 +5,7 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import { SessionProvider } from "@/components/SessionProvider";
 import { useEffect } from "react";
 import { isAbortError } from "@/lib/http";
+import { getSessionCookieNameCandidates } from "@/lib/session-cookies";
 
 export default function RootLayout({
   children,
@@ -37,9 +38,11 @@ export default function RootLayout({
       return match ? decodeURIComponent(match[1]) : null
     }
     
-    const refreshToken = async () => {
+    const refreshToken = async (useSuperAdminSession: boolean) => {
       try {
-        const response = await fetch('/api/auth/refresh', { method: 'POST' });
+        const response = await fetch(useSuperAdminSession ? '/api/super-admin/refresh' : '/api/auth/refresh', {
+          method: 'POST'
+        });
         if (response.ok) {
           // notify listeners that session was refreshed so timers can reset
           window.dispatchEvent(new Event('sessionRefreshed'))
@@ -83,7 +86,8 @@ export default function RootLayout({
           url === '/api/auth' ||
           url === '/api/auth/refresh' ||
           url === '/api/auth/login' ||
-          url === '/api/super-admin/auth'
+          url === '/api/super-admin/auth' ||
+          url === '/api/super-admin/refresh'
         )
       ) {
         return originalFetch(...args);
@@ -131,7 +135,13 @@ export default function RootLayout({
         isInternalApi &&
         ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
       ) {
-        const csrfToken = getCookieValue('csrf-token')
+        const csrfToken =
+          getSessionCookieNameCandidates(
+            isSuperAdminApi ? 'super_admin' : 'app',
+            window.location.host
+          )
+            .map((cookieNames) => getCookieValue(cookieNames.csrfToken))
+            .find((value): value is string => Boolean(value)) || null
         if (csrfToken) {
           const headers = new Headers(requestInit.headers || {})
           headers.set('x-csrf-token', csrfToken)
@@ -149,7 +159,7 @@ export default function RootLayout({
       
       // If 401, try to refresh token and retry once
       if (response.status === 401 && typeof url === 'string' && url.includes('/api/')) {
-        const refreshed = await refreshToken();
+        const refreshed = await refreshToken(isSuperAdminApi);
         
         if (refreshed) {
           // Retry the original request with new token

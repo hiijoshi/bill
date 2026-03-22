@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs'
 import { prisma } from '@/lib/prisma'
 import { normalizeOptionalString, parseBooleanParam, requireRoles, normalizeAppRole } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
+import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'User ID is required') })
 
@@ -12,7 +13,7 @@ const updateUserSchema = z
     traderId: z.string().trim().min(1).optional(),
     companyId: z.string().trim().min(1).optional().nullable(),
     userId: z.string().trim().min(1).max(50).optional(),
-    password: z.string().min(6, 'Password must be at least 6 characters'),
+    password: z.string().min(6, 'Password must be at least 6 characters').optional(),
     name: z.string().trim().max(100).optional().nullable(),
     locked: z.boolean().optional(),
     active: z.boolean().optional()
@@ -35,6 +36,12 @@ function normalizeCompanyId(value: string | null | undefined): string | null | u
   if (value === null) return null
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : null
+}
+
+function omitPassword<T extends { password: string }>(user: T): Omit<T, 'password'> {
+  const { password, ...rest } = user
+  void password
+  return rest
 }
 
 async function getUserById(id: string, includeDeleted: boolean) {
@@ -65,7 +72,11 @@ async function getUserById(id: string, includeDeleted: boolean) {
 
   if (!user) return null
 
-  const { password, ...withoutPassword } = user
+  if (normalizeAppRole(user.role) === 'super_admin') {
+    return null
+  }
+
+  const withoutPassword = omitPassword(user)
   return {
     ...withoutPassword,
     active: !withoutPassword.locked
@@ -136,6 +147,13 @@ export async function PUT(
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
 
+    if (normalizeAppRole(existingUser.role) === 'super_admin') {
+      return NextResponse.json(
+        { error: 'Manage Super Admin account from profile settings only' },
+        { status: 403 }
+      )
+    }
+
     const isCurrentSessionUser =
       (authResult.auth.userDbId && existingUser.id === authResult.auth.userDbId) ||
       (existingUser.userId === authResult.auth.userId && existingUser.traderId === authResult.auth.traderId)
@@ -165,15 +183,23 @@ export async function PUT(
     }
 
     if (parsedBody.data.traderId !== undefined && parsedBody.data.traderId.trim() !== existingUser.traderId) {
-      const trader = await prisma.trader.findFirst({
-        where: {
-          id: nextTraderId,
-          deletedAt: null
-        },
-        select: { id: true }
-      })
-      if (!trader) {
+      const traderCapacity = await getTraderCapacitySnapshot(prisma, nextTraderId)
+      if (!traderCapacity) {
         return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
+      }
+
+      if (traderCapacity.locked) {
+        return NextResponse.json({ error: 'Trader is locked' }, { status: 403 })
+      }
+
+      if (
+        traderCapacity.maxUsers !== null &&
+        traderCapacity.currentUsers >= traderCapacity.maxUsers
+      ) {
+        return NextResponse.json(
+          { error: `Trader user limit reached (${traderCapacity.currentUsers}/${traderCapacity.maxUsers})` },
+          { status: 409 }
+        )
       }
     }
 
@@ -184,11 +210,15 @@ export async function PUT(
           traderId: nextTraderId,
           deletedAt: null
         },
-        select: { id: true }
+        select: { id: true, locked: true }
       })
 
       if (!company) {
         return NextResponse.json({ error: 'Company not found for this trader' }, { status: 404 })
+      }
+
+      if (company.locked) {
+        return NextResponse.json({ error: 'Company is locked' }, { status: 403 })
       }
     }
 
@@ -223,7 +253,9 @@ export async function PUT(
     if (parsedBody.data.userId !== undefined) updateData.userId = nextUserId
     if (parsedBody.data.name !== undefined) updateData.name = normalizeOptionalString(parsedBody.data.name)
     if (nextLocked !== undefined) updateData.locked = nextLocked
-    updateData.password = await bcrypt.hash(parsedBody.data.password, 12)
+    if (parsedBody.data.password) {
+      updateData.password = await bcrypt.hash(parsedBody.data.password, 12)
+    }
 
     const user = await prisma.user.update({
       where: { id: userId },
@@ -244,7 +276,7 @@ export async function PUT(
       }
     })
 
-    const { password, ...userWithoutPassword } = user
+    const userWithoutPassword = omitPassword(user)
 
     const action =
       nextLocked !== undefined && nextLocked !== existingUser.locked

@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { normalizeOptionalString, normalizePhone, parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { backfillMissingMandiAccountNumbers, generateUniqueMandiAccountNumber } from '@/lib/mandi-account-number'
+import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
 
 const companyPayloadSchema = z
   .object({
@@ -141,16 +142,24 @@ export async function POST(request: NextRequest) {
     }
 
     if (normalized.traderId) {
-      const trader = await prisma.trader.findFirst({
-        where: {
-          id: normalized.traderId,
-          deletedAt: null
-        },
-        select: { id: true }
-      })
+      const traderCapacity = await getTraderCapacitySnapshot(prisma, normalized.traderId)
 
-      if (!trader) {
+      if (!traderCapacity) {
         return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
+      }
+
+      if (traderCapacity.locked) {
+        return NextResponse.json({ error: 'Trader is locked' }, { status: 403 })
+      }
+
+      if (
+        traderCapacity.maxCompanies !== null &&
+        traderCapacity.currentCompanies >= traderCapacity.maxCompanies
+      ) {
+        return NextResponse.json(
+          { error: `Trader company limit reached (${traderCapacity.currentCompanies}/${traderCapacity.maxCompanies})` },
+          { status: 409 }
+        )
       }
     }
 

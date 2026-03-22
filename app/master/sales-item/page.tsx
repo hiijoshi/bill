@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -63,22 +63,7 @@ export default function SalesItemMasterPage() {
 
   const [products, setProducts] = useState<ProductOption[]>([])
   const gstRates = ['5', '12', '18', '28']
-  useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
-      if (!resolvedCompanyId) {
-        setErrorMessage('Failed to resolve active company. Please re-login.')
-        setLoading(false)
-        return
-      }
-
-      setCompanyId(resolvedCompanyId)
-      stripCompanyParamsFromUrl()
-      await Promise.all([fetchSalesItems(resolvedCompanyId), fetchProducts(resolvedCompanyId)])
-    })()
-  }, [])
-
-  const fetchProducts = async (targetCompanyId = companyId) => {
+  const fetchProducts = useCallback(async (targetCompanyId = companyId) => {
     if (!targetCompanyId) return
     try {
       const response = await fetch(`/api/products?companyId=${encodeURIComponent(targetCompanyId)}`)
@@ -92,9 +77,9 @@ export default function SalesItemMasterPage() {
       console.error('Error fetching products:', error)
       setProducts([])
     }
-  }
+  }, [companyId])
 
-  const fetchSalesItems = async (targetCompanyId = companyId) => {
+  const fetchSalesItems = useCallback(async (targetCompanyId = companyId) => {
     if (!targetCompanyId) {
       setLoading(false)
       return
@@ -114,7 +99,22 @@ export default function SalesItemMasterPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [companyId])
+
+  useEffect(() => {
+    ;(async () => {
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (!resolvedCompanyId) {
+        setErrorMessage('Failed to resolve active company. Please re-login.')
+        setLoading(false)
+        return
+      }
+
+      setCompanyId(resolvedCompanyId)
+      stripCompanyParamsFromUrl()
+      await Promise.all([fetchSalesItems(resolvedCompanyId), fetchProducts(resolvedCompanyId)])
+    })()
+  }, [fetchProducts, fetchSalesItems])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

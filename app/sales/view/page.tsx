@@ -52,13 +52,57 @@ interface SalesBill {
   updatedAt: string
 }
 
+interface RawSalesItem {
+  id?: unknown
+  productId?: unknown
+  product?: {
+    id?: unknown
+    name?: unknown
+  }
+  bags?: unknown
+  qty?: unknown
+  weight?: unknown
+  rate?: unknown
+  amount?: unknown
+}
+
+interface RawTransportBill {
+  id?: unknown
+  transportName?: unknown
+  lorryNo?: unknown
+  freightPerQt?: unknown
+  freightAmount?: unknown
+  advance?: unknown
+  toPay?: unknown
+  otherAmount?: unknown
+  insuranceAmount?: unknown
+}
+
+interface RawSalesBill {
+  id?: unknown
+  billNo?: unknown
+  billDate?: unknown
+  party?: {
+    id?: unknown
+    name?: unknown
+    address?: unknown
+    phone1?: unknown
+  }
+  salesItems?: RawSalesItem[]
+  transportBills?: RawTransportBill[]
+  totalAmount?: unknown
+  receivedAmount?: unknown
+  createdAt?: unknown
+  updatedAt?: unknown
+}
+
 const clampNonNegative = (value: unknown): number => {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return 0
   return Math.max(0, parsed)
 }
 
-function normalizeSalesBill(raw: any): SalesBill {
+function normalizeSalesBill(raw: RawSalesBill): SalesBill {
   const totalAmount = clampNonNegative(raw?.totalAmount)
   const receivedAmount = clampNonNegative(raw?.receivedAmount)
   const balanceAmount = Math.max(0, totalAmount - receivedAmount)
@@ -75,7 +119,7 @@ function normalizeSalesBill(raw: any): SalesBill {
       phone1: String(raw?.party?.phone1 || '')
     },
     salesItems: Array.isArray(raw?.salesItems)
-      ? raw.salesItems.map((item: any) => ({
+      ? raw.salesItems.map((item) => ({
           id: String(item?.id || ''),
           productId: String(item?.productId || ''),
           product: {
@@ -90,10 +134,10 @@ function normalizeSalesBill(raw: any): SalesBill {
         }))
       : [],
     transportBills: Array.isArray(raw?.transportBills)
-      ? raw.transportBills.map((item: any) => ({
+      ? raw.transportBills.map((item) => ({
           id: String(item?.id || ''),
-          transportName: item?.transportName || null,
-          lorryNo: item?.lorryNo || null,
+          transportName: item?.transportName == null ? null : String(item.transportName),
+          lorryNo: item?.lorryNo == null ? null : String(item.lorryNo),
           freightPerQt: clampNonNegative(item?.freightPerQt),
           freightAmount: clampNonNegative(item?.freightAmount),
           advance: clampNonNegative(item?.advance),
@@ -130,6 +174,27 @@ function SalesViewPageContent() {
 
   useEffect(() => {
     let cancelled = false
+
+    const fetchSalesBill = async (targetCompanyId: string) => {
+      try {
+        const response = await fetch(`/api/sales-bills?companyId=${targetCompanyId}&billId=${billId}`)
+        if (cancelled) return
+        if (!response.ok) {
+          throw new Error('Sales bill not found')
+        }
+        const billData = (await response.json()) as RawSalesBill
+        if (cancelled) return
+        setSalesBill(normalizeSalesBill(billData))
+        setLoading(false)
+      } catch (error) {
+        if (cancelled || isAbortError(error)) return
+        console.error('Error fetching sales bill:', error)
+        setLoading(false)
+        alert('Error loading sales bill')
+        router.back()
+      }
+    }
+
     ;(async () => {
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
       if (cancelled) return
@@ -141,32 +206,12 @@ function SalesViewPageContent() {
       }
       setCompanyId(resolvedCompanyId)
       stripCompanyParamsFromUrl()
-      await fetchSalesBill(resolvedCompanyId, () => cancelled)
+      await fetchSalesBill(resolvedCompanyId)
     })()
     return () => {
       cancelled = true
     }
   }, [billId, router])
-
-  const fetchSalesBill = async (targetCompanyId: string, isCancelled: () => boolean = () => false) => {
-    try {
-      const response = await fetch(`/api/sales-bills?companyId=${targetCompanyId}&billId=${billId}`)
-      if (isCancelled()) return
-      if (!response.ok) {
-        throw new Error('Sales bill not found')
-      }
-      const billData = await response.json()
-      if (isCancelled()) return
-      setSalesBill(normalizeSalesBill(billData))
-      setLoading(false)
-    } catch (error) {
-      if (isCancelled() || isAbortError(error)) return
-      console.error('Error fetching sales bill:', error)
-      setLoading(false)
-      alert('Error loading sales bill')
-      router.back()
-    }
-  }
 
   const handleEdit = () => {
     if (!billId) return
@@ -222,8 +267,11 @@ function SalesViewPageContent() {
   }
 
   const handleExportPDF = () => {
-    // TODO: Implement PDF export
-    alert('PDF export functionality coming soon!')
+    if (!billId) return
+    const printPath = companyId
+      ? `/sales/${billId}/print?type=invoice&autoprint=1&companyId=${encodeURIComponent(companyId)}`
+      : `/sales/${billId}/print?type=invoice&autoprint=1`
+    window.open(printPath, '_blank', 'noopener,noreferrer')
   }
 
   if (loading) {
@@ -246,6 +294,11 @@ function SalesViewPageContent() {
       </DashboardLayout>
     )
   }
+
+  const totalWeight = salesBill.salesItems.reduce(
+    (sum, item) => sum + clampNonNegative(item.weight ?? item.qty ?? 0),
+    0
+  )
 
   return (
     <DashboardLayout companyId={companyId || ''}>
@@ -365,6 +418,12 @@ function SalesViewPageContent() {
                   </tbody>
                 </table>
               </div>
+              <div className="mt-4 flex justify-end">
+                <div className="rounded-md border bg-gray-50 px-4 py-2 text-sm">
+                  <span className="text-gray-600 mr-2">Total Weight:</span>
+                  <span className="font-semibold">{totalWeight.toFixed(2)}</span>
+                </div>
+              </div>
             </CardContent>
           </Card>
 
@@ -425,7 +484,7 @@ function SalesViewPageContent() {
               <CardTitle>Financial Summary</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="text-center p-4 bg-blue-50 rounded">
                   <p className="text-sm text-gray-600">Total Amount</p>
                   <p className="text-2xl font-bold text-blue-600">₹{salesBill.totalAmount.toFixed(2)}</p>
@@ -437,6 +496,10 @@ function SalesViewPageContent() {
                 <div className="text-center p-4 bg-red-50 rounded">
                   <p className="text-sm text-gray-600">Balance Amount</p>
                   <p className="text-2xl font-bold text-red-600">₹{salesBill.balanceAmount.toFixed(2)}</p>
+                </div>
+                <div className="text-center p-4 bg-amber-50 rounded">
+                  <p className="text-sm text-gray-600">Total Weight</p>
+                  <p className="text-2xl font-bold text-amber-700">{totalWeight.toFixed(2)}</p>
                 </div>
               </div>
             </CardContent>

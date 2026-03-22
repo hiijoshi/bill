@@ -1,11 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { ChevronDown, ChevronRight, LayoutDashboard, ShoppingCart, TrendingUp, Menu, X, Package, CreditCard, FileText, Settings, Lock, type LucideIcon } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, LayoutDashboard, ShoppingCart, TrendingUp, Menu, Package, CreditCard, FileText, Settings, Lock, type LucideIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
 type MenuPermissionModule =
@@ -115,6 +115,7 @@ interface SidebarProps {
 
 export default function Sidebar({ companyId, isCollapsed = false, onToggleCollapse }: SidebarProps) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const router = useRouter()
   const [openItems, setOpenItems] = useState<string[]>([])
   const [allowedModules, setAllowedModules] = useState<Set<MenuPermissionModule> | null>(null)
@@ -213,8 +214,21 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
   }
 
   const isActive = (href: string) => {
-    const cleanHref = href.split('?')[0]
-    return pathname === cleanHref
+    const [pathPart, queryPart = ''] = href.split('?')
+    if (pathname !== pathPart) return false
+
+    if (!queryPart) {
+      if (pathPart === '/reports/main') {
+        return !searchParams.get('reportType')
+      }
+      return true
+    }
+
+    const targetParams = new URLSearchParams(queryPart)
+    const keysToCheck = Array.from(targetParams.keys()).filter((key) => key !== 'companyId' && key !== 'companyIds')
+    if (keysToCheck.length === 0) return true
+
+    return keysToCheck.every((key) => searchParams.get(key) === targetParams.get(key))
   }
 
   const isParentActive = (item: MenuItem) => {
@@ -224,21 +238,21 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
 
   return (
     <div className={cn(
-      "bg-white border-r border-gray-200 h-full transition-all duration-300 ease-in-out flex flex-col",
+      "bg-white border-r border-slate-200 h-full transition-all duration-300 ease-in-out flex flex-col",
       isCollapsed ? "w-16" : "w-64"
     )}>
       <div className="p-4 flex items-center justify-between flex-shrink-0">
-        {!isCollapsed && <h2 className="text-lg font-semibold text-gray-900">Navigation</h2>}
+        {!isCollapsed && <h2 className="text-lg font-semibold text-slate-900">Navigation</h2>}
         <Button
           variant="ghost"
           size="sm"
           onClick={onToggleCollapse}
-          className="p-1 h-8 w-8"
+          className="h-8 w-8 rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
         >
-          {isCollapsed ? <Menu className="h-4 w-4" /> : <X className="h-4 w-4" />}
+          {isCollapsed ? <Menu className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
         </Button>
       </div>
-      <nav className="px-2 flex-1 overflow-y-auto">
+      <nav className="px-3 pb-4 flex-1 overflow-y-auto">
         {menuItems.map((item) => {
           const hasChildren = item.children && item.children.length > 0
           const isOpen = openItems.includes(item.title)
@@ -248,14 +262,16 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
             return (
               <Link key={item.title} href={withCompany(item.href)} onClick={syncActiveCompany}>
                 <Button
-                  variant={active ? 'secondary' : 'ghost'}
+                  variant="ghost"
                   className={cn(
-                    'w-full justify-start mb-1',
-                    active && 'bg-gray-100',
-                    isCollapsed && 'px-2'
+                    'mb-2 h-12 w-full justify-start rounded-xl px-4 text-[15px] font-medium transition-colors',
+                    active
+                      ? 'bg-slate-900 text-white shadow-sm hover:bg-slate-900 hover:text-white'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+                    isCollapsed && 'h-11 justify-center px-0'
                   )}
                 >
-                  {item.icon && <item.icon className={cn("h-4 w-4", isCollapsed ? "" : "mr-2")} />}
+                  {item.icon && <item.icon className={cn("h-4 w-4", isCollapsed ? "" : "mr-3")} />}
                   {!isCollapsed && item.title}
                 </Button>
               </Link>
@@ -268,13 +284,15 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
                 <Button
                   variant="ghost"
                   className={cn(
-                    'w-full justify-between mb-1',
-                    active && 'bg-gray-100',
-                    isCollapsed && 'px-2'
+                    'mb-2 h-12 w-full justify-between rounded-xl px-4 text-[15px] font-medium transition-colors',
+                    active
+                      ? 'bg-slate-900 text-white shadow-sm hover:bg-slate-900 hover:text-white'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+                    isCollapsed && 'h-11 justify-center px-0'
                   )}
                 >
                   <div className="flex items-center">
-                    {item.icon && <item.icon className={cn("h-4 w-4", isCollapsed ? "" : "mr-2")} />}
+                    {item.icon && <item.icon className={cn("h-4 w-4", isCollapsed ? "" : "mr-3")} />}
                     {!isCollapsed && item.title}
                   </div>
                   {!isCollapsed && (isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />)}
@@ -286,11 +304,13 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
                     hasChildAccess(child) ? (
                       <Link key={child.title} href={withCompany(child.href)} onClick={syncActiveCompany}>
                         <Button
-                          variant={isActive(child.href) ? 'secondary' : 'ghost'}
+                          variant="ghost"
                           size="sm"
                           className={cn(
-                            'w-full justify-start mb-1',
-                            isActive(child.href) && 'bg-gray-100'
+                            'mb-1.5 h-10 w-full justify-start rounded-lg px-4 text-sm transition-colors',
+                            isActive(child.href)
+                              ? 'bg-slate-100 font-medium text-slate-900'
+                              : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
                           )}
                         >
                           {child.title}

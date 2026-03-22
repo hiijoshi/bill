@@ -1,11 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { prisma } from '@/lib/prisma'
-import { env } from '@/lib/config'
-import { normalizeAppRole } from '@/lib/api-security'
+import { getAccessibleCompanies, normalizeAppRole } from '@/lib/api-security'
+import { getCompanyCookieName, getCompanyCookieNameCandidates } from '@/lib/session-cookies'
+import { getAppCompanyCookieOptions, resolveSupabaseAppSession } from '@/lib/supabase/app-session'
 
 export async function GET(request: NextRequest) {
   try {
+    const supabaseSession = await resolveSupabaseAppSession(request)
+    if (supabaseSession) {
+      return supabaseSession.applyCookies(
+        NextResponse.json({
+          success: true,
+          company: supabaseSession.activeCompany
+            ? {
+                id: supabaseSession.activeCompany.id,
+                name: supabaseSession.activeCompany.name
+              }
+            : null
+        })
+      )
+    }
+
     const session = await getSession()
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -18,6 +34,7 @@ export async function GET(request: NextRequest) {
         deletedAt: null
       },
       select: {
+        id: true,
         role: true,
         companyId: true
       }
@@ -28,42 +45,24 @@ export async function GET(request: NextRequest) {
     }
 
     const role = normalizeAppRole(authUser.role || session.role)
-    const isSuperAdmin = role === 'super_admin'
-    const cookieCompanyId = request.cookies.get('companyId')?.value?.trim() || ''
+    const accessibleCompanies = await getAccessibleCompanies({
+      userId: session.userId,
+      traderId: session.traderId,
+      role,
+      companyId: authUser.companyId,
+      userDbId: authUser.id
+    })
+    const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+    const cookieCompanyId =
+      getCompanyCookieNameCandidates(scopeSource)
+        .map((cookieName) => request.cookies.get(cookieName)?.value?.trim() || '')
+        .find((value) => value.length > 0) || ''
 
-    let company = cookieCompanyId
-      ? await prisma.company.findFirst({
-          where: isSuperAdmin
-            ? { id: cookieCompanyId, deletedAt: null }
-            : {
-                id: cookieCompanyId,
-                deletedAt: null,
-                OR: [{ traderId: session.traderId }, { traderId: null }]
-              },
-          select: { id: true, name: true }
-        })
-      : null
-
-    if ((role === 'company_admin' || role === 'company_user') && authUser.companyId) {
-      if (!company || company.id !== authUser.companyId) {
-        company = await prisma.company.findFirst({
-          where: { id: authUser.companyId, deletedAt: null },
-          select: { id: true, name: true }
-        })
-      }
-    }
-
-    if (!company) {
-      company = await prisma.company.findFirst({
-        where: isSuperAdmin
-          ? { deletedAt: null }
-          : {
-              deletedAt: null,
-              OR: [{ traderId: session.traderId }, { traderId: null }]
-            },
-        select: { id: true, name: true }
-      })
-    }
+    const company =
+      accessibleCompanies.find((entry) => entry.id === cookieCompanyId && !entry.locked) ||
+      accessibleCompanies.find((entry) => entry.id === authUser.companyId && !entry.locked) ||
+      accessibleCompanies.find((entry) => !entry.locked) ||
+      null
 
     return NextResponse.json({
       success: true,
@@ -84,14 +83,61 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const body = await request.json().catch(() => ({}))
+    const companyIdRaw = typeof body?.companyId === 'string' ? body.companyId.trim() : ''
+    const force = body?.force === true
+
+    const supabaseSession = await resolveSupabaseAppSession(request)
+    if (supabaseSession) {
+      if (!companyIdRaw) {
+        return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
+      }
+
+      const company = supabaseSession.companies.find((entry) => entry.id === companyIdRaw) || null
+      if (!company) {
+        return supabaseSession.applyCookies(
+          NextResponse.json({ error: 'Invalid company for this user' }, { status: 403 })
+        )
+      }
+
+      if (company.locked) {
+        return supabaseSession.applyCookies(
+          NextResponse.json({ error: 'Company is locked' }, { status: 403 })
+        )
+      }
+
+      if (supabaseSession.cookieCompanyId && supabaseSession.cookieCompanyId !== company.id && !force) {
+        return supabaseSession.applyCookies(
+          NextResponse.json(
+            { error: 'Company is locked. Use company select page to switch.' },
+            { status: 409 }
+          )
+        )
+      }
+
+      const response = supabaseSession.applyCookies(
+        NextResponse.json({
+          success: true,
+          company: {
+            id: company.id,
+            name: company.name
+          }
+        })
+      )
+
+      response.cookies.set(
+        supabaseSession.companyCookieName,
+        company.id,
+        getAppCompanyCookieOptions()
+      )
+
+      return response
+    }
+
     const session = await getSession()
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
-
-    const body = await request.json().catch(() => ({}))
-    const companyIdRaw = typeof body?.companyId === 'string' ? body.companyId.trim() : ''
-    const force = body?.force === true
 
     if (!companyIdRaw) {
       return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
@@ -104,16 +150,11 @@ export async function POST(request: NextRequest) {
         deletedAt: null
       },
       select: {
+        id: true,
         role: true,
         companyId: true,
         locked: true,
         trader: {
-          select: {
-            locked: true,
-            deletedAt: true
-          }
-        },
-        company: {
           select: {
             locked: true,
             deletedAt: true
@@ -129,42 +170,38 @@ export async function POST(request: NextRequest) {
     if (
       authUser.locked ||
       authUser.trader?.locked ||
-      authUser.trader?.deletedAt ||
-      authUser.company?.locked ||
-      authUser.company?.deletedAt
+      authUser.trader?.deletedAt
     ) {
       return NextResponse.json({ error: 'Account is locked or inactive' }, { status: 403 })
     }
 
     const role = normalizeAppRole(authUser.role || session.role)
-    const isSuperAdmin = role === 'super_admin'
-
-    const company = await prisma.company.findFirst({
-      where: isSuperAdmin
-        ? { id: companyIdRaw, deletedAt: null }
-        : {
-            id: companyIdRaw,
-            deletedAt: null,
-            OR: [
-              { traderId: session.traderId },
-              { traderId: null }
-            ]
-          },
-      select: {
-        id: true,
-        name: true
-      }
-    })
+    const company = (
+      await getAccessibleCompanies(
+        {
+          userId: session.userId,
+          traderId: session.traderId,
+          role,
+          companyId: authUser.companyId,
+          userDbId: authUser.id
+        },
+        companyIdRaw
+      )
+    )[0]
 
     if (!company) {
       return NextResponse.json({ error: 'Invalid company for this user' }, { status: 403 })
     }
 
-    if ((role === 'company_admin' || role === 'company_user') && authUser.companyId && authUser.companyId !== company.id) {
-      return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
+    if (company.locked) {
+      return NextResponse.json({ error: 'Company is locked' }, { status: 403 })
     }
 
-    const currentLockedCompanyId = request.cookies.get('companyId')?.value
+    const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+    const currentLockedCompanyId =
+      getCompanyCookieNameCandidates(scopeSource)
+        .map((cookieName) => request.cookies.get(cookieName)?.value)
+        .find((value): value is string => Boolean(value)) || null
     if (currentLockedCompanyId && currentLockedCompanyId !== company.id && !force) {
       return NextResponse.json(
         { error: 'Company is locked. Use company select page to switch.' },
@@ -180,13 +217,8 @@ export async function POST(request: NextRequest) {
       }
     })
 
-    response.cookies.set('companyId', company.id, {
-      httpOnly: true,
-      secure: env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      path: '/',
-      maxAge: 7 * 24 * 60 * 60,
-      priority: 'high'
+    response.cookies.set(getCompanyCookieName(scopeSource), company.id, {
+      ...getAppCompanyCookieOptions()
     })
 
     return response
