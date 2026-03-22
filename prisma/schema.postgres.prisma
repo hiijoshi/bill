@@ -3,12 +3,14 @@
 
 generator client {
   provider = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
 }
 
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
+  schemas   = ["public", "auth"]
 }
 
 model Trader {
@@ -25,6 +27,8 @@ model Trader {
   updatedAt DateTime @updatedAt
 
   @@index([deletedAt], map: "idx_traders_deleted_at")
+
+  @@schema("public")
 }
 
 model User {
@@ -47,6 +51,8 @@ model User {
   @@unique([traderId, userId])
   @@index([companyId], map: "idx_users_company_id")
   @@index([deletedAt], map: "idx_users_deleted_at")
+
+  @@schema("public")
 }
 
 model Company {
@@ -83,6 +89,8 @@ model Company {
   @@index([traderId], map: "idx_companies_trader_id")
   @@index([name], map: "idx_companies_name")
   @@index([deletedAt], map: "idx_companies_deleted_at")
+
+  @@schema("public")
 }
 
 model UserPermission {
@@ -100,6 +108,8 @@ model UserPermission {
   @@unique([userId, companyId, module], map: "uniq_user_company_module_permission")
   @@index([companyId, module], map: "idx_permissions_company_module")
   @@index([userId], map: "idx_permissions_user_id")
+
+  @@schema("public")
 }
 
 model Party {
@@ -121,6 +131,8 @@ model Party {
   payments Payment[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@schema("public")
 }
 
 model Farmer {
@@ -140,6 +152,8 @@ model Farmer {
   payments Payment[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@schema("public")
 }
 
 model Supplier {
@@ -158,6 +172,8 @@ model Supplier {
   specialPurchaseBills SpecialPurchaseBill[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@schema("public")
 }
 
 model Unit {
@@ -175,6 +191,8 @@ model Unit {
   updatedAt   DateTime @updatedAt
 
   @@unique([companyId, symbol])
+
+  @@schema("public")
 }
 
 model Product {
@@ -199,6 +217,8 @@ model Product {
   updatedAt     DateTime @updatedAt
 
   @@unique([companyId, name])
+
+  @@schema("public")
 }
 
 model PurchaseBill {
@@ -228,6 +248,8 @@ model PurchaseBill {
   purchaseItems PurchaseItem[]
 
   @@index([companyId, billDate], map: "idx_purchase_bills_company_date")
+
+  @@schema("public")
 }
 
 model PurchaseItem {
@@ -252,6 +274,8 @@ model PurchaseItem {
   totalWeightQt  Float?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  @@schema("public")
 }
 
 model SpecialPurchaseBill {
@@ -273,6 +297,8 @@ model SpecialPurchaseBill {
   updatedAt           DateTime @updatedAt
   // relations
   specialPurchaseItems SpecialPurchaseItem[]
+
+  @@schema("public")
 }
 
 model SpecialPurchaseItem {
@@ -292,6 +318,8 @@ model SpecialPurchaseItem {
   grossAmount           Float
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+
+  @@schema("public")
 }
 
 model SalesBill {
@@ -316,6 +344,8 @@ model SalesBill {
   transportBills TransportBill[]
 
   @@index([companyId, billDate], map: "idx_sales_bills_company_date")
+
+  @@schema("public")
 }
 
 model SalesItem {
@@ -334,6 +364,8 @@ model SalesItem {
   amount      Float
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@schema("public")
 }
 
 model SalesItemMaster {
@@ -352,6 +384,8 @@ model SalesItemMaster {
   updatedAt     DateTime @updatedAt
 
   @@unique([companyId, productId])
+
+  @@schema("public")
 }
 
 model StockLedger {
@@ -370,6 +404,8 @@ model StockLedger {
   updatedAt  DateTime @updatedAt
 
   @@index([productId, entryDate], map: "idx_stock_ledger_product_date")
+
+  @@schema("public")
 }
 
 model Payment {
@@ -405,6 +441,8 @@ model Payment {
   @@index([billType, billId], map: "idx_payments_bill_type")
   @@index([companyId, payDate], map: "idx_payments_company_date")
   @@index([deletedAt], map: "idx_payments_deleted_at")
+
+  @@schema("public")
 }
 
 model AuditLog {
@@ -427,6 +465,8 @@ model AuditLog {
   @@index([createdAt], map: "idx_audit_logs_created_at")
   @@index([actorId], map: "idx_audit_logs_actor_id")
   @@index([resourceType, resourceId], map: "idx_audit_logs_resource")
+
+  @@schema("public")
 }
 
 model Transport {
@@ -444,6 +484,8 @@ model Transport {
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  @@schema("public")
 }
 
 model Bank {
@@ -462,6 +504,8 @@ model Bank {
 
   @@unique([companyId, name, ifscCode])
   @@index([companyId, name], map: "idx_banks_company_name")
+
+  @@schema("public")
 }
 
 model Marka {
@@ -476,6 +520,8 @@ model Marka {
 
   @@unique([companyId, markaNumber])
   @@index([companyId, markaNumber], map: "idx_markas_company_number")
+
+  @@schema("public")
 }
 
 model PaymentMode {
@@ -491,6 +537,8 @@ model PaymentMode {
 
   @@unique([companyId, code])
   @@index([companyId, name], map: "idx_payment_modes_company_name")
+
+  @@schema("public")
 }
 
 model TransportBill {
@@ -507,4 +555,6 @@ model TransportBill {
   insuranceAmount Float?  @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  @@schema("public")
 }
