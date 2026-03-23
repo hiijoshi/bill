@@ -7,7 +7,7 @@ import Sidebar from './Sidebar'
 import HeaderAccountPanel from '@/components/account/HeaderAccountPanel'
 import { isAbortError } from '@/lib/http'
 import { clearClientCache, getClientCache, setClientCache } from '@/lib/client-fetch-cache'
-import { APP_COMPANY_CHANGED_EVENT } from '@/lib/app-shell-events'
+import { APP_COMPANY_CHANGED_EVENT } from '@/lib/company-context'
 
 interface DashboardLayoutProps {
   children: React.ReactNode
