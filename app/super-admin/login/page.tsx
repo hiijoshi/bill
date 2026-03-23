@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Shield, User, Lock, AlertCircle } from 'lucide-react'
+import { clearClientCache } from '@/lib/client-fetch-cache'
 
 export default function SuperAdminLogin() {
   return (
@@ -49,8 +50,12 @@ function SuperAdminLoginContent() {
     e.preventDefault()
     setError('')
     setLoading(true)
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), 10000)
 
     try {
+      clearClientCache()
+
       if (!userId || !password) {
         setError('User ID and password are required')
         return
@@ -59,6 +64,7 @@ function SuperAdminLoginContent() {
       const response = await fetch('/api/super-admin/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({ userId, password, secondSecret })
       })
 
@@ -69,8 +75,13 @@ function SuperAdminLoginContent() {
 
       router.push('/super-admin/crud')
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setError('Login is taking too long. Please try again.')
+        return
+      }
       setError(err instanceof Error ? err.message : 'Login failed')
     } finally {
+      window.clearTimeout(timeoutId)
       setLoading(false)
     }
   }

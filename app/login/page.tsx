@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Building2, User, Lock, AlertCircle } from 'lucide-react'
+import { clearClientCache } from '@/lib/client-fetch-cache'
 
 export default function LoginPage() {
   return (
@@ -54,8 +55,12 @@ function LoginPageContent() {
     e.preventDefault()
     setError('')
     setLoading(true)
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), 10000)
 
     try {
+      clearClientCache()
+
       // Validate trader ID is not empty
       if (!traderId || traderId.trim() === '') {
         setError('Trader ID is required')
@@ -68,6 +73,7 @@ function LoginPageContent() {
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: controller.signal,
         body: JSON.stringify({ traderId, userId, password }),
       })
 
@@ -97,8 +103,13 @@ function LoginPageContent() {
       // Redirect to dashboard (multi-company ready)
       router.push('/main/dashboard')
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setError('Login is taking too long. Please try again.')
+        return
+      }
       setError(error instanceof Error ? error.message : 'Login failed. Please try again.')
     } finally {
+      window.clearTimeout(timeoutId)
       setLoading(false)
     }
   }

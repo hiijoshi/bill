@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button'
 import HeaderAccountPanel from '@/components/account/HeaderAccountPanel'
 import { LayoutDashboard, Store, Building2, Users, ShieldCheck, Settings2, ArrowLeft, ScrollText, PanelLeftClose, PanelLeftOpen, LogOut, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { clearClientCache, getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 
 type SuperAdminShellProps = {
   title: string
@@ -32,37 +33,64 @@ export default function SuperAdminShell({ title, subtitle, children }: SuperAdmi
   const [currentUserId, setCurrentUserId] = useState('')
   const [currentUserName, setCurrentUserName] = useState('')
   const [currentUserRole, setCurrentUserRole] = useState('')
-  const liveSyncMs = Math.max(30000, Number(process.env.NEXT_PUBLIC_LIVE_SYNC_MS || 60000))
+  const profileCacheKey = 'super-admin:profile'
+  const profileCacheAgeMs = 30_000
+
+  const loadCurrentUser = useCallback(async (force = false) => {
+    try {
+      const cached = force
+        ? null
+        : getClientCache<{ user?: { userId?: string; name?: string; role?: string } }>(profileCacheKey, profileCacheAgeMs)
+
+      if (cached?.user) {
+        setCurrentUserId(String(cached.user.userId || ''))
+        setCurrentUserName(String(cached.user.name || ''))
+        setCurrentUserRole(String(cached.user.role || ''))
+        return
+      }
+
+      const response = await fetch('/api/super-admin/profile', { cache: 'no-store' })
+      if (!response.ok) return
+
+      const payload = await response.json().catch(() => ({}))
+      setClientCache(profileCacheKey, payload)
+      setCurrentUserId(String(payload?.user?.userId || ''))
+      setCurrentUserName(String(payload?.user?.name || ''))
+      setCurrentUserRole(String(payload?.user?.role || ''))
+    } catch {
+      // ignore transient profile refresh failures
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
-    let timerId: ReturnType<typeof setInterval> | null = null
 
-    const loadCurrentUser = async () => {
-      try {
-        const response = await fetch('/api/super-admin/profile', { cache: 'no-store' })
-        if (!response.ok || cancelled) return
-
-        const payload = await response.json().catch(() => ({}))
-        if (cancelled) return
-        setCurrentUserId(String(payload?.user?.userId || ''))
-        setCurrentUserName(String(payload?.user?.name || ''))
-        setCurrentUserRole(String(payload?.user?.role || ''))
-      } catch {
-        if (cancelled) return
-      }
+    const run = (force = false) => {
+      if (cancelled) return
+      void loadCurrentUser(force)
     }
 
-    void loadCurrentUser()
-    timerId = setInterval(() => {
-      void loadCurrentUser()
-    }, liveSyncMs)
+    run(false)
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        run(false)
+      }
+    }
+    const onFocus = () => run(false)
+    const onSessionRefresh = () => run(true)
+
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('sessionRefreshed', onSessionRefresh)
 
     return () => {
       cancelled = true
-      if (timerId) clearInterval(timerId)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('sessionRefreshed', onSessionRefresh)
     }
-  }, [liveSyncMs])
+  }, [loadCurrentUser, pathname])
 
   const handleBack = () => {
     if (typeof window !== 'undefined' && window.history.length > 1) {
@@ -79,6 +107,7 @@ export default function SuperAdminShell({ title, subtitle, children }: SuperAdmi
       // ignore and continue redirect
     }
 
+    clearClientCache()
     router.push('/super-admin/login')
   }
 

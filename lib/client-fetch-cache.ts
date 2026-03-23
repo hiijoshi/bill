@@ -18,3 +18,19 @@ export function setClientCache<T>(key: string, data: T): void {
     updatedAt: Date.now()
   })
 }
+
+export function deleteClientCache(key: string): void {
+  cacheStore.delete(key)
+}
+
+export function deleteClientCacheByPrefix(prefix: string): void {
+  for (const key of cacheStore.keys()) {
+    if (key.startsWith(prefix)) {
+      cacheStore.delete(key)
+    }
+  }
+}
+
+export function clearClientCache(): void {
+  cacheStore.clear()
+}

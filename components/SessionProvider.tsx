@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useMemo } from 'react'
 import { usePathname } from 'next/navigation'
+import { clearClientCache } from '@/lib/client-fetch-cache'
 
 interface SessionContextType {
   isSessionExpired: boolean
@@ -22,6 +23,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore errors; proceed to redirect regardless
     }
+    clearClientCache()
     const target = isSuperAdminRoute ? '/super-admin/login' : '/login'
     window.location.href = target
   }, [isSuperAdminRoute])

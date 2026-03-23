@@ -1,17 +1,43 @@
 'use client'
 
-import { Suspense, useState, useEffect } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { LogOut, User } from 'lucide-react'
 import Sidebar from './Sidebar'
 import HeaderAccountPanel from '@/components/account/HeaderAccountPanel'
 import { isAbortError } from '@/lib/http'
+import { clearClientCache, getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { APP_COMPANY_CHANGED_EVENT } from '@/lib/app-shell-events'
 
 interface DashboardLayoutProps {
   children: React.ReactNode
   companyId: string
   headerActions?: React.ReactNode
 }
+
+type AuthMePayload = {
+  user?: {
+    userId?: string | null
+    name?: string | null
+    role?: string | null
+    companyId?: string | null
+  } | null
+  company?: {
+    id?: string | null
+    name?: string | null
+  } | null
+}
+
+type CompanySummary = {
+  id: string
+  name: string
+  locked?: boolean
+}
+
+const AUTH_CACHE_KEY = 'shell:auth-me'
+const COMPANIES_CACHE_KEY = 'shell:companies'
+const AUTH_CACHE_AGE_MS = 30_000
+const COMPANIES_CACHE_AGE_MS = 60_000
 
 export default function DashboardLayout({ children, companyId, headerActions }: DashboardLayoutProps) {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
@@ -20,140 +46,126 @@ export default function DashboardLayout({ children, companyId, headerActions }: 
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null)
   const [resolvedCompanyId, setResolvedCompanyId] = useState(companyId)
   const [currentCompanyName, setCurrentCompanyName] = useState<string | null>(null)
-  const liveSyncMs = Math.max(30000, Number(process.env.NEXT_PUBLIC_LIVE_SYNC_MS || 60000))
   const router = useRouter()
 
-  useEffect(() => {
-    // Check authentication status via API call
-    let cancelled = false
-    let timerId: ReturnType<typeof setInterval> | null = null
+  const loadShellContext = useCallback(async (force = false) => {
+    try {
+      let authPayload = force ? null : getClientCache<AuthMePayload>(AUTH_CACHE_KEY, AUTH_CACHE_AGE_MS)
+      let companiesPayload = force ? null : getClientCache<CompanySummary[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS)
 
-    const checkAuth = async () => {
-      try {
-        const response = await fetch('/api/auth/me', { cache: 'no-store' })
-        if (cancelled) return
-        if (response.ok) {
-          const data = await response.json()
-          if (cancelled) return
-          const normalizedRole = String(data?.user?.role || data?.role || '')
-            .toLowerCase()
-            .replace(/\s+/g, '_')
-          if (normalizedRole === 'super_admin' && window.location.pathname.startsWith('/main')) {
-            router.replace('/super-admin/crud')
-            return
-          }
-          setCurrentUser(data?.user?.userId || data?.userId || null)
-          setCurrentUserName(data?.user?.name || null)
-          setCurrentUserRole(data?.user?.role || null)
-        } else {
-          if (response.status === 401) {
-            router.push('/login')
-          }
-        }
-      } catch (error) {
-        if (cancelled || isAbortError(error)) return
-        void error
-      }
-    }
-    
-    void checkAuth()
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        void checkAuth()
-      }
-    }
-    const onFocus = () => {
-      void checkAuth()
-    }
-    timerId = setInterval(() => {
-      void checkAuth()
-    }, liveSyncMs)
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    window.addEventListener('focus', onFocus)
+      const requests: Promise<void>[] = []
 
-    return () => {
-      cancelled = true
-      if (timerId) clearInterval(timerId)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-      window.removeEventListener('focus', onFocus)
-    }
-  }, [router, liveSyncMs])
-
-  useEffect(() => {
-    let cancelled = false
-    let timerId: ReturnType<typeof setInterval> | null = null
-    const loadCompanyContext = async () => {
-      if (cancelled) return
-
-      let targetCompanyId = companyId?.trim() || ''
-      let targetCompanyName = ''
-      let companiesPayload: unknown = null
-
-      try {
-        const [activeCompanyResponse, companiesResponse] = await Promise.all([
-          fetch('/api/auth/company', { cache: 'no-store' }),
-          fetch('/api/companies', { cache: 'no-store' })
-        ])
-
-        if (cancelled) return
-
-        if (activeCompanyResponse.ok) {
-          const activeData = await activeCompanyResponse.json().catch(() => null)
-          const activeCompany = activeData?.company
-          if (activeCompany?.id) {
-            if (!targetCompanyId) targetCompanyId = String(activeCompany.id)
-            if (String(activeCompany.id) === targetCompanyId) {
-              targetCompanyName = String(activeCompany.name || '')
+      if (!authPayload) {
+        requests.push(
+          fetch('/api/auth/me', { cache: 'no-store' }).then(async (response) => {
+            if (response.status === 401) {
+              router.push('/login')
+              return
             }
-          }
-        }
-
-        if (companiesResponse.ok) {
-          companiesPayload = await companiesResponse.json().catch(() => [])
-        }
-      } catch (error) {
-        if (cancelled || isAbortError(error)) return
+            if (!response.ok) {
+              return
+            }
+            const data = (await response.json().catch(() => null)) as AuthMePayload | null
+            if (!data) return
+            authPayload = data
+            setClientCache(AUTH_CACHE_KEY, data)
+          })
+        )
       }
 
+      if (!companiesPayload) {
+        requests.push(
+          fetch('/api/companies').then(async (response) => {
+            if (!response.ok) return
+            const data = (await response.json().catch(() => [])) as CompanySummary[]
+            if (!Array.isArray(data)) return
+            companiesPayload = data
+            setClientCache(COMPANIES_CACHE_KEY, data)
+          })
+        )
+      }
+
+      await Promise.all(requests)
+
+      if (!authPayload) {
+        return
+      }
+
+      const normalizedRole = String(authPayload.user?.role || '')
+        .toLowerCase()
+        .replace(/\s+/g, '_')
+      if (normalizedRole === 'super_admin' && window.location.pathname.startsWith('/main')) {
+        router.replace('/super-admin/crud')
+        return
+      }
+
+      setCurrentUser(authPayload.user?.userId || null)
+      setCurrentUserName(authPayload.user?.name || null)
+      setCurrentUserRole(authPayload.user?.role || null)
+
+      const fallbackCompanyId = String(authPayload.company?.id || authPayload.user?.companyId || '').trim()
+      const targetCompanyId = companyId?.trim() || fallbackCompanyId
       if (!targetCompanyId) {
         setResolvedCompanyId('')
         setCurrentCompanyName('Not selected')
         return
       }
 
+      const cachedCompanyName =
+        String(authPayload.company?.id || '').trim() === targetCompanyId
+          ? String(authPayload.company?.name || '').trim()
+          : ''
+      const companyName =
+        cachedCompanyName ||
+        companiesPayload?.find((row) => row.id === targetCompanyId)?.name ||
+        'Selected company'
+
+      setResolvedCompanyId(targetCompanyId)
+      setCurrentCompanyName(companyName)
+    } catch (error) {
+      if (isAbortError(error)) return
+      void error
+    }
+  }, [companyId, router])
+
+  useEffect(() => {
+    let cancelled = false
+    let lastRunAt = 0
+
+    const run = (force = false) => {
       if (cancelled) return
-      if (!Array.isArray(companiesPayload)) {
-        setResolvedCompanyId(targetCompanyId)
-        setCurrentCompanyName(targetCompanyName || 'Selected company')
+      const now = Date.now()
+      if (!force && now - lastRunAt < 1_000) {
         return
       }
-      const currentCompany = companiesPayload.find((row) => String(row?.id) === targetCompanyId)
-      setResolvedCompanyId(targetCompanyId)
-      setCurrentCompanyName(targetCompanyName || currentCompany?.name || 'Selected company')
+      lastRunAt = now
+      void loadShellContext(force)
     }
 
-    void loadCompanyContext()
+    run(false)
+
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        void loadCompanyContext()
+        run(false)
       }
     }
-    const onFocus = () => {
-      void loadCompanyContext()
-    }
-    timerId = setInterval(() => {
-      void loadCompanyContext()
-    }, liveSyncMs)
+    const onFocus = () => run(false)
+    const onSessionRefresh = () => run(true)
+    const onCompanyChanged = () => run(true)
+
     document.addEventListener('visibilitychange', onVisibilityChange)
     window.addEventListener('focus', onFocus)
+    window.addEventListener('sessionRefreshed', onSessionRefresh)
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
 
     return () => {
       cancelled = true
-      if (timerId) clearInterval(timerId)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('focus', onFocus)
+      window.removeEventListener('sessionRefreshed', onSessionRefresh)
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
-  }, [companyId, liveSyncMs])
+  }, [loadShellContext])
 
   const toggleSidebar = () => {
     setIsSidebarCollapsed(!isSidebarCollapsed)
@@ -166,6 +178,7 @@ export default function DashboardLayout({ children, companyId, headerActions }: 
       // Even if API call fails, redirect to login
       void error
     }
+    clearClientCache()
     setCurrentUser(null)
     setCurrentUserName(null)
     setCurrentUserRole(null)
