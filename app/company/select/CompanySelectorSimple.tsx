@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { notifyAppCompanyChanged } from '@/lib/company-context'
 
 interface Company {
   id: string
@@ -38,6 +39,7 @@ export default function CompanySelector({ companies }: CompanySelectorProps) {
           return
         }
 
+        notifyAppCompanyChanged(selectedCompany)
         router.push('/main/dashboard')
       } catch (error) {
         console.error('Failed to set company context:', error)

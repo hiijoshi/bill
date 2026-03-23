@@ -3,11 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
-
-interface LedgerRow {
-  qtyIn: number
-  qtyOut: number
-}
+import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
 
 function normalizeCompanyId(raw: string | null): string | null {
   if (!raw) return null
@@ -22,6 +18,31 @@ function clean(value: unknown): string | null {
   return v.length > 0 ? v : null
 }
 
+async function ensureSupabaseCompanyAccess(request: NextRequest, companyId: string) {
+  const supabaseSession = await resolveSupabaseAppSession(request, companyId)
+  if (!supabaseSession) return null
+
+  const scopedCompany = supabaseSession.companies.find((company) => company.id === companyId) || null
+  if (!scopedCompany) {
+    return {
+      handled: true as const,
+      response: NextResponse.json({ error: 'Company not found or access denied' }, { status: 403 })
+    }
+  }
+
+  if (scopedCompany.locked) {
+    return {
+      handled: true as const,
+      response: NextResponse.json({ error: 'Company is locked' }, { status: 403 })
+    }
+  }
+
+  return {
+    handled: true as const,
+    response: null
+  }
+}
+
 const postSchema = z.object({
   name: z.string().trim().min(1).optional(),
   unit: z.string().trim().min(1).optional(),
@@ -29,8 +50,7 @@ const postSchema = z.object({
   gstRate: z.union([z.number(), z.string()]).optional().nullable(),
   sellingPrice: z.union([z.number(), z.string()]).optional().nullable(),
   description: z.string().optional().nullable(),
-  isActive: z.boolean().optional(),
-  seed: z.boolean().optional()
+  isActive: z.boolean().optional()
 }).strict()
 
 const putSchema = z.object({
@@ -51,8 +71,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
     }
 
+    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
+    if (supabaseGuard?.response) return supabaseGuard.response
+
     const denied = await ensureCompanyAccess(request, companyId)
-    if (denied) return denied
+    if (denied && !supabaseGuard) return denied
 
     const pagination = parsePaginationParams(searchParams, { defaultPageSize: 50, maxPageSize: 200 })
     const where = {
@@ -72,8 +95,7 @@ export async function GET(request: NextRequest) {
       prisma.product.findMany({
         where,
         include: {
-          unit: true,
-          stockLedger: { select: { qtyIn: true, qtyOut: true } }
+          unit: true
         },
         orderBy: { name: 'asc' },
         ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
@@ -81,9 +103,34 @@ export async function GET(request: NextRequest) {
       pagination.enabled ? prisma.product.count({ where }) : Promise.resolve(0)
     ])
 
+    const productIds = products.map((product) => product.id)
+    const stockSummary =
+      productIds.length > 0
+        ? await prisma.stockLedger.groupBy({
+            by: ['productId'],
+            where: {
+              companyId,
+              productId: { in: productIds }
+            },
+            _sum: {
+              qtyIn: true,
+              qtyOut: true
+            }
+          })
+        : []
+
+    const stockSummaryMap = new Map(
+      stockSummary.map((row) => [
+        row.productId,
+        {
+          qtyIn: Number(row._sum.qtyIn || 0),
+          qtyOut: Number(row._sum.qtyOut || 0)
+        }
+      ])
+    )
+
     const rows = products.map((product) => {
-      const totalIn = product.stockLedger.reduce((sum: number, ledger: LedgerRow) => sum + ledger.qtyIn, 0)
-      const totalOut = product.stockLedger.reduce((sum: number, ledger: LedgerRow) => sum + ledger.qtyOut, 0)
+      const totals = stockSummaryMap.get(product.id) || { qtyIn: 0, qtyOut: 0 }
       return {
         id: product.id,
         name: product.name,
@@ -93,7 +140,7 @@ export async function GET(request: NextRequest) {
         sellingPrice: product.sellingPrice,
         description: product.description,
         isActive: product.isActive,
-        currentStock: totalIn - totalOut,
+        currentStock: totals.qtyIn - totals.qtyOut,
         createdAt: product.createdAt,
         updatedAt: product.updatedAt
       }
@@ -122,47 +169,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
     }
 
+    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
+    if (supabaseGuard?.response) return supabaseGuard.response
+
     const denied = await ensureCompanyAccess(request, companyId)
-    if (denied) return denied
-
-    if (parsed.data.seed === true) {
-      const fallbackUnit = await prisma.unit.findFirst({
-        where: { companyId },
-        orderBy: { createdAt: 'asc' }
-      })
-      if (!fallbackUnit) {
-        return NextResponse.json({ error: 'Create at least one unit before adding dummy products' }, { status: 400 })
-      }
-
-      const created = await prisma.$transaction([
-        prisma.product.create({
-          data: {
-            companyId,
-            name: 'Soyabean Premium',
-            unitId: fallbackUnit.id,
-            hsnCode: '12019000',
-            gstRate: 5,
-            sellingPrice: 5200,
-            description: 'Dummy product 1',
-            isActive: true
-          }
-        }),
-        prisma.product.create({
-          data: {
-            companyId,
-            name: 'Wheat Grade A',
-            unitId: fallbackUnit.id,
-            hsnCode: '10019910',
-            gstRate: 5,
-            sellingPrice: 2600,
-            description: 'Dummy product 2',
-            isActive: true
-          }
-        })
-      ])
-
-      return NextResponse.json({ success: true, message: `${created.length} dummy products added successfully`, count: created.length })
-    }
+    if (denied && !supabaseGuard) return denied
 
     const name = clean(parsed.data.name)
     const unit = clean(parsed.data.unit)
@@ -224,8 +235,11 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Product ID and Company ID required' }, { status: 400 })
     }
 
+    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
+    if (supabaseGuard?.response) return supabaseGuard.response
+
     const denied = await ensureCompanyAccess(request, companyId)
-    if (denied) return denied
+    if (denied && !supabaseGuard) return denied
 
     const existingProduct = await prisma.product.findFirst({
       where: { id, companyId },
@@ -288,8 +302,11 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
     }
 
+    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
+    if (supabaseGuard?.response) return supabaseGuard.response
+
     const denied = await ensureCompanyAccess(request, companyId)
-    if (denied) return denied
+    if (denied && !supabaseGuard) return denied
 
     if (all) {
       const result = await prisma.product.deleteMany({ where: { companyId } })

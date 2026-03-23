@@ -63,7 +63,7 @@ function ReportsMainPageContent() {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         resolvedCompanyId = await resolveCompanyId(window.location.search)
         if (resolvedCompanyId) break
-        await new Promise((resolve) => setTimeout(resolve, 120))
+        await new Promise((resolve) => setTimeout(resolve, 40))
       }
 
       if (cancelled) return

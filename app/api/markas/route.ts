@@ -20,8 +20,7 @@ function clean(value: unknown): string | null {
 const postSchema = z.object({
   markaNumber: z.string().trim().min(1).optional(),
   description: z.string().optional().nullable(),
-  isActive: z.boolean().optional(),
-  seed: z.boolean().optional()
+  isActive: z.boolean().optional()
 }).strict()
 
 const putSchema = z.object({
@@ -29,12 +28,6 @@ const putSchema = z.object({
   description: z.string().optional().nullable(),
   isActive: z.boolean().optional()
 }).strict()
-
-const DUMMY_MARKAS = [
-  { markaNumber: 'MK-101', description: 'Soyabean first quality', isActive: true },
-  { markaNumber: 'MK-102', description: 'Wheat standard quality', isActive: true },
-  { markaNumber: 'MK-103', description: 'Chana premium', isActive: true }
-] as const
 
 function supabaseErrorResponse(error: { message: string; code?: string | null }) {
   const status = error.code === 'PGRST116' ? 404 : 403
@@ -89,24 +82,6 @@ export async function POST(request: NextRequest) {
 
     const supabaseContext = await getSupabaseClaimsFromRequest(request)
     if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
-      if (parsed.data.seed === true) {
-        const payload = DUMMY_MARKAS.map((item) => ({
-          companyId,
-          markaNumber: item.markaNumber,
-          description: item.description,
-          isActive: item.isActive
-        }))
-
-        const { error } = await supabaseContext.supabase.from('Marka').insert(payload)
-        if (error) {
-          return supabaseContext.applyCookies(supabaseErrorResponse(error))
-        }
-
-        return supabaseContext.applyCookies(
-          NextResponse.json({ success: true, message: `${payload.length} dummy markas added successfully`, count: payload.length })
-        )
-      }
-
       const markaNumber = clean(parsed.data.markaNumber)?.toUpperCase() || null
       if (!markaNumber) {
         return NextResponse.json({ error: 'Marka number is required' }, { status: 400 })
@@ -132,23 +107,6 @@ export async function POST(request: NextRequest) {
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
-
-    if (parsed.data.seed === true) {
-      const created = await prisma.$transaction(
-        DUMMY_MARKAS.map((item) =>
-          prisma.marka.create({
-            data: {
-              companyId,
-              markaNumber: item.markaNumber,
-              description: item.description,
-              isActive: item.isActive
-            }
-          })
-        )
-      )
-
-      return NextResponse.json({ success: true, message: `${created.length} dummy markas added successfully`, count: created.length })
-    }
 
     const markaNumber = clean(parsed.data.markaNumber)?.toUpperCase() || null
     if (!markaNumber) {

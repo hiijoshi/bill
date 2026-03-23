@@ -1,4 +1,21 @@
+import { getClientCache, setClientCache } from './client-fetch-cache'
 import { getCompanyCookieNameCandidates } from './session-cookies'
+
+export const APP_COMPANY_CHANGED_EVENT = 'app-company-changed'
+
+const ACTIVE_COMPANY_CACHE_KEY = 'shell:active-company-id'
+const AUTH_ME_CACHE_KEY = 'shell:auth-me'
+const ACTIVE_COMPANY_CACHE_AGE_MS = 20_000
+const AUTH_ME_CACHE_AGE_MS = 30_000
+
+type AuthMeCachePayload = {
+  user?: {
+    companyId?: string | null
+  } | null
+  company?: {
+    id?: string | null
+  } | null
+}
 
 function getCompanyIdFromCookie(): string {
   if (typeof document === 'undefined') return ''
@@ -16,7 +33,14 @@ function getCompanyIdFromCookie(): string {
   return ''
 }
 
+const ALLOWED_INTERNAL_PATHS = new Set(['/api/auth/company', '/api/auth/me'])
+
 async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs: number = 12000): Promise<Response> {
+  // CWE-918: only allow known internal API paths — reject any external or unexpected URL
+  if (!ALLOWED_INTERNAL_PATHS.has(url)) {
+    throw new Error(`Blocked request to disallowed URL: ${url}`)
+  }
+
   if (init.signal) return fetch(url, init)
 
   const controller = new AbortController()
@@ -49,13 +73,27 @@ export async function resolveCompanyId(search: string): Promise<string> {
   if (fromSearch) return fromSearch
 
   try {
+    const cachedActiveCompanyId = getClientCache<string>(ACTIVE_COMPANY_CACHE_KEY, ACTIVE_COMPANY_CACHE_AGE_MS)
+    if (cachedActiveCompanyId) {
+      return cachedActiveCompanyId
+    }
+
+    const cachedAuthMe = getClientCache<AuthMeCachePayload>(AUTH_ME_CACHE_KEY, AUTH_ME_CACHE_AGE_MS)
+    const cachedAuthCompanyId = String(cachedAuthMe?.company?.id || cachedAuthMe?.user?.companyId || '').trim()
+    if (cachedAuthCompanyId) {
+      setClientCache(ACTIVE_COMPANY_CACHE_KEY, cachedAuthCompanyId)
+      return cachedAuthCompanyId
+    }
+
     const timeoutMs = Math.max(5000, Math.min(60000, Number(process.env.NEXT_PUBLIC_API_TIMEOUT_MS || 12000)))
     const activeCompanyResponse = await fetchWithTimeout('/api/auth/company', { cache: 'no-store' }, timeoutMs)
     if (activeCompanyResponse.ok) {
       const activeData = await activeCompanyResponse.json().catch(() => null)
       const activeCompanyId = activeData?.company?.id
       if (typeof activeCompanyId === 'string' && activeCompanyId.trim()) {
-        return activeCompanyId.trim()
+        const normalizedActiveCompanyId = activeCompanyId.trim()
+        setClientCache(ACTIVE_COMPANY_CACHE_KEY, normalizedActiveCompanyId)
+        return normalizedActiveCompanyId
       }
     }
 
@@ -63,11 +101,16 @@ export async function resolveCompanyId(search: string): Promise<string> {
     if (!response.ok) return ''
 
     const data = await response.json()
-    return (
+    setClientCache(AUTH_ME_CACHE_KEY, data)
+    const resolvedCompanyId = (
       data?.user?.companyId ||
       data?.company?.id ||
       ''
     )
+    if (typeof resolvedCompanyId === 'string' && resolvedCompanyId.trim()) {
+      setClientCache(ACTIVE_COMPANY_CACHE_KEY, resolvedCompanyId.trim())
+    }
+    return resolvedCompanyId
   } catch {
     return ''
   }
@@ -84,4 +127,13 @@ export function stripCompanyParamsFromUrl(): void {
 
   const next = `${current.pathname}${current.searchParams.toString() ? `?${current.searchParams.toString()}` : ''}${current.hash}`
   window.history.replaceState({}, '', next)
+}
+
+export function notifyAppCompanyChanged(companyId: string): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(
+    new CustomEvent(APP_COMPANY_CHANGED_EVENT, {
+      detail: { companyId }
+    })
+  )
 }

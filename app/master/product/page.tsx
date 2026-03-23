@@ -69,10 +69,15 @@ export default function ProductMasterPage() {
         const data = await response.json()
         setUnits(data)
       } else {
+        const payload = await response.json().catch(() => ({}))
+        if (typeof payload?.error === 'string' && payload.error.trim()) {
+          setErrorMessage(payload.error.trim())
+        }
         setUnits([])
       }
     } catch (error) {
       console.error('Error fetching units:', error)
+      setErrorMessage('Unable to load units right now. Please refresh and try again.')
       setUnits([])
     }
   }, [companyId])
@@ -89,6 +94,7 @@ export default function ProductMasterPage() {
         const data = await response.json()
         const rows = Array.isArray(data) ? data : []
         setProducts(rows)
+        setErrorMessage('')
 
         const rememberedDefault = getDefaultPurchaseProductId(targetCompanyId)
         if (!rememberedDefault) {
@@ -100,10 +106,17 @@ export default function ProductMasterPage() {
           setDefaultPurchaseProductIdState('')
         }
       } else {
+        const payload = await response.json().catch(() => ({}))
+        setErrorMessage(
+          typeof payload?.error === 'string' && payload.error.trim()
+            ? payload.error.trim()
+            : 'Unable to load products right now. Please refresh and try again.'
+        )
         setProducts([])
       }
     } catch (error) {
       console.error('Error fetching products:', error)
+      setErrorMessage('Unable to load products right now. Please refresh and try again.')
       setProducts([])
     } finally {
       setLoading(false)
@@ -335,7 +348,7 @@ export default function ProductMasterPage() {
                     <div>
                       <Label htmlFor="unit">Unit *</Label>
                       <Select value={formData.unit} onValueChange={(value) => setFormData({ ...formData, unit: value })}>
-                        <SelectTrigger>
+                        <SelectTrigger id="unit">
                           <SelectValue placeholder="Select unit" />
                         </SelectTrigger>
                         <SelectContent>
@@ -433,7 +446,11 @@ export default function ProductMasterPage() {
               <CardTitle>Product List</CardTitle>
             </CardHeader>
             <CardContent>
-              {products.length === 0 ? (
+              {products.length === 0 && errorMessage ? (
+                <div className="rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {errorMessage}
+                </div>
+              ) : products.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
                   No products found. Add your first product to get started.
                 </div>

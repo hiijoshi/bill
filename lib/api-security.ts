@@ -14,6 +14,8 @@ export type RequestAuthContext = {
   requestId?: string
 }
 
+export const AUTH_CONTEXT_HEADER = 'x-auth-context'
+
 const ROLE_ALIASES: Record<string, AppRole> = {
   super_admin: 'super_admin',
   superadmin: 'super_admin',
@@ -32,7 +34,45 @@ export function normalizeAppRole(role?: string | null): AppRole {
   return ROLE_ALIASES[normalized] || 'company_user'
 }
 
+function normalizeNullableHeaderValue(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+export function encodeRequestAuthContext(auth: RequestAuthContext): string {
+  return Buffer.from(JSON.stringify(auth), 'utf8').toString('base64url')
+}
+
+export function decodeRequestAuthContext(value: string | null | undefined): RequestAuthContext | null {
+  if (!value) return null
+
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<RequestAuthContext>
+    if (typeof parsed.userId !== 'string' || typeof parsed.traderId !== 'string') {
+      return null
+    }
+
+    return {
+      userId: parsed.userId,
+      traderId: parsed.traderId,
+      role: normalizeAppRole(parsed.role),
+      companyId: normalizeNullableHeaderValue(parsed.companyId),
+      userDbId: normalizeNullableHeaderValue(parsed.userDbId),
+      requestId: normalizeNullableHeaderValue(parsed.requestId) || undefined
+    }
+  } catch {
+    return null
+  }
+}
+
 export function getRequestAuthContext(request: NextRequest): RequestAuthContext | null {
+  const encodedContext = request.headers.get(AUTH_CONTEXT_HEADER)
+  const decodedContext = decodeRequestAuthContext(encodedContext)
+  if (decodedContext) {
+    return decodedContext
+  }
+
   const userId = request.headers.get('x-user-id')
   const traderId = request.headers.get('x-trader-id')
 
@@ -46,8 +86,8 @@ export function getRequestAuthContext(request: NextRequest): RequestAuthContext 
     role: normalizeAppRole(
       request.headers.get('x-user-role-normalized') || request.headers.get('x-user-role')
     ),
-    companyId: request.headers.get('x-company-id') || null,
-    userDbId: request.headers.get('x-user-db-id') || null,
+    companyId: normalizeNullableHeaderValue(request.headers.get('x-company-id')),
+    userDbId: normalizeNullableHeaderValue(request.headers.get('x-user-db-id')),
     requestId: request.headers.get('x-request-id') || undefined
   }
 }

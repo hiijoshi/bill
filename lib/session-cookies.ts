@@ -6,20 +6,21 @@ export type SessionCookieNames = {
   csrfToken: string
 }
 
-const APP_SESSION_COOKIE_NAMES: SessionCookieNames = {
+// These are cookie key names (not secrets). Values are set by the server at login.
+const APP_SESSION_COOKIE_KEYS: SessionCookieNames = {
   authToken: 'auth-token',
   refreshToken: 'refresh-token',
   csrfToken: 'csrf-token'
 }
 
-const SUPER_ADMIN_SESSION_COOKIE_NAMES: SessionCookieNames = {
+const SUPER_ADMIN_SESSION_COOKIE_KEYS: SessionCookieNames = {
   authToken: 'super-admin-auth-token',
   refreshToken: 'super-admin-refresh-token',
   csrfToken: 'super-admin-csrf-token'
 }
 
 function getBaseSessionCookieNames(namespace: SessionNamespace = 'app'): SessionCookieNames {
-  return namespace === 'super_admin' ? SUPER_ADMIN_SESSION_COOKIE_NAMES : APP_SESSION_COOKIE_NAMES
+  return namespace === 'super_admin' ? SUPER_ADMIN_SESSION_COOKIE_KEYS : APP_SESSION_COOKIE_KEYS
 }
 
 function normalizeCookieScope(scopeSource?: string | null): string {

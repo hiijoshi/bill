@@ -10,6 +10,52 @@ import {
 import { createBankEntryProvider, SUPPORTED_BANK_SYNC_PROVIDERS } from '@/lib/bank-integration'
 import { normalizeNonNegative, roundCurrency } from '@/lib/billing-calculations'
 
+type CacheEntry<T> = {
+  data: T
+  expiresAt: number
+}
+
+const serverCache = new Map<string, CacheEntry<unknown>>()
+const pendingLoads = new Map<string, Promise<unknown>>()
+
+function makeServerCacheKey(prefix: string, parts: unknown[]): string {
+  return `${prefix}:${JSON.stringify(parts)}`
+}
+
+async function getOrSetServerCache<T>(
+  key: string,
+  maxAgeMs: number,
+  loader: () => Promise<T>
+): Promise<T> {
+  const now = Date.now()
+  const cached = serverCache.get(key)
+  if (cached && cached.expiresAt > now) {
+    return cached.data as T
+  }
+
+  const pending = pendingLoads.get(key)
+  if (pending) {
+    return pending as Promise<T>
+  }
+
+  const nextLoad = loader()
+    .then((data) => {
+      serverCache.set(key, {
+        data,
+        expiresAt: Date.now() + maxAgeMs
+      })
+      pendingLoads.delete(key)
+      return data
+    })
+    .catch((error) => {
+      pendingLoads.delete(key)
+      throw error
+    })
+
+  pendingLoads.set(key, nextLoad)
+  return nextLoad
+}
+
 type CompanyOption = {
   id: string
   name: string
@@ -43,6 +89,8 @@ type OutstandingAccumulator = {
   invoiceCount: number
   lastBillDate: string
 }
+
+const OPERATIONS_REPORT_CACHE_TTL_MS = 20_000
 
 function parseDateAtBoundary(value: string | null, endOfDay = false): Date | null {
   if (!value) return null
@@ -194,6 +242,25 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'No report access found for this user' }, { status: 403 })
     }
 
+    const aggregateEligibleCompanyIds =
+      authResult.auth.role === 'super_admin' || authResult.auth.role === 'trader_admin'
+        ? permittedCompanyIds
+        : authResult.auth.userDbId
+          ? (
+              await prisma.userPermission.findMany({
+                where: {
+                  userId: authResult.auth.userDbId,
+                  companyId: { in: permittedCompanyIds },
+                  module: 'REPORTS',
+                  canWrite: true
+                },
+                select: {
+                  companyId: true
+                }
+              })
+            ).map((row) => row.companyId)
+          : []
+
     const explicitRequestedCompanyIds =
       requestedCompanyIds.length > 0 ? requestedCompanyIds : requestedCompanyId ? [requestedCompanyId] : []
 
@@ -206,17 +273,37 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Requested company is outside your report access scope' }, { status: 403 })
     }
 
-    const companyNameMap = new Map(permittedCompanies.map((company) => [company.id, company.name]))
-    const selectedCompanyDetail =
-      targetCompanyIds.length === 1
-        ? permittedCompanies.find((company) => company.id === targetCompanyIds[0]) || null
-        : null
-    const selectedCompanyName =
-      targetCompanyIds.length === 1
-        ? companyNameMap.get(targetCompanyIds[0]) || ''
-        : `${targetCompanyIds.length} companies`
+    if (
+      targetCompanyIds.length > 1 &&
+      !targetCompanyIds.every((companyId) => aggregateEligibleCompanyIds.includes(companyId))
+    ) {
+      return NextResponse.json(
+        { error: 'Multi-company reports require All Companies report access for every selected company' },
+        { status: 403 }
+      )
+    }
 
-    const salesWhere = {
+    const cacheKey = makeServerCacheKey('operations-report', [
+      targetCompanyIds,
+      requestedPartyId || '',
+      dateFrom?.toISOString() || '',
+      dateTo?.toISOString() || '',
+      permittedCompanies.map((company) => company.id),
+      aggregateEligibleCompanyIds
+    ])
+
+    const payload = await getOrSetServerCache(cacheKey, OPERATIONS_REPORT_CACHE_TTL_MS, async () => {
+      const companyNameMap = new Map(permittedCompanies.map((company) => [company.id, company.name]))
+      const selectedCompanyDetail =
+        targetCompanyIds.length === 1
+          ? permittedCompanies.find((company) => company.id === targetCompanyIds[0]) || null
+          : null
+      const selectedCompanyName =
+        targetCompanyIds.length === 1
+          ? companyNameMap.get(targetCompanyIds[0]) || ''
+          : `${targetCompanyIds.length} companies`
+
+      const salesWhere = {
       companyId: { in: targetCompanyIds },
       ...(dateFrom || dateTo
         ? {
@@ -228,7 +315,7 @@ export async function GET(request: NextRequest) {
         : {})
     }
 
-    const purchaseWhere = {
+      const purchaseWhere = {
       companyId: { in: targetCompanyIds },
       ...(dateFrom || dateTo
         ? {
@@ -240,7 +327,7 @@ export async function GET(request: NextRequest) {
         : {})
     }
 
-    const paymentWhere = {
+      const paymentWhere = {
       companyId: { in: targetCompanyIds },
       deletedAt: null,
       ...(dateFrom || dateTo
@@ -253,7 +340,7 @@ export async function GET(request: NextRequest) {
         : {})
     }
 
-    const stockAdjustmentWhere = {
+      const stockAdjustmentWhere = {
       companyId: { in: targetCompanyIds },
       type: 'adjustment',
       ...(dateFrom || dateTo
@@ -266,7 +353,7 @@ export async function GET(request: NextRequest) {
         : {})
     }
 
-    const salesOutstandingWhere = {
+      const salesOutstandingWhere = {
       companyId: { in: targetCompanyIds },
       ...(dateTo
         ? {
@@ -277,7 +364,7 @@ export async function GET(request: NextRequest) {
         : {})
     }
 
-    const purchaseOutstandingWhere = {
+      const purchaseOutstandingWhere = {
       companyId: { in: targetCompanyIds },
       ...(dateTo
         ? {
@@ -288,7 +375,7 @@ export async function GET(request: NextRequest) {
         : {})
     }
 
-    const paymentOutstandingWhere = {
+      const paymentOutstandingWhere = {
       companyId: { in: targetCompanyIds },
       deletedAt: null,
       ...(dateTo
@@ -300,7 +387,7 @@ export async function GET(request: NextRequest) {
         : {})
     }
 
-    const [
+      const [
       salesBills,
       purchaseBills,
       specialPurchaseBills,
@@ -312,7 +399,7 @@ export async function GET(request: NextRequest) {
       purchaseBillsAsOf,
       specialPurchaseBillsAsOf,
       paymentsAsOf
-    ] = await Promise.all([
+      ] = await Promise.all([
       prisma.salesBill.findMany({
         where: salesWhere,
         select: {
@@ -553,10 +640,22 @@ export async function GET(request: NextRequest) {
       })
     ])
 
-    const purchasePaymentBillIds = payments.filter((payment) => payment.billType === 'purchase').map((payment) => payment.billId)
-    const salesPaymentBillIds = payments.filter((payment) => payment.billType === 'sales').map((payment) => payment.billId)
+      const purchasePaymentBillIds = Array.from(
+        new Set(
+          payments
+            .filter((payment) => payment.billType === 'purchase' && payment.billId)
+            .map((payment) => payment.billId)
+        )
+      )
+      const salesPaymentBillIds = Array.from(
+        new Set(
+          payments
+            .filter((payment) => payment.billType === 'sales' && payment.billId)
+            .map((payment) => payment.billId)
+        )
+      )
 
-    const [paymentPurchaseBills, paymentSpecialPurchaseBills, paymentSalesBills] = await Promise.all([
+      const [paymentPurchaseBills, paymentSpecialPurchaseBills, paymentSalesBills] = await Promise.all([
       purchasePaymentBillIds.length > 0
         ? prisma.purchaseBill.findMany({
             where: { id: { in: purchasePaymentBillIds }, companyId: { in: targetCompanyIds } },
@@ -577,24 +676,24 @@ export async function GET(request: NextRequest) {
         : Promise.resolve([])
     ])
 
-    const purchaseBillNoMap = new Map(paymentPurchaseBills.map((bill) => [bill.id, bill.billNo]))
-    const specialPurchaseBillNoMap = new Map(paymentSpecialPurchaseBills.map((bill) => [bill.id, bill.supplierInvoiceNo]))
-    const salesBillNoMap = new Map(paymentSalesBills.map((bill) => [bill.id, bill.billNo]))
+      const purchaseBillNoMap = new Map(paymentPurchaseBills.map((bill) => [bill.id, bill.billNo]))
+      const specialPurchaseBillNoMap = new Map(paymentSpecialPurchaseBills.map((bill) => [bill.id, bill.supplierInvoiceNo]))
+      const salesBillNoMap = new Map(paymentSalesBills.map((bill) => [bill.id, bill.billNo]))
 
-    const salesReceiptByBillId = new Map<string, number>()
-    const purchasePaidByBillId = new Map<string, number>()
+      const salesReceiptByBillId = new Map<string, number>()
+      const purchasePaidByBillId = new Map<string, number>()
 
-    for (const payment of paymentsAsOf) {
-      const targetMap = payment.billType === 'sales' ? salesReceiptByBillId : purchasePaidByBillId
-      targetMap.set(
-        payment.billId,
-        roundCurrency((targetMap.get(payment.billId) || 0) + normalizeNonNegative(payment.amount))
-      )
-    }
+      for (const payment of paymentsAsOf) {
+        const targetMap = payment.billType === 'sales' ? salesReceiptByBillId : purchasePaidByBillId
+        targetMap.set(
+          payment.billId,
+          roundCurrency((targetMap.get(payment.billId) || 0) + normalizeNonNegative(payment.amount))
+        )
+      }
 
-    const outstandingMap = new Map<string, OutstandingAccumulator>()
+      const outstandingMap = new Map<string, OutstandingAccumulator>()
 
-    for (const bill of salesBillsAsOf) {
+      for (const bill of salesBillsAsOf) {
       const receivedAmount = roundCurrency(salesReceiptByBillId.get(bill.id) || 0)
       const balanceAmount = roundCurrency(Math.max(0, normalizeNonNegative(bill.totalAmount) - receivedAmount))
       if (balanceAmount <= 0) continue
@@ -623,9 +722,9 @@ export async function GET(request: NextRequest) {
         existing.lastBillDate = billDateKey
       }
       outstandingMap.set(groupKey, existing)
-    }
+      }
 
-    const outstandingRows = Array.from(outstandingMap.values())
+      const outstandingRows = Array.from(outstandingMap.values())
       .map((row) => ({
         ...row,
         saleAmount: roundCurrency(row.saleAmount),
@@ -635,27 +734,29 @@ export async function GET(request: NextRequest) {
       }))
       .sort((a, b) => b.balanceAmount - a.balanceAmount || a.partyName.localeCompare(b.partyName))
 
-    const partiesWithContext = parties.map((party) => {
-      const outstandingRow = outstandingRows.find((row) => row.partyId === party.id)
-      return {
-        id: party.id,
-        companyId: party.companyId,
-        companyName: companyNameMap.get(party.companyId) || party.companyId,
-        name: String(party.name || ''),
-        address: String(party.address || ''),
-        phone1: String(party.phone1 || ''),
-        balanceAmount: roundCurrency(outstandingRow?.balanceAmount || 0)
-      }
-    })
+      const outstandingByPartyId = new Map(outstandingRows.map((row) => [row.partyId, row]))
 
-    const selectedPartyId =
+      const partiesWithContext = parties.map((party) => {
+        const outstandingRow = outstandingByPartyId.get(party.id)
+        return {
+          id: party.id,
+          companyId: party.companyId,
+          companyName: companyNameMap.get(party.companyId) || party.companyId,
+          name: String(party.name || ''),
+          address: String(party.address || ''),
+          phone1: String(party.phone1 || ''),
+          balanceAmount: roundCurrency(outstandingRow?.balanceAmount || 0)
+        }
+      })
+
+      const selectedPartyId =
       requestedPartyId && partiesWithContext.some((party) => party.id === requestedPartyId)
         ? requestedPartyId
         : outstandingRows[0]?.partyId || partiesWithContext[0]?.id || ''
 
-    const selectedParty = partiesWithContext.find((party) => party.id === selectedPartyId) || null
+      const selectedParty = partiesWithContext.find((party) => party.id === selectedPartyId) || null
 
-    const [ledgerSales, ledgerPayments, openingSalesAggregate, openingPaymentsAggregate] = selectedPartyId
+      const [ledgerSales, ledgerPayments, openingSalesAggregate, openingPaymentsAggregate] = selectedPartyId
       ? await Promise.all([
           prisma.salesBill.findMany({
             where: {
@@ -748,13 +849,13 @@ export async function GET(request: NextRequest) {
         ])
       : [[], [], null, null]
 
-    const openingBalance = roundCurrency(
+      const openingBalance = roundCurrency(
       normalizeNonNegative(openingSalesAggregate?._sum.totalAmount) -
         normalizeNonNegative(openingPaymentsAggregate?._sum.amount)
-    )
+      )
 
-    const ledgerPaymentBillIds = ledgerPayments.map((payment) => payment.billId)
-    const ledgerBillMap =
+      const ledgerPaymentBillIds = Array.from(new Set(ledgerPayments.map((payment) => payment.billId)))
+      const ledgerBillMap =
       ledgerPaymentBillIds.length > 0
         ? new Map(
             (
@@ -766,7 +867,7 @@ export async function GET(request: NextRequest) {
           )
         : new Map<string, string>()
 
-    const ledgerBaseRows = [
+      const ledgerBaseRows = [
       ...ledgerSales.map((bill) => ({
         id: `sale-${bill.id}`,
         date: bill.billDate,
@@ -819,8 +920,8 @@ export async function GET(request: NextRequest) {
       return a.type === 'sale' ? -1 : 1
     })
 
-    let runningBalance = openingBalance
-    const ledgerRows = [
+      let runningBalance = openingBalance
+      const ledgerRows = [
       ...(dateFrom || openingBalance !== 0
         ? [
             {
@@ -849,11 +950,11 @@ export async function GET(request: NextRequest) {
       })
     ]
 
-    const totalLedgerSales = roundCurrency(ledgerBaseRows.reduce((sum, row) => sum + row.debit, 0))
-    const totalLedgerReceipts = roundCurrency(ledgerBaseRows.reduce((sum, row) => sum + row.credit, 0))
+      const totalLedgerSales = roundCurrency(ledgerBaseRows.reduce((sum, row) => sum + row.debit, 0))
+      const totalLedgerReceipts = roundCurrency(ledgerBaseRows.reduce((sum, row) => sum + row.credit, 0))
 
-    const dailySummaryMap = new Map<string, DailySummaryAccumulator>()
-    const dailyTransactionRows: Array<{
+      const dailySummaryMap = new Map<string, DailySummaryAccumulator>()
+      const dailyTransactionRows: Array<{
       id: string
       date: string
       companyId: string
@@ -871,7 +972,7 @@ export async function GET(request: NextRequest) {
       note: string
     }> = []
 
-    for (const bill of purchaseBills) {
+      for (const bill of purchaseBills) {
       const key = dateKey(bill.billDate)
       const amount = roundCurrency(normalizeNonNegative(bill.totalAmount))
       const quantity = roundCurrency(
@@ -904,7 +1005,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    for (const bill of specialPurchaseBills) {
+      for (const bill of specialPurchaseBills) {
       const key = dateKey(bill.billDate)
       const amount = roundCurrency(normalizeNonNegative(bill.totalAmount))
       const quantity = roundCurrency(
@@ -935,7 +1036,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    for (const bill of salesBills) {
+      for (const bill of salesBills) {
       const key = dateKey(bill.billDate)
       const amount = roundCurrency(normalizeNonNegative(bill.totalAmount))
       const quantity = roundCurrency(
@@ -966,7 +1067,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    for (const payment of payments) {
+      for (const payment of payments) {
       const key = dateKey(payment.payDate)
       const amount = roundCurrency(normalizeNonNegative(payment.amount))
       const isSalesReceipt = payment.billType === 'sales'
@@ -1002,7 +1103,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    for (const entry of stockAdjustments) {
+      for (const entry of stockAdjustments) {
       const key = dateKey(entry.entryDate)
       const quantityIn = roundCurrency(normalizeNonNegative(entry.qtyIn))
       const quantityOut = roundCurrency(normalizeNonNegative(entry.qtyOut))
@@ -1031,7 +1132,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const dailySummaryRows = Array.from(dailySummaryMap.values())
+      const dailySummaryRows = Array.from(dailySummaryMap.values())
       .map((row) => ({
         date: row.date,
         totalSales: roundCurrency(row.totalSales),
@@ -1045,7 +1146,7 @@ export async function GET(request: NextRequest) {
       }))
       .sort((a, b) => b.date.localeCompare(a.date))
 
-    const bankLedgerRows = payments
+      const bankLedgerRows = payments
       .filter((payment) => isBankLikePayment(payment))
       .map((payment) => {
         const isSalesReceipt = payment.billType === 'sales'
@@ -1075,24 +1176,24 @@ export async function GET(request: NextRequest) {
       })
       .sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName))
 
-    const totalSaleAmount = roundCurrency(
+      const totalSaleAmount = roundCurrency(
       salesBills.reduce((sum, bill) => sum + normalizeNonNegative(bill.totalAmount), 0)
-    )
-    const totalPurchaseAmount = roundCurrency(
+      )
+      const totalPurchaseAmount = roundCurrency(
       purchaseBills.reduce((sum, bill) => sum + normalizeNonNegative(bill.totalAmount), 0) +
         specialPurchaseBills.reduce((sum, bill) => sum + normalizeNonNegative(bill.totalAmount), 0)
-    )
-    const totalPaidAmount = roundCurrency(
+      )
+      const totalPaidAmount = roundCurrency(
       payments
         .filter((payment) => payment.billType === 'purchase')
         .reduce((sum, payment) => sum + normalizeNonNegative(payment.amount), 0)
-    )
-    const totalReceivedAmount = roundCurrency(
+      )
+      const totalReceivedAmount = roundCurrency(
       payments
         .filter((payment) => payment.billType === 'sales')
         .reduce((sum, payment) => sum + normalizeNonNegative(payment.amount), 0)
-    )
-    const purchaseBalanceTotal = roundCurrency(
+      )
+      const purchaseBalanceTotal = roundCurrency(
       purchaseBillsAsOf.reduce(
         (sum, bill) => sum + Math.max(0, normalizeNonNegative(bill.totalAmount) - (purchasePaidByBillId.get(bill.id) || 0)),
         0
@@ -1101,20 +1202,20 @@ export async function GET(request: NextRequest) {
           (sum, bill) => sum + Math.max(0, normalizeNonNegative(bill.totalAmount) - (purchasePaidByBillId.get(bill.id) || 0)),
           0
         )
-    )
-    const salesBalanceTotal = roundCurrency(
+      )
+      const salesBalanceTotal = roundCurrency(
       salesBillsAsOf.reduce(
         (sum, bill) => sum + Math.max(0, normalizeNonNegative(bill.totalAmount) - (salesReceiptByBillId.get(bill.id) || 0)),
         0
       )
-    )
-    const totalBalance = roundCurrency(purchaseBalanceTotal + salesBalanceTotal)
-    const netOutstanding = roundCurrency(salesBalanceTotal - purchaseBalanceTotal)
-    const totalStockAdjustmentQty = roundCurrency(
+      )
+      const totalBalance = roundCurrency(purchaseBalanceTotal + salesBalanceTotal)
+      const netOutstanding = roundCurrency(salesBalanceTotal - purchaseBalanceTotal)
+      const totalStockAdjustmentQty = roundCurrency(
       stockAdjustments.reduce((sum, entry) => sum + normalizeNonNegative(entry.qtyIn) + normalizeNonNegative(entry.qtyOut), 0)
-    )
+      )
 
-    return NextResponse.json({
+      return {
       companies: permittedCompanies,
       summary: {
         totalSaleAmount,
@@ -1155,7 +1256,7 @@ export async function GET(request: NextRequest) {
         companyName: selectedCompanyName,
         companyAddress: selectedCompanyDetail?.address || '',
         companyPhone: selectedCompanyDetail?.phone || '',
-        canAggregateCompanies: permittedCompanies.length > 1,
+        canAggregateCompanies: aggregateEligibleCompanyIds.length > 1,
         bankSync: {
           activeProvider: 'manual',
           providers: bankSyncProviders
@@ -1164,7 +1265,10 @@ export async function GET(request: NextRequest) {
         dateTo: searchParams.get('dateTo') || '',
         generatedAt: new Date().toISOString()
       }
+      }
     })
+
+    return NextResponse.json(payload)
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },

@@ -12,11 +12,6 @@ function normalizeCompanyId(raw: string | null): string | null {
   return value
 }
 
-const DUMMY_TRANSPORTS = [
-  { transporterName: 'Patel Logistics', vehicleNumber: 'MP44AB1234', driverName: 'Raju', driverPhone: '9876543210', capacity: 120, freightRate: 240 },
-  { transporterName: 'Shree Transport', vehicleNumber: 'MP09XY9921', driverName: 'Sohan', driverPhone: '9898989898', capacity: 90, freightRate: 210 }
-] as const
-
 const postSchema = z.object({
   companyId: z.string().trim().min(1).optional(),
   transporterName: z.string().trim().min(1).optional(),
@@ -27,8 +22,7 @@ const postSchema = z.object({
   description: z.string().optional().nullable(),
   capacity: z.union([z.number(), z.string()]).optional().nullable(),
   freightRate: z.union([z.number(), z.string()]).optional().nullable(),
-  isActive: z.boolean().optional(),
-  seed: z.boolean().optional()
+  isActive: z.boolean().optional()
 }).strict()
 
 const putSchema = z.object({
@@ -105,25 +99,6 @@ export async function POST(request: NextRequest) {
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
-
-    if (parsed.data.seed === true) {
-      const created = await prisma.$transaction(
-        DUMMY_TRANSPORTS.map((row) =>
-          prisma.transport.create({
-            data: {
-              companyId,
-              transporterName: row.transporterName,
-              vehicleNumber: row.vehicleNumber,
-              driverName: row.driverName,
-              driverPhone: row.driverPhone,
-              capacity: row.capacity,
-              freightRate: row.freightRate
-            }
-          })
-        )
-      )
-      return NextResponse.json({ success: true, message: `${created.length} dummy transports added successfully`, count: created.length })
-    }
 
     const transporterName = cleanString(parsed.data.transporterName)
     if (!transporterName) {

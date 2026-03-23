@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { z } from 'zod'
-import { ensureCompanyAccess, getRequestAuthContext, normalizeId, parseJsonWithSchema } from '@/lib/api-security'
+import { ensureCompanyAccess, normalizeId, parseJsonWithSchema, requireAuthContext } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { parseNonNegativeNumber } from '@/lib/field-validation'
 
@@ -109,17 +109,19 @@ export async function POST(request: NextRequest) {
       }
     })
 
-    const auth = getRequestAuthContext(request)
+    const authResult = requireAuthContext(request)
+    if (!authResult.ok) return authResult.response
+    const auth = authResult.auth
     await writeAuditLog({
       actor: {
-        id: auth?.userDbId || auth?.userId || 'system',
-        role: auth?.role || 'system'
+        id: auth.userDbId || auth.userId,
+        role: auth.role
       },
       action: 'CREATE',
       resourceType: 'STOCK',
       resourceId: adjustment.id,
       scope: {
-        traderId: auth?.traderId || null,
+        traderId: auth.traderId,
         companyId
       },
       after: {

@@ -4,6 +4,9 @@ import { prisma } from '@/lib/prisma'
 import { PERMISSION_MODULES, PERMISSION_MODULE_LABELS, type PermissionModule } from '@/lib/permissions'
 import { requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
+import { isSupabaseConfigured } from '@/lib/supabase/client'
+import { syncSupabaseForLegacyUserMutationWithTimeout } from '@/lib/supabase/legacy-user-sync'
+import { normalizePrismaApiError } from '@/lib/prisma-errors'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'User ID is required') })
 
@@ -53,6 +56,22 @@ function normalizePermissionRows(input: z.infer<typeof permissionRowSchema>[]) {
   })
 }
 
+async function getCompanyOptionsForTrader(traderId: string) {
+  return prisma.company.findMany({
+    where: {
+      traderId,
+      deletedAt: null
+    },
+    select: {
+      id: true,
+      name: true
+    },
+    orderBy: {
+      name: 'asc'
+    }
+  })
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -92,12 +111,19 @@ export async function GET(
       )
     }
 
+    const companyOptions = await getCompanyOptionsForTrader(user.traderId)
     const queryCompanyId = new URL(request.url).searchParams.get('companyId')?.trim()
-    const companyId = queryCompanyId || user.companyId
+    const companyId = queryCompanyId || user.companyId || companyOptions[0]?.id || null
 
     if (!companyId) {
       return NextResponse.json(
-        { error: 'User is not assigned to a company. Assign company first.' },
+        {
+          error: 'No active companies found for this trader. Create a company first.',
+          user,
+          companyId: '',
+          companyOptions: [],
+          permissions: buildDefaultPermissionRows()
+        },
         { status: 400 }
       )
     }
@@ -128,6 +154,7 @@ export async function GET(
     return NextResponse.json({
       user,
       companyId,
+      companyOptions,
       permissions
     })
   } catch {
@@ -290,13 +317,36 @@ export async function PUT(
       notes: 'User privilege matrix updated'
     })
 
+    // Supabase sync is best-effort — never let it fail the main response
+    let cloudSyncWarning: string | null = null
+    if (isSupabaseConfigured()) {
+      try {
+        const syncResult = await syncSupabaseForLegacyUserMutationWithTimeout({
+          legacyUserId: user.id
+        })
+        if (!syncResult.synced && syncResult.reason) {
+          cloudSyncWarning = syncResult.reason
+        }
+      } catch (syncErr) {
+        cloudSyncWarning = syncErr instanceof Error ? syncErr.message : 'Cloud sync failed'
+        console.warn('Supabase sync warning (non-fatal):', cloudSyncWarning)
+      }
+    }
+
     return NextResponse.json({
       success: true,
       userId: user.id,
       companyId,
-      permissions: updatedRows
+      permissions: updatedRows,
+      ...(cloudSyncWarning ? { cloudSyncWarning } : {})
     })
-  } catch {
-    return NextResponse.json({ error: 'Failed to update user permissions' }, { status: 500 })
+  } catch (error) {
+    console.error('PUT /api/super-admin/users/[id]/permissions failed', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    })
+
+    const apiError = normalizePrismaApiError(error, 'Failed to update user permissions')
+    return NextResponse.json({ error: apiError.message }, { status: apiError.status })
   }
 }

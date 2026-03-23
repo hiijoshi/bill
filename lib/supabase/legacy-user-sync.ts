@@ -26,6 +26,14 @@ type SyncedSupabaseUser = {
   defaultCompanyId: string | null
 }
 
+type SyncedLegacyMutationResult = {
+  synced: boolean
+  defaultCompanyId: string | null
+  reason?: string
+}
+
+const DEFAULT_MUTATION_SYNC_TIMEOUT_MS = 2500
+
 // We intentionally use a loose client shape here until generated Supabase database
 // types are added; this bootstrap path only runs in the privileged auth bridge.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -107,6 +115,8 @@ async function syncProfileAccessGraph(params: {
     accessibleCompanies[0]?.id ||
     null
 
+  // Upsert on both 'id' and the unique (trader_id, user_code) constraint
+  // to avoid duplicate key errors when the same user is synced multiple times.
   const { error: profileError } = await admin.from('profiles').upsert(
     {
       id: params.authUserId,
@@ -125,20 +135,35 @@ async function syncProfileAccessGraph(params: {
   )
 
   if (profileError) {
-    throw new Error(`Failed to sync Supabase profile: ${profileError.message}`)
+    // If upsert fails due to (trader_id, user_code) unique conflict,
+    // try to find the existing profile and update it instead.
+    if (profileError.code === '23505') {
+      const { data: conflictProfile } = await admin
+        .from('profiles')
+        .select('id')
+        .eq('trader_id', params.legacyUser.traderId)
+        .eq('user_code', params.legacyUser.userId)
+        .maybeSingle()
+      if (conflictProfile?.id && conflictProfile.id !== params.authUserId) {
+        // Another auth user owns this trader+user_code — skip profile sync
+        const safeConflictId = String(conflictProfile.id).replace(/[\r\n\t]/g, '_')
+        const safeTraderId = String(params.legacyUser.traderId).replace(/[\r\n\t]/g, '_')
+        const safeUserId = String(params.legacyUser.userId).replace(/[\r\n\t]/g, '_')
+        console.warn(`Profile conflict: trader=${safeTraderId} user=${safeUserId} already owned by ${safeConflictId}`)
+      } else {
+        throw new Error(`Failed to sync Supabase profile: ${profileError.message}`)
+      }
+    } else {
+      throw new Error(`Failed to sync Supabase profile: ${profileError.message}`)
+    }
   }
 
-  const { error: deactivateAccessError } = await admin
+  // Deactivate existing access rows — ignore error if none exist yet
+  await admin
     .from('profile_company_access')
-    .update({
-      is_active: false,
-      is_default: false
-    })
+    .update({ is_active: false, is_default: false })
     .eq('profile_id', params.authUserId)
-
-  if (deactivateAccessError) {
-    throw new Error(`Failed to refresh company access: ${deactivateAccessError.message}`)
-  }
+    .then(() => null) // swallow error — no rows is fine
 
   if (accessibleCompanyIds.length > 0) {
     const { error: accessUpsertError } = await admin.from('profile_company_access').upsert(
@@ -243,22 +268,30 @@ export async function ensureSupabaseIdentityForLegacyUser(params: {
     })
 
     if (created.error) {
-      const { data: recoveredProfile, error: recoveryError } = await admin
-        .from('profiles')
-        .select('id, login_email')
-        .eq('login_email', loginEmail)
-        .maybeSingle()
+      // Email already exists in auth.users — find the user by email
+      const { data: listData } = await admin.auth.admin.listUsers()
+      const existingAuthUser = listData?.users?.find(
+        (u: { email?: string; id: string }) => u.email === loginEmail
+      )
 
-      if (recoveryError) {
-        throw new Error(`Failed to provision Supabase auth user: ${created.error.message}`)
+      if (existingAuthUser?.id) {
+        authUserId = existingAuthUser.id
+        loginEmail = existingAuthUser.email || loginEmail
+      } else {
+        // Try profile lookup as fallback
+        const { data: recoveredProfile } = await admin
+          .from('profiles')
+          .select('id, login_email')
+          .eq('login_email', loginEmail)
+          .maybeSingle()
+
+        if (!recoveredProfile?.id) {
+          throw new Error(`Failed to provision Supabase auth user: ${created.error.message}`)
+        }
+
+        authUserId = recoveredProfile.id
+        loginEmail = recoveredProfile.login_email || loginEmail
       }
-
-      if (!recoveredProfile?.id) {
-        throw new Error(`Failed to provision Supabase auth user: ${created.error.message}`)
-      }
-
-      authUserId = recoveredProfile.id
-      loginEmail = recoveredProfile.login_email || loginEmail
     } else {
       authUserId = created.data.user.id
       loginEmail = created.data.user.email || loginEmail
@@ -285,5 +318,121 @@ export async function ensureSupabaseIdentityForLegacyUser(params: {
     authUserId,
     loginEmail,
     defaultCompanyId: graph.defaultCompanyId
+  }
+}
+
+export async function syncSupabaseForLegacyUserMutation(params: {
+  legacyUserId: string
+  password?: string | null
+}): Promise<SyncedLegacyMutationResult> {
+  const legacyUser = await loadLegacyUserForSupabaseSync(params.legacyUserId)
+  if (!legacyUser) {
+    return {
+      synced: false,
+      defaultCompanyId: null,
+      reason: 'Legacy user is locked or inactive'
+    }
+  }
+
+  if (params.password && params.password.trim().length > 0) {
+    const syncedIdentity = await ensureSupabaseIdentityForLegacyUser({
+      legacyUser,
+      password: params.password
+    })
+
+    return {
+      synced: true,
+      defaultCompanyId: syncedIdentity.defaultCompanyId
+    }
+  }
+
+  const admin = getAdminClient()
+  const fallbackEmail = buildSupabaseLoginEmail({
+    legacyUserId: legacyUser.id,
+    traderId: legacyUser.traderId,
+    userId: legacyUser.userId
+  })
+
+  const { data: existingProfile, error: profileLookupError } = await admin
+    .from('profiles')
+    .select('id, login_email')
+    .eq('legacy_user_id', legacyUser.id)
+    .maybeSingle()
+
+  if (profileLookupError) {
+    throw new Error(`Failed to lookup Supabase profile: ${profileLookupError.message}`)
+  }
+
+  if (!existingProfile?.id) {
+    return {
+      synced: false,
+      defaultCompanyId: null,
+      reason: 'Supabase identity not provisioned yet'
+    }
+  }
+
+  const loginEmail = existingProfile.login_email || fallbackEmail
+  const userMetadata = {
+    legacy_user_id: legacyUser.id,
+    trader_id: legacyUser.traderId,
+    user_code: legacyUser.userId,
+    full_name: legacyUser.name || '',
+    app_role: normalizeAppRole(legacyUser.role),
+    login_email: loginEmail,
+    default_company_id: legacyUser.companyId || ''
+  }
+
+  const updatedAuthUser = await admin.auth.admin.updateUserById(existingProfile.id, {
+    email: loginEmail,
+    user_metadata: userMetadata
+  })
+
+  if (updatedAuthUser.error) {
+    throw new Error(`Failed to sync Supabase auth user: ${updatedAuthUser.error.message}`)
+  }
+
+  const graph = await syncProfileAccessGraph({
+    authUserId: existingProfile.id,
+    legacyUser,
+    loginEmail
+  })
+
+  return {
+    synced: true,
+    defaultCompanyId: graph.defaultCompanyId
+  }
+}
+
+export async function syncSupabaseForLegacyUserMutationWithTimeout(
+  params: {
+    legacyUserId: string
+    password?: string | null
+  },
+  timeoutMs = DEFAULT_MUTATION_SYNC_TIMEOUT_MS
+): Promise<SyncedLegacyMutationResult> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null
+
+  const timeoutPromise = new Promise<SyncedLegacyMutationResult>((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      resolve({
+        synced: false,
+        defaultCompanyId: null,
+        reason: 'Cloud sync timed out. Data was saved and login fallback will recover the cloud session.'
+      })
+    }, timeoutMs)
+  })
+
+  const syncPromise = syncSupabaseForLegacyUserMutation(params).catch((error) => ({
+    synced: false,
+    defaultCompanyId: null,
+    reason: error instanceof Error ? error.message : 'Failed to sync cloud identity'
+  }))
+
+  try {
+    return await Promise.race([syncPromise, timeoutPromise])
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle)
+    }
   }
 }

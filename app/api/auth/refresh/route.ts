@@ -4,6 +4,8 @@ import { setSession, clearSession } from '@/lib/session'
 import { getRequestIp } from '@/lib/api-security'
 import { prisma } from '@/lib/prisma'
 import { getSessionCookieNameCandidates } from '@/lib/session-cookies'
+import { isSupabaseConfigured } from '@/lib/supabase/client'
+import { getSupabaseClaimsFromRequest, hasSupabaseAppContext } from '@/lib/supabase/auth-bridge'
 
 const refreshRateLimit = new Map<string, { count: number; resetTime: number }>()
 const ENABLE_REFRESH_RATE_LIMIT = false
@@ -35,6 +37,45 @@ export async function POST(request: NextRequest) {
     }
 
     const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+
+    if (isSupabaseConfigured()) {
+      const supabaseContext = await getSupabaseClaimsFromRequest(request)
+
+      if (!supabaseContext || !hasSupabaseAppContext(supabaseContext.claims)) {
+        const response = NextResponse.json({ error: 'Invalid or expired session' }, { status: 401 })
+        await clearSession(response, 'app', scopeSource)
+        return response
+      }
+
+      if (normalizeRole(supabaseContext.claims.app_role) === 'super_admin') {
+        const response = NextResponse.json({ error: 'Use super admin session' }, { status: 403 })
+        await clearSession(response, 'app', scopeSource)
+        return supabaseContext.applyCookies(response)
+      }
+
+      const refreshedPayload = {
+        userId:
+          (typeof supabaseContext.claims.user_code === 'string' && supabaseContext.claims.user_code.trim()) ||
+          supabaseContext.claims.user_db_id,
+        traderId: supabaseContext.claims.trader_id,
+        name:
+          typeof supabaseContext.claims.full_name === 'string' && supabaseContext.claims.full_name.trim().length > 0
+            ? supabaseContext.claims.full_name
+            : undefined,
+        role: normalizeRole(supabaseContext.claims.app_role) || undefined,
+        dbId: supabaseContext.claims.user_db_id
+      }
+      const newAccessToken = generateToken(refreshedPayload)
+      const nextRefreshToken = generateRefreshToken(refreshedPayload)
+      let response = NextResponse.json({
+        success: true,
+        token: newAccessToken
+      })
+      response = supabaseContext.applyCookies(response)
+      await setSession(newAccessToken, nextRefreshToken, response, 'app', scopeSource)
+      return response
+    }
+
     const refreshToken =
       getSessionCookieNameCandidates('app', scopeSource)
         .map((cookieNames) => request.cookies.get(cookieNames.refreshToken)?.value)
@@ -66,7 +107,12 @@ export async function POST(request: NextRequest) {
         traderId: payload.traderId,
         deletedAt: null
       },
-      include: {
+      select: {
+        userId: true,
+        traderId: true,
+        name: true,
+        role: true,
+        locked: true,
         trader: {
           select: {
             locked: true,

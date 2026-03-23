@@ -3,9 +3,36 @@
 import "./globals.css";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { SessionProvider } from "@/components/SessionProvider";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { isAbortError } from "@/lib/http";
 import { getSessionCookieNameCandidates } from "@/lib/session-cookies";
+
+function NetworkStatusBanner() {
+  const [isOnline, setIsOnline] = useState(true)
+
+  useEffect(() => {
+    const syncStatus = () => {
+      setIsOnline(typeof navigator === 'undefined' ? true : navigator.onLine)
+    }
+
+    syncStatus()
+    window.addEventListener('online', syncStatus)
+    window.addEventListener('offline', syncStatus)
+
+    return () => {
+      window.removeEventListener('online', syncStatus)
+      window.removeEventListener('offline', syncStatus)
+    }
+  }, [])
+
+  if (isOnline) return null
+
+  return (
+    <div className="fixed inset-x-0 top-0 z-[100] border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-sm font-medium text-amber-900 shadow-sm">
+      Offline mode detected. Cloud data cannot sync until your internet connection returns.
+    </div>
+  )
+}
 
 export default function RootLayout({
   children,
@@ -17,6 +44,10 @@ export default function RootLayout({
     const apiTimeoutMs = Math.max(
       5000,
       Math.min(60000, Number(process.env.NEXT_PUBLIC_API_TIMEOUT_MS || 12000))
+    )
+    const superAdminApiTimeoutMs = Math.max(
+      apiTimeoutMs,
+      Math.min(120000, Number(process.env.NEXT_PUBLIC_SUPER_ADMIN_API_TIMEOUT_MS || 30000))
     )
     const originalFetch = window.fetch;
     const abortRejectionHandler = (event: PromiseRejectionEvent) => {
@@ -93,10 +124,26 @@ export default function RootLayout({
         return originalFetch(...args);
       }
 
+      if (isInternalApi && typeof navigator !== 'undefined' && navigator.onLine === false) {
+        return new Response(
+          JSON.stringify({
+            offline: true,
+            error: 'You are offline. Please reconnect to continue syncing cloud data.'
+          }),
+          {
+            status: 503,
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          }
+        )
+      }
+
       const safeFetch = async (
         input: RequestInfo | URL,
         init?: RequestInit,
-        useTimeout: boolean = false
+        useTimeout: boolean = false,
+        timeoutMs: number = apiTimeoutMs
       ): Promise<Response> => {
         let timeoutId: ReturnType<typeof setTimeout> | null = null
         let didTimeout = false
@@ -109,14 +156,18 @@ export default function RootLayout({
           timeoutId = setTimeout(() => {
             didTimeout = true
             controller?.abort('RequestTimeout')
-          }, apiTimeoutMs)
+          }, timeoutMs)
         }
 
         try {
           return await originalFetch(input, finalInit)
         } catch (error) {
           if (isAbortError(error)) {
-            return new Response(JSON.stringify(didTimeout ? { timedOut: true } : { aborted: true }), {
+            return new Response(JSON.stringify(
+              didTimeout
+                ? { timedOut: true, error: 'Request timed out. Please retry once.' }
+                : { aborted: true, error: 'Request was interrupted. Please retry.' }
+            ), {
               status: didTimeout ? 504 : 499,
               headers: {
                 'Content-Type': 'application/json'
@@ -150,7 +201,12 @@ export default function RootLayout({
       }
       
       // Try API call first (cookies are sent automatically with HttpOnly)
-      let response = await safeFetch(url, requestInit, isInternalApi);
+      let response = await safeFetch(
+        url,
+        requestInit,
+        isInternalApi,
+        isSuperAdminApi ? superAdminApiTimeoutMs : apiTimeoutMs
+      );
 
       // Preserve /api/super-admin/auth 401 to show in-page login errors.
       if (response.status === 401 && isSuperAdminApi && isSuperAdminAuthEndpoint) {
@@ -163,7 +219,12 @@ export default function RootLayout({
         
         if (refreshed) {
           // Retry the original request with new token
-          response = await safeFetch(url, requestInit, isInternalApi);
+          response = await safeFetch(
+            url,
+            requestInit,
+            isInternalApi,
+            isSuperAdminApi ? superAdminApiTimeoutMs : apiTimeoutMs
+          );
           if (response.status !== 401) {
             return response;
           }
@@ -192,6 +253,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased">
+        <NetworkStatusBanner />
         <SessionProvider>
           <ErrorBoundary>
             {children}

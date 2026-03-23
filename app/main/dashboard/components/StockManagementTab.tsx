@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -43,15 +43,21 @@ interface StockSummary {
 
 interface StockManagementTabProps {
   companyId: string
+  initialProducts?: Product[]
+  initialStockLedger?: StockLedger[]
 }
 
-export default function StockManagementTab({ companyId }: StockManagementTabProps) {
+export default function StockManagementTab({
+  companyId,
+  initialProducts,
+  initialStockLedger
+}: StockManagementTabProps) {
   const router = useRouter()
-  const [loading, setLoading] = useState(true)
+  const hasInitialData = Array.isArray(initialProducts) && Array.isArray(initialStockLedger)
+  const [loading, setLoading] = useState(!hasInitialData)
 
   const [products, setProducts] = useState<Product[]>([])
   const [stockLedger, setStockLedger] = useState<StockLedger[]>([])
-  const [stockSummary, setStockSummary] = useState<StockSummary[]>([])
 
   // Filter states
   const [filterProduct, setFilterProduct] = useState('all')
@@ -59,7 +65,7 @@ export default function StockManagementTab({ companyId }: StockManagementTabProp
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
-  const calculateStockSummary = useCallback((ledger: StockLedger[], productList: Product[]) => {
+  const buildStockSummary = (ledger: StockLedger[], productList: Product[]): StockSummary[] => {
     const summary: { [key: string]: StockSummary } = {}
     
     // Initialize summary for all products
@@ -87,8 +93,8 @@ export default function StockManagementTab({ companyId }: StockManagementTabProp
       summary[productId].closingStock = Math.max(0, summary[productId].totalIn - summary[productId].totalOut)
     })
     
-    setStockSummary(Object.values(summary))
-  }, [])
+    return Object.values(summary)
+  }
 
   const fetchStockData = useCallback(async () => {
     try {
@@ -105,18 +111,15 @@ export default function StockManagementTab({ companyId }: StockManagementTabProp
       
       setProducts(productsData)
       setStockLedger(ledgerData)
-      
-      // Calculate stock summary
-      calculateStockSummary(ledgerData, productsData)
-      
       setLoading(false)
     } catch (error) {
       console.error('Error fetching stock data:', error)
       setLoading(false)
     }
-  }, [companyId, calculateStockSummary])
+  }, [companyId])
 
   useEffect(() => {
+    if (hasInitialData) return undefined
     if (companyId) {
       const timer = window.setTimeout(() => {
         void fetchStockData()
@@ -124,10 +127,21 @@ export default function StockManagementTab({ companyId }: StockManagementTabProp
       return () => window.clearTimeout(timer)
     }
     return undefined
-  }, [companyId, fetchStockData])
+  }, [companyId, fetchStockData, hasInitialData])
+
+  const productsData = useMemo(
+    () => (hasInitialData ? initialProducts || [] : products),
+    [hasInitialData, initialProducts, products]
+  )
+  const stockLedgerData = useMemo(
+    () => (hasInitialData ? initialStockLedger || [] : stockLedger),
+    [hasInitialData, initialStockLedger, stockLedger]
+  )
+  const stockSummary = useMemo(() => buildStockSummary(stockLedgerData, productsData), [productsData, stockLedgerData])
+  const isLoading = hasInitialData ? false : loading
 
   const getFilteredLedger = () => {
-    let filtered = stockLedger
+    let filtered = stockLedgerData
 
     if (filterProduct && filterProduct !== 'all') {
       filtered = filtered.filter(entry => entry.product.id === filterProduct)
@@ -164,7 +178,7 @@ export default function StockManagementTab({ companyId }: StockManagementTabProp
     router.push(`/stock/dashboard?productId=${productId}`)
   }
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
         <div className="text-lg">Loading...</div>
@@ -191,7 +205,7 @@ export default function StockManagementTab({ companyId }: StockManagementTabProp
           <CardContent className="pt-6">
             <div className="text-center">
               <p className="text-sm text-gray-600">Total Products</p>
-              <p className="text-2xl font-bold text-blue-600">{products.length}</p>
+              <p className="text-2xl font-bold text-blue-600">{productsData.length}</p>
             </div>
           </CardContent>
         </Card>
@@ -218,7 +232,7 @@ export default function StockManagementTab({ companyId }: StockManagementTabProp
           <CardContent className="pt-6">
             <div className="text-center">
               <p className="text-sm text-gray-600">Transactions</p>
-              <p className="text-2xl font-bold text-purple-600">{stockLedger.length}</p>
+              <p className="text-2xl font-bold text-purple-600">{stockLedgerData.length}</p>
             </div>
           </CardContent>
         </Card>
@@ -297,7 +311,7 @@ export default function StockManagementTab({ companyId }: StockManagementTabProp
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Products</SelectItem>
-                  {products.map((product) => (
+                  {productsData.map((product) => (
                     <SelectItem key={product.id} value={product.id}>
                       {product.name}
                     </SelectItem>

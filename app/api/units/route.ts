@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { UNIVERSAL_UNITS, toNumber } from '@/lib/unit-conversion'
 import { ensureCompanyAccess, normalizeId, requireRoles } from '@/lib/api-security'
+import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
 
 function setCORSHeaders() {
   const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000']
@@ -14,20 +15,37 @@ function setCORSHeaders() {
   }
 }
 
-const DUMMY_UNITS = [
-  { name: 'Kilogram', symbol: 'kg', kgEquivalent: 1, isUniversal: true, description: 'Universal base unit: 1 KG' },
-  {
-    name: 'Quintal',
-    symbol: 'qt',
-    kgEquivalent: 100,
-    isUniversal: true,
-    description: 'Universal base constant: 1 QT = 100 KG'
-  },
-  { name: 'Bag 90KG', symbol: 'bag90', kgEquivalent: 90, isUniversal: false, description: 'User unit: 90 KG per bag' }
-] as const
-
 function isUniversalSymbol(symbol: string): boolean {
   return symbol === UNIVERSAL_UNITS.KG || symbol === UNIVERSAL_UNITS.QUINTAL
+}
+
+async function ensureSupabaseCompanyAccess(request: NextRequest, companyId: string) {
+  const supabaseSession = await resolveSupabaseAppSession(request, companyId)
+  if (!supabaseSession) return null
+
+  const scopedCompany = supabaseSession.companies.find((company) => company.id === companyId) || null
+  if (!scopedCompany) {
+    return {
+      handled: true as const,
+      response: supabaseSession.applyCookies(
+        NextResponse.json({ error: 'Company not found or access denied' }, { status: 403, headers: setCORSHeaders() })
+      )
+    }
+  }
+
+  if (scopedCompany.locked) {
+    return {
+      handled: true as const,
+      response: supabaseSession.applyCookies(
+        NextResponse.json({ error: 'Company is locked' }, { status: 403, headers: setCORSHeaders() })
+      )
+    }
+  }
+
+  return {
+    handled: true as const,
+    response: null
+  }
 }
 
 async function ensureUniversalUnits(companyId: string) {
@@ -85,8 +103,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400, headers: setCORSHeaders() })
     }
 
+    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
+    if (supabaseGuard?.response) return supabaseGuard.response
+
     const scopeGuard = await ensureCompanyAccess(request, companyId)
-    if (scopeGuard) return scopeGuard
+    if (scopeGuard && !supabaseGuard) return scopeGuard
 
     await ensureUniversalUnits(companyId)
 
@@ -102,53 +123,24 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin'])
-  if (!authResult.ok) return authResult.response
-
   try {
     const companyId = normalizeId(new URL(request.url).searchParams.get('companyId'))
     if (!companyId) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400, headers: setCORSHeaders() })
     }
 
+    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
+    if (supabaseGuard?.response) return supabaseGuard.response
+
+    if (!supabaseGuard) {
+      const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin'])
+      if (!authResult.ok) return authResult.response
+    }
+
     const scopeGuard = await ensureCompanyAccess(request, companyId)
-    if (scopeGuard) return scopeGuard
+    if (scopeGuard && !supabaseGuard) return scopeGuard
 
     const body = await request.json().catch(() => ({}))
-
-    if ((body as { seed?: unknown }).seed === true) {
-      const created = await prisma.$transaction(
-        DUMMY_UNITS.map((row) =>
-          prisma.unit.upsert({
-            where: {
-              companyId_symbol: {
-                companyId,
-                symbol: row.symbol
-              }
-            },
-            update: {
-              name: row.name,
-              kgEquivalent: row.kgEquivalent,
-              isUniversal: row.isUniversal,
-              description: row.description
-            },
-            create: {
-              companyId,
-              name: row.name,
-              symbol: row.symbol,
-              kgEquivalent: row.kgEquivalent,
-              isUniversal: row.isUniversal,
-              description: row.description
-            }
-          })
-        )
-      )
-
-      return NextResponse.json(
-        { success: true, message: `${created.length} dummy units added successfully`, count: created.length },
-        { headers: setCORSHeaders() }
-      )
-    }
 
     const name = String((body as { name?: unknown }).name || '').trim()
     const symbolNormalized = String((body as { symbol?: unknown }).symbol || '').trim().toLowerCase()
@@ -210,9 +202,6 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
-  const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin'])
-  if (!authResult.ok) return authResult.response
-
   try {
     const searchParams = new URL(request.url).searchParams
     const id = normalizeId(searchParams.get('id'))
@@ -225,8 +214,16 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400, headers: setCORSHeaders() })
     }
 
+    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
+    if (supabaseGuard?.response) return supabaseGuard.response
+
+    if (!supabaseGuard) {
+      const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin'])
+      if (!authResult.ok) return authResult.response
+    }
+
     const scopeGuard = await ensureCompanyAccess(request, companyId)
-    if (scopeGuard) return scopeGuard
+    if (scopeGuard && !supabaseGuard) return scopeGuard
 
     const body = await request.json().catch(() => ({}))
     const name = String((body as { name?: unknown }).name || '').trim()
@@ -304,9 +301,6 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin'])
-  if (!authResult.ok) return authResult.response
-
   try {
     const searchParams = new URL(request.url).searchParams
     const id = normalizeId(searchParams.get('id'))
@@ -317,8 +311,16 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400, headers: setCORSHeaders() })
     }
 
+    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
+    if (supabaseGuard?.response) return supabaseGuard.response
+
+    if (!supabaseGuard) {
+      const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin'])
+      if (!authResult.ok) return authResult.response
+    }
+
     const scopeGuard = await ensureCompanyAccess(request, companyId)
-    if (scopeGuard) return scopeGuard
+    if (scopeGuard && !supabaseGuard) return scopeGuard
 
     if (all) {
       await ensureUniversalUnits(companyId)

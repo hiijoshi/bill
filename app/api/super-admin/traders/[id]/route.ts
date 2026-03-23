@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { normalizeTraderLimitInput } from '@/lib/trader-limits'
+import { normalizePrismaApiError } from '@/lib/prisma-errors'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'Trader ID is required') })
 
@@ -210,8 +211,13 @@ export async function PUT(
 
     const response = await getTraderById(traderId, false)
     return NextResponse.json(response)
-  } catch {
-    return NextResponse.json({ error: 'Failed to update trader' }, { status: 500 })
+  } catch (error) {
+    const apiError = normalizePrismaApiError(error, 'Failed to update trader', {
+      uniqueMessages: {
+        name: 'Trader with this name already exists'
+      }
+    })
+    return NextResponse.json({ error: apiError.message }, { status: apiError.status })
   }
 }
 
@@ -292,7 +298,8 @@ export async function DELETE(
     })
 
     return NextResponse.json({ success: true })
-  } catch {
-    return NextResponse.json({ error: 'Failed to delete trader' }, { status: 500 })
+  } catch (error) {
+    const apiError = normalizePrismaApiError(error, 'Failed to delete trader')
+    return NextResponse.json({ error: apiError.message }, { status: apiError.status })
   }
 }

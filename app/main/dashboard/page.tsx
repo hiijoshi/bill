@@ -34,10 +34,12 @@ import StockManagementTab from './components/StockManagementTab'
 import PaymentTab from './components/PaymentTab'
 import ReportsTab from './components/ReportsTab'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
-import { stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { notifyAppCompanyChanged, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 type ActiveTab = 'purchase' | 'sales' | 'stock' | 'payment' | 'report'
 const DASHBOARD_CACHE_AGE_MS = 15_000
+const COMPANIES_CACHE_AGE_MS = 60_000
+const COMPANIES_CACHE_KEY = 'shell:companies'
 const currencyFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 })
 
 type PurchaseBill = {
@@ -65,11 +67,31 @@ type SalesBill = {
 }
 
 type Payment = {
+  id: string
   companyId?: string
   billType: 'purchase' | 'sales'
+  billId?: string
   amount: number
   payDate?: string
   billDate?: string
+  mode?: 'cash' | 'online' | 'bank' | string
+  txnRef?: string | null
+  note?: string | null
+  party?: {
+    name?: string
+  } | null
+  farmer?: {
+    name?: string
+  } | null
+}
+
+type ProductRecord = {
+  id: string
+  companyId?: string
+  name?: string
+  unit?: {
+    symbol?: string
+  } | null
 }
 
 type StockLedgerItem = {
@@ -86,24 +108,37 @@ type StockLedgerItem = {
   }
 }
 
-type MasterRecord = {
-  id: string
-  companyId?: string
-}
-
 type CompanyOption = {
   id: string
   name: string
   locked?: boolean
 }
 
+function buildFallbackCompanyOption(companyId: string): CompanyOption {
+  return {
+    id: companyId,
+    name: companyId
+  }
+}
+
+type AuthCompanyPayload = {
+  company?: {
+    id?: string | null
+    name?: string | null
+  } | null
+  user?: {
+    companyId?: string | null
+    assignedCompanyId?: string | null
+  } | null
+}
+
 type DashboardData = {
   purchaseBills: PurchaseBill[]
   salesBills: SalesBill[]
   payments: Payment[]
-  products: MasterRecord[]
-  parties: MasterRecord[]
-  units: MasterRecord[]
+  products: ProductRecord[]
+  parties: Array<{ id: string; companyId?: string }>
+  units: Array<{ id: string; companyId?: string }>
   stockLedger: StockLedgerItem[]
 }
 
@@ -156,6 +191,11 @@ export default function MainDashboardPage() {
   }, [])
 
   const loadCompanies = useCallback(async () => {
+    const cached = getClientCache<CompanyOption[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS)
+    if (cached) {
+      return cached
+    }
+
     const res = await fetch('/api/companies', { cache: 'no-store' })
     if (!res.ok) {
       if (res.status === 401) {
@@ -176,13 +216,57 @@ export default function MainDashboardPage() {
       return []
     }
     const rows = await parseApiJson<Array<Record<string, unknown>>>(res, [])
-    return Array.isArray(rows)
+    const normalized = Array.isArray(rows)
       ? rows.map((row) => ({
           id: String(row.id),
           name: String(row.name || row.id),
           locked: Boolean(row.locked)
         }))
       : []
+    setClientCache(COMPANIES_CACHE_KEY, normalized)
+    return normalized
+  }, [router])
+
+  const loadCurrentCompanyOption = useCallback(async (): Promise<CompanyOption | null> => {
+    try {
+      const activeResponse = await fetch('/api/auth/company', { cache: 'no-store' })
+      if (activeResponse.ok) {
+        const activePayload = await parseApiJson<AuthCompanyPayload>(activeResponse, {})
+        const companyId = String(activePayload.company?.id || '').trim()
+        if (companyId) {
+          return {
+            id: companyId,
+            name: String(activePayload.company?.name || companyId).trim() || companyId
+          }
+        }
+      }
+    } catch {
+      // fall through to /api/auth/me
+    }
+
+    try {
+      const authResponse = await fetch('/api/auth/me', { cache: 'no-store' })
+      if (!authResponse.ok) {
+        if (authResponse.status === 401) {
+          router.push('/login')
+        }
+        return null
+      }
+      const authPayload = await parseApiJson<AuthCompanyPayload>(authResponse, {})
+      const companyId = String(
+        authPayload.company?.id ||
+        authPayload.user?.companyId ||
+        authPayload.user?.assignedCompanyId ||
+        ''
+      ).trim()
+      if (!companyId) return null
+      return {
+        id: companyId,
+        name: String(authPayload.company?.name || companyId).trim() || companyId
+      }
+    } catch {
+      return null
+    }
   }, [router])
 
   const fetchDashboardData = useCallback(async (companyIds: string[]) => {
@@ -191,61 +275,40 @@ export default function MainDashboardPage() {
       setFetchFailures([])
       return
     }
-    const failures: string[] = []
-    const companyNameMap = new Map(companies.map((item) => [item.id, item.name]))
-    const fetchJson = async <T,>(name: string, url: string): Promise<T> => {
-      try {
-        const res = await fetch(url)
-        if (!res.ok) {
-          failures.push(name)
-          return [] as T
-        }
-        return res.json()
-      } catch {
-        failures.push(name)
-        return [] as T
+    const params = new URLSearchParams()
+    if (companyIds.length === 1) {
+      params.set('companyId', companyIds[0])
+    } else {
+      params.set('companyIds', companyIds.join(','))
+    }
+
+    try {
+      const response = await fetch(`/api/main-dashboard/overview?${params.toString()}`, { cache: 'no-store' })
+      const payload = await parseApiJson<Partial<DashboardData> & { error?: string }>(response, {})
+      if (!response.ok) {
+        setFetchFailures([payload.error || 'dashboard overview'])
+        setData(emptyData)
+        return
       }
+
+      const nextData: DashboardData = {
+        purchaseBills: Array.isArray(payload.purchaseBills) ? payload.purchaseBills : [],
+        salesBills: Array.isArray(payload.salesBills) ? payload.salesBills : [],
+        payments: Array.isArray(payload.payments) ? payload.payments : [],
+        products: Array.isArray(payload.products) ? payload.products : [],
+        parties: Array.isArray(payload.parties) ? payload.parties : [],
+        units: Array.isArray(payload.units) ? payload.units : [],
+        stockLedger: Array.isArray(payload.stockLedger) ? payload.stockLedger : []
+      }
+
+      setData(nextData)
+      setFetchFailures([])
+      setClientCache(`main-dashboard:${companyIds.slice().sort().join(',')}`, nextData)
+    } catch {
+      setData(emptyData)
+      setFetchFailures(['dashboard overview'])
     }
-
-    const perCompanyData = await Promise.all(
-      companyIds.map(async (id) => {
-        const companyLabel = companyNameMap.get(id) || id
-        const [purchaseBills, salesBills, payments, products, parties, units, stockLedger] = await Promise.all([
-          fetchJson<PurchaseBill[]>(`purchase bills (${companyLabel})`, `/api/purchase-bills?companyId=${id}`),
-          fetchJson<SalesBill[]>(`sales bills (${companyLabel})`, `/api/sales-bills?companyId=${id}`),
-          fetchJson<Payment[]>(`payments (${companyLabel})`, `/api/payments?companyId=${id}`),
-          fetchJson<MasterRecord[]>(`products (${companyLabel})`, `/api/products?companyId=${id}`),
-          fetchJson<MasterRecord[]>(`parties (${companyLabel})`, `/api/parties?companyId=${id}`),
-          fetchJson<MasterRecord[]>(`units (${companyLabel})`, `/api/units?companyId=${id}`),
-          fetchJson<StockLedgerItem[]>(`stock ledger (${companyLabel})`, `/api/stock-ledger?companyId=${id}`)
-        ])
-
-        return {
-          purchaseBills: Array.isArray(purchaseBills) ? purchaseBills.map((row) => ({ ...row, companyId: row.companyId || id })) : [],
-          salesBills: Array.isArray(salesBills) ? salesBills.map((row) => ({ ...row, companyId: row.companyId || id })) : [],
-          payments: Array.isArray(payments) ? payments.map((row) => ({ ...row, companyId: row.companyId || id })) : [],
-          products: Array.isArray(products) ? products.map((row) => ({ ...row, companyId: row.companyId || id })) : [],
-          parties: Array.isArray(parties) ? parties.map((row) => ({ ...row, companyId: row.companyId || id })) : [],
-          units: Array.isArray(units) ? units.map((row) => ({ ...row, companyId: row.companyId || id })) : [],
-          stockLedger: Array.isArray(stockLedger) ? stockLedger.map((row) => ({ ...row, companyId: row.companyId || id })) : []
-        }
-      })
-    )
-
-    const nextData: DashboardData = {
-      purchaseBills: perCompanyData.flatMap((item) => item.purchaseBills),
-      salesBills: perCompanyData.flatMap((item) => item.salesBills),
-      payments: perCompanyData.flatMap((item) => item.payments),
-      products: perCompanyData.flatMap((item) => item.products),
-      parties: perCompanyData.flatMap((item) => item.parties),
-      units: perCompanyData.flatMap((item) => item.units),
-      stockLedger: perCompanyData.flatMap((item) => item.stockLedger)
-    }
-
-    setData(nextData)
-    setFetchFailures(failures)
-    setClientCache(`main-dashboard:${companyIds.slice().sort().join(',')}`, nextData)
-  }, [companies])
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -257,26 +320,25 @@ export default function MainDashboardPage() {
         .map((id) => id.trim())
         .filter(Boolean)
       let activeCompanyId = ''
+      let activeCompanyOption: CompanyOption | null = null
 
       try {
-        const list: CompanyOption[] = await loadCompanies()
+        const [list, currentCompany] = await Promise.all([loadCompanies(), loadCurrentCompanyOption()])
         if (cancelled) return
-        setCompanies(list)
+        activeCompanyOption = currentCompany
 
-        try {
-          const activeResponse = await fetch('/api/auth/company', { cache: 'no-store' })
-          if (activeResponse.ok) {
-            const activePayload = await activeResponse.json().catch(() => null)
-            const nextId = String(activePayload?.company?.id || '').trim()
-            if (nextId) {
-              activeCompanyId = nextId
-            }
-          }
-        } catch {
-          activeCompanyId = ''
+        if (currentCompany?.id) {
+          activeCompanyId = currentCompany.id
         }
 
-        const availableIds = new Set(list.map((item) => item.id))
+        const mergedList = list.length > 0
+          ? list
+          : currentCompany
+            ? [currentCompany]
+            : []
+        setCompanies(mergedList)
+
+        const availableIds = new Set(mergedList.map((item) => item.id))
         let nextSelected = queryCompanyIds.filter((id) => availableIds.has(id))
         if (nextSelected.length === 0 && queryCompanyId && availableIds.has(queryCompanyId)) {
           nextSelected = [queryCompanyId]
@@ -284,12 +346,12 @@ export default function MainDashboardPage() {
         if (nextSelected.length === 0 && activeCompanyId && availableIds.has(activeCompanyId)) {
           nextSelected = [activeCompanyId]
         }
-        if (nextSelected.length === 0 && queryCompanyId && list.length === 0) {
+        if (nextSelected.length === 0 && queryCompanyId && mergedList.length === 0) {
           nextSelected = [queryCompanyId]
-          setCompanies([{ id: queryCompanyId, name: 'Current Company' }])
+          setCompanies([buildFallbackCompanyOption(queryCompanyId)])
         }
         if (nextSelected.length === 0) {
-          const defaultCompanyId = list.find((item) => !item.locked)?.id || list[0]?.id || ''
+          const defaultCompanyId = mergedList.find((item) => !item.locked)?.id || mergedList[0]?.id || ''
           nextSelected = defaultCompanyId ? [defaultCompanyId] : []
         }
         const nextPrimary = availableIds.has(queryCompanyId) && nextSelected.includes(queryCompanyId)
@@ -299,29 +361,47 @@ export default function MainDashboardPage() {
           : (nextSelected[0] || '')
         setSelectedCompanyIds(nextSelected)
         setPrimaryCompanyId(nextPrimary)
+        setUiError(null)
+        setUiMessage(nextSelected.length === 0 ? 'No company is assigned to this account yet. Ask Super Admin to assign access.' : null)
       } catch (error) {
         if (cancelled) return
         void error
+        const fallbackCompany = activeCompanyOption || await loadCurrentCompanyOption()
+        if (fallbackCompany?.id) {
+          setCompanies([fallbackCompany])
+          setSelectedCompanyIds([fallbackCompany.id])
+          setPrimaryCompanyId(fallbackCompany.id)
+          setUiError(null)
+          setUiMessage(null)
+          return
+        }
         if (queryCompanyId) {
-          setCompanies([{ id: queryCompanyId, name: 'Current Company' }])
+          setCompanies([buildFallbackCompanyOption(queryCompanyId)])
           setSelectedCompanyIds([queryCompanyId])
           setPrimaryCompanyId(queryCompanyId)
+          setUiError(null)
         } else if (activeCompanyId) {
-          setCompanies([{ id: activeCompanyId, name: 'Current Company' }])
+          setCompanies([buildFallbackCompanyOption(activeCompanyId)])
           setSelectedCompanyIds([activeCompanyId])
           setPrimaryCompanyId(activeCompanyId)
+          setUiError(null)
         } else {
           setUiError('Failed to load company list')
+          setUiMessage(null)
         }
       } finally {
         if (cancelled) return
         setLoading(false)
       }
-    })()
+    })().catch(() => {
+      if (cancelled) return
+      setLoading(false)
+      setUiError('Failed to load company list')
+    })
     return () => {
       cancelled = true
     }
-  }, [loadCompanies])
+  }, [loadCompanies, loadCurrentCompanyOption])
 
   useEffect(() => {
     if (selectedCompanyIds.length === 0) return
@@ -364,7 +444,11 @@ export default function MainDashboardPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ companyId: primaryCompanyId, force: true })
-    })
+    }).then((response) => {
+      if (response.ok) {
+        notifyAppCompanyChanged(primaryCompanyId)
+      }
+    }).catch(() => undefined)
   }, [primaryCompanyId])
 
   const handleNavigation = async (path: string) => {
@@ -376,11 +460,14 @@ export default function MainDashboardPage() {
     }
 
     try {
-      await fetch('/api/auth/company', {
+      const response = await fetch('/api/auth/company', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId: primaryCompanyId, force: true })
       })
+      if (response.ok) {
+        notifyAppCompanyChanged(primaryCompanyId)
+      }
     } catch (error) {
       void error
     }
@@ -1600,17 +1687,84 @@ export default function MainDashboardPage() {
 
           {/* Stock Tab */}
           {activeTab === 'stock' && (
-            <StockManagementTab companyId={primaryCompanyId} />
+            <StockManagementTab
+              companyId={primaryCompanyId}
+              initialProducts={data.products.map((product) => ({
+                id: product.id,
+                name: product.name || 'Unknown Product',
+                unit: product.unit?.symbol || ''
+              }))}
+              initialStockLedger={data.stockLedger.map((entry) => ({
+                id: entry.id,
+                entryDate: entry.entryDate || '',
+                product: {
+                  id: entry.product?.id || '',
+                  name: entry.product?.name || 'Unknown Product',
+                  unit: entry.product?.unit || ''
+                },
+                type: entry.type || 'adjustment',
+                qtyIn: Number(entry.qtyIn || 0),
+                qtyOut: Number(entry.qtyOut || 0),
+                refTable: '',
+                refId: ''
+              }))}
+            />
           )}
 
           {/* Payment Tab */}
           {activeTab === 'payment' && (
-            <PaymentTab companyId={primaryCompanyId} />
+            <PaymentTab
+              companyId={primaryCompanyId}
+              initialPurchaseBills={data.purchaseBills.map((bill) => ({
+                id: bill.id,
+                billNo: bill.billNo,
+                billDate: bill.billDate,
+                totalAmount: Number(bill.totalAmount || 0),
+                paidAmount: Number(bill.paidAmount || 0),
+                balanceAmount: Number(bill.balanceAmount || 0),
+                status: bill.status,
+                farmer: bill.farmer
+              }))}
+              initialSalesBills={data.salesBills.map((bill) => ({
+                id: bill.id,
+                billNo: bill.billNo,
+                billDate: bill.billDate,
+                totalAmount: Number(bill.totalAmount || 0),
+                receivedAmount: Number(bill.receivedAmount || 0),
+                balanceAmount: Number(bill.balanceAmount || 0),
+                status: bill.status,
+                party: bill.party || { name: '' }
+              }))}
+              initialPayments={data.payments.map((payment) => ({
+                id: payment.id,
+                billType: payment.billType,
+                billId: payment.billId || '',
+                billNo:
+                  payment.billType === 'purchase'
+                    ? data.purchaseBills.find((bill) => bill.id === payment.billId)?.billNo || ''
+                    : data.salesBills.find((bill) => bill.id === payment.billId)?.billNo || '',
+                partyName:
+                  payment.party?.name ||
+                  payment.farmer?.name ||
+                  (payment.billType === 'purchase'
+                    ? data.purchaseBills.find((bill) => bill.id === payment.billId)?.farmer?.name || ''
+                    : data.salesBills.find((bill) => bill.id === payment.billId)?.party?.name || ''),
+                payDate: payment.payDate || '',
+                amount: Number(payment.amount || 0),
+                mode: (payment.mode as 'cash' | 'online' | 'bank') || 'cash',
+                txnRef: payment.txnRef || '',
+                note: payment.note || '',
+                createdAt: payment.billDate || payment.payDate || ''
+              }))}
+            />
           )}
 
           {/* Reports Tab */}
           {activeTab === 'report' && (
-            <ReportsTab companyId={primaryCompanyId} />
+            <ReportsTab
+              companyId={primaryCompanyId}
+              companyOptions={companies.map((company) => ({ id: company.id, name: company.name }))}
+            />
           )}
         </div>
         </div>

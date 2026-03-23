@@ -56,6 +56,9 @@ interface Payment {
 
 interface PaymentTabProps {
   companyId: string
+  initialPurchaseBills?: PurchaseBill[]
+  initialSalesBills?: SalesBill[]
+  initialPayments?: Payment[]
 }
 
 const clampNonNegative = (value: number): number => {
@@ -64,9 +67,18 @@ const clampNonNegative = (value: number): number => {
   return Math.max(0, parsed)
 }
 
-export default function PaymentTab({ companyId }: PaymentTabProps) {
+export default function PaymentTab({
+  companyId,
+  initialPurchaseBills,
+  initialSalesBills,
+  initialPayments
+}: PaymentTabProps) {
   const router = useRouter()
-  const [loading, setLoading] = useState(true)
+  const hasInitialData =
+    Array.isArray(initialPurchaseBills) &&
+    Array.isArray(initialSalesBills) &&
+    Array.isArray(initialPayments)
+  const [loading, setLoading] = useState(!hasInitialData)
 
   const [activeTab, setActiveTab] = useState<'purchase' | 'sales'>('purchase')
   const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>([])
@@ -128,6 +140,7 @@ export default function PaymentTab({ companyId }: PaymentTabProps) {
   }, [companyId])
 
   useEffect(() => {
+    if (hasInitialData) return undefined
     if (companyId) {
       const timer = window.setTimeout(() => {
         void fetchPaymentData()
@@ -135,10 +148,15 @@ export default function PaymentTab({ companyId }: PaymentTabProps) {
       return () => window.clearTimeout(timer)
     }
     return undefined
-  }, [companyId, fetchPaymentData])
+  }, [companyId, fetchPaymentData, hasInitialData])
+
+  const purchaseBillsData = hasInitialData ? initialPurchaseBills || [] : purchaseBills
+  const salesBillsData = hasInitialData ? initialSalesBills || [] : salesBills
+  const paymentsData = hasInitialData ? initialPayments || [] : payments
+  const isLoading = hasInitialData ? false : loading
 
   const getFilteredPayments = () => {
-    let filtered = payments
+    let filtered = paymentsData
 
     if (filterBillType && filterBillType !== 'all') {
       filtered = filtered.filter(payment => payment.billType === filterBillType)
@@ -156,10 +174,10 @@ export default function PaymentTab({ companyId }: PaymentTabProps) {
   }
 
   const getPaymentStats = () => ({
-    totalPayments: payments.reduce((sum, payment) => sum + clampNonNegative(payment.amount), 0),
-    purchasePayments: payments.filter(p => p.billType === 'purchase').reduce((sum, p) => sum + clampNonNegative(p.amount), 0),
-    salesReceipts: payments.filter(p => p.billType === 'sales').reduce((sum, p) => sum + clampNonNegative(p.amount), 0),
-    count: payments.length
+    totalPayments: paymentsData.reduce((sum, payment) => sum + clampNonNegative(payment.amount), 0),
+    purchasePayments: paymentsData.filter(p => p.billType === 'purchase').reduce((sum, p) => sum + clampNonNegative(p.amount), 0),
+    salesReceipts: paymentsData.filter(p => p.billType === 'sales').reduce((sum, p) => sum + clampNonNegative(p.amount), 0),
+    count: paymentsData.length
   })
 
   const handleMakePayment = (billId: string, billType: 'purchase' | 'sales') => {
@@ -171,7 +189,7 @@ export default function PaymentTab({ companyId }: PaymentTabProps) {
     router.push(`/${billType}/view?billId=${billId}`)
   }
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
         <div className="text-lg">Loading...</div>
@@ -283,7 +301,7 @@ export default function PaymentTab({ companyId }: PaymentTabProps) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(activeTab === 'purchase' ? purchaseBills : salesBills).map((bill) => (
+                {(activeTab === 'purchase' ? purchaseBillsData : salesBillsData).map((bill) => (
                   <TableRow key={bill.id}>
                     <TableCell>{bill.billNo}</TableCell>
                     <TableCell>{new Date(bill.billDate).toLocaleDateString()}</TableCell>

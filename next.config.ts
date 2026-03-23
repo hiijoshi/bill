@@ -1,12 +1,27 @@
 import type { NextConfig } from "next";
-import { ALLOWED_ORIGIN, isProduction } from './lib/config'
+import { isProduction } from './lib/config'
+
+const ALLOWED_ORIGINS_LIST = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean)
+
+const PRIMARY_ALLOWED_ORIGIN = ALLOWED_ORIGINS_LIST[0] || 'http://localhost:3000'
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ['127.0.0.1:51445'],
   experimental: {
     optimizePackageImports: ['lucide-react'],
     serverActions: {
-      allowedOrigins: ['127.0.0.1:51445']
+      allowedOrigins: [
+        '127.0.0.1:51445',
+        'mbill.hiijoshi.in',
+        'hiijoshi.in',
+        'www.hiijoshi.in',
+        ...ALLOWED_ORIGINS_LIST.map((o) => {
+          try { return new URL(o).host } catch { return o }
+        })
+      ].filter(Boolean)
     }
   },
   async headers() {
@@ -16,7 +31,7 @@ const nextConfig: NextConfig = {
         headers: [
           {
             key: 'Access-Control-Allow-Origin',
-            value: ALLOWED_ORIGIN
+            value: PRIMARY_ALLOWED_ORIGIN
           },
           {
             key: 'Access-Control-Allow-Methods',

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { validateStockBeforeSale } from '@/lib/stock-automation'
 import { z } from 'zod'
-import { ensureCompanyAccess, getRequestAuthContext, normalizeId, parseJsonWithSchema } from '@/lib/api-security'
+import { ensureCompanyAccess, normalizeId, parseJsonWithSchema, requireAuthContext } from '@/lib/api-security'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 import { calculateTaxBreakdown, calculateTotalsBreakdown, normalizeNonNegative } from '@/lib/billing-calculations'
 import { getPartyCreditSnapshot } from '@/lib/party-credit'
@@ -424,8 +424,9 @@ export async function POST(request: NextRequest) {
     })
     if (riskDenied) return riskDenied
 
-    const auth = getRequestAuthContext(request)
-    const userId = auth?.userId || 'system'
+    const authResult = requireAuthContext(request)
+    if (!authResult.ok) return authResult.response
+    const userId = authResult.auth.userId
 
     const createdSalesBill = await prisma.$transaction(async (tx) => {
       const salesBill = await tx.salesBill.create({

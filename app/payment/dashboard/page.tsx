@@ -70,6 +70,26 @@ interface Payment {
   createdAt: string
 }
 
+type OverviewPayload = {
+  purchaseBills?: PurchaseBill[]
+  salesBills?: SalesBill[]
+  payments?: Array<{
+    id: string
+    billType: 'purchase' | 'sales'
+    billId?: string
+    amount?: number
+    payDate?: string
+    billDate?: string
+    mode?: 'cash' | 'online' | 'bank' | string
+    status?: 'pending' | 'paid' | string
+    txnRef?: string | null
+    note?: string | null
+    createdAt?: string
+    party?: { name?: string } | null
+    farmer?: { name?: string } | null
+  }>
+}
+
 const clampNonNegative = (value: number): number => {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return 0
@@ -130,7 +150,7 @@ export default function PaymentDashboardPage() {
       setCompanyId(companyIdParam)
       stripCompanyParamsFromUrl()
 
-      const cacheKey = `payments-dashboard:${companyIdParam}:${activeTab}`
+      const cacheKey = `payments-dashboard:${companyIdParam}`
       const cached = getClientCache<{
         purchaseBills: PurchaseBill[]
         salesBills: SalesBill[]
@@ -143,18 +163,17 @@ export default function PaymentDashboardPage() {
         setLoading(false)
       }
 
-      // Fetch bills based on active tab
-      const billsEndpoint = activeTab === 'purchase' ? 'purchase-bills' : 'sales-bills'
-      const [billsResponse, paymentsResponse] = await Promise.all([
-        fetch(`/api/${billsEndpoint}?companyId=${companyIdParam}`),
-        fetch(`/api/payments?companyId=${companyIdParam}&billType=${activeTab}`)
-      ])
-      if (billsResponse.status === 401 || paymentsResponse.status === 401) {
+      const overviewParams = new URLSearchParams({
+        companyId: companyIdParam,
+        include: 'purchaseBills,salesBills,payments'
+      })
+      const overviewResponse = await fetch(`/api/main-dashboard/overview?${overviewParams.toString()}`)
+      if (overviewResponse.status === 401) {
         setLoading(false)
         router.push('/login')
         return
       }
-      if (billsResponse.status === 403 || paymentsResponse.status === 403) {
+      if (overviewResponse.status === 403) {
         setPurchaseBills([])
         setSalesBills([])
         setPayments([])
@@ -162,29 +181,55 @@ export default function PaymentDashboardPage() {
         return
       }
 
-      const billsRaw = await billsResponse.json().catch(() => [])
-      const billsData = Array.isArray(billsRaw) ? billsRaw : []
-      const normalizedBills = billsData.map((bill: PurchaseBill | SalesBill) => ({
-        ...bill,
-        totalAmount: clampNonNegative(bill.totalAmount),
-        balanceAmount: clampNonNegative(bill.balanceAmount),
-        ...(activeTab === 'purchase'
-          ? { paidAmount: clampNonNegative((bill as PurchaseBill).paidAmount) }
-          : { receivedAmount: clampNonNegative((bill as SalesBill).receivedAmount) })
-      }))
-
-      const nextPurchaseBills = activeTab === 'purchase' ? (normalizedBills as PurchaseBill[]) : []
-      const nextSalesBills = activeTab === 'sales' ? (normalizedBills as SalesBill[]) : []
+      const overview = await overviewResponse.json().catch(() => ({} as OverviewPayload))
+      const nextPurchaseBills: PurchaseBill[] = Array.isArray(overview.purchaseBills)
+        ? overview.purchaseBills.map((bill: PurchaseBill) => ({
+            ...bill,
+            totalAmount: clampNonNegative(bill.totalAmount),
+            paidAmount: clampNonNegative(bill.paidAmount),
+            balanceAmount: clampNonNegative(bill.balanceAmount)
+          }))
+        : []
+      const nextSalesBills: SalesBill[] = Array.isArray(overview.salesBills)
+        ? overview.salesBills.map((bill: SalesBill) => ({
+            ...bill,
+            totalAmount: clampNonNegative(bill.totalAmount),
+            receivedAmount: clampNonNegative(bill.receivedAmount),
+            balanceAmount: clampNonNegative(bill.balanceAmount)
+          }))
+        : []
       setPurchaseBills(nextPurchaseBills)
       setSalesBills(nextSalesBills)
 
-      const paymentsRaw = await paymentsResponse.json().catch(() => [])
-      const paymentsData = Array.isArray(paymentsRaw) ? paymentsRaw : []
-      const normalizedPayments: Payment[] = paymentsData.map((payment: Payment) => ({
-        ...payment,
-        amount: clampNonNegative(payment.amount),
-        status: payment.status === 'pending' ? 'pending' : 'paid'
-      }))
+      const purchaseBillMap = new Map(nextPurchaseBills.map((bill) => [bill.id, bill]))
+      const salesBillMap = new Map(nextSalesBills.map((bill) => [bill.id, bill]))
+      const normalizedPayments: Payment[] = Array.isArray(overview.payments)
+        ? overview.payments.map((payment: NonNullable<OverviewPayload['payments']>[number]) => {
+            const linkedBill =
+              payment.billType === 'purchase'
+                ? purchaseBillMap.get(payment.billId || '')
+                : salesBillMap.get(payment.billId || '')
+            return {
+              id: payment.id,
+              billType: payment.billType,
+              billId: payment.billId || '',
+              billNo: linkedBill?.billNo || '',
+              partyName:
+                payment.party?.name ||
+                payment.farmer?.name ||
+                (payment.billType === 'purchase'
+                  ? (linkedBill as PurchaseBill | undefined)?.supplier?.name || (linkedBill as PurchaseBill | undefined)?.farmer?.name || ''
+                  : (linkedBill as SalesBill | undefined)?.party?.name || ''),
+              payDate: payment.payDate || '',
+              amount: clampNonNegative(payment.amount || 0),
+              mode: payment.mode === 'bank' ? 'bank' : payment.mode === 'online' ? 'online' : 'cash',
+              status: payment.status === 'pending' ? 'pending' : 'paid',
+              txnRef: payment.txnRef || '',
+              note: payment.note || '',
+              createdAt: payment.createdAt || payment.billDate || payment.payDate || ''
+            }
+          })
+        : []
       setPayments(normalizedPayments)
       setClientCache(cacheKey, {
         purchaseBills: nextPurchaseBills,
@@ -201,7 +246,7 @@ export default function PaymentDashboardPage() {
       setPayments([])
       setLoading(false)
     }
-  }, [activeTab, router])
+  }, [router])
 
   useEffect(() => {
     let cancelled = false

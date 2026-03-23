@@ -23,6 +23,8 @@
 # misc
 .DS_Store
 *.pem
+cookies.txt
+migration-data/
 
 # debug
 npm-debug.log*

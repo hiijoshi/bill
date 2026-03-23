@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { printSimpleTableReport } from '@/lib/report-print'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 
 type EntryType = 'all' | 'purchase' | 'sales' | 'adjustment'
 
@@ -56,6 +57,9 @@ interface StockReportDashboardProps {
   embedded?: boolean
   onBackToDashboard?: () => void
 }
+
+const COMPANIES_CACHE_KEY = 'shell:companies'
+const COMPANIES_CACHE_AGE_MS = 60_000
 
 const numberFormatter = new Intl.NumberFormat('en-IN', {
   minimumFractionDigits: 2,
@@ -129,6 +133,19 @@ export default function StockReportDashboard({
     const loadCompanies = async () => {
       setLoadingCompanies(true)
       try {
+        const cachedCompanies = getClientCache<CompanyRecord[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS)
+        if (cachedCompanies && cachedCompanies.length > 0) {
+          if (cancelled) return
+          setCompanies(cachedCompanies)
+          const availableIds = new Set(cachedCompanies.map((row) => row.id))
+          setSelectedCompanyId((previous) => {
+            if (initialCompanyId && availableIds.has(initialCompanyId)) return initialCompanyId
+            if (previous && availableIds.has(previous)) return previous
+            return cachedCompanies[0]?.id || ''
+          })
+          return
+        }
+
         const response = await fetch('/api/companies', { cache: 'no-store' })
         if (!response.ok) {
           throw new Error('Unable to load companies')
@@ -140,6 +157,7 @@ export default function StockReportDashboard({
         if (cancelled) return
 
         setCompanies(rows)
+        setClientCache(COMPANIES_CACHE_KEY, rows)
         const availableIds = new Set(rows.map((row) => row.id))
         setSelectedCompanyId((previous) => {
           if (initialCompanyId && availableIds.has(initialCompanyId)) return initialCompanyId
@@ -190,7 +208,12 @@ export default function StockReportDashboard({
 
       const datasets = await Promise.all(
         targetCompanyIds.map(async (companyId) => {
-          const response = await fetch(`/api/stock-ledger?companyId=${encodeURIComponent(companyId)}`)
+          const params = new URLSearchParams({
+            companyId,
+            dateFrom,
+            dateTo
+          })
+          const response = await fetch(`/api/stock-ledger?${params.toString()}`)
           if (!response.ok) {
             throw new Error(`Failed to load stock entries for ${companyNameMap.get(companyId) || companyId}`)
           }

@@ -1,12 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ChevronDown, ChevronLeft, ChevronRight, LayoutDashboard, ShoppingCart, TrendingUp, Menu, Package, CreditCard, FileText, Settings, Lock, type LucideIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { APP_COMPANY_CHANGED_EVENT, notifyAppCompanyChanged } from '@/lib/company-context'
 
 type MenuPermissionModule =
   | 'MASTER_PRODUCTS'
@@ -116,10 +118,9 @@ interface SidebarProps {
 export default function Sidebar({ companyId, isCollapsed = false, onToggleCollapse }: SidebarProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const router = useRouter()
   const [openItems, setOpenItems] = useState<string[]>([])
   const [allowedModules, setAllowedModules] = useState<Set<MenuPermissionModule> | null>(null)
-  const permissionsRefreshMs = Math.max(30000, Number(process.env.NEXT_PUBLIC_LIVE_SYNC_MS || 60000))
+  const permissionsCacheKey = `permissions:${companyId || 'none'}`
 
   const withCompany = useCallback((href?: string) => {
     const base = href || '/main/dashboard'
@@ -135,20 +136,30 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
 
   const syncActiveCompany = () => {
     if (!companyId) return
-    void fetch('/api/auth/company', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      cache: 'no-store',
-      body: JSON.stringify({ companyId, force: true })
-    })
+    void (async () => {
+      const response = await fetch('/api/auth/company', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({ companyId, force: true })
+      }).catch(() => null)
+
+      if (!response?.ok) return
+      notifyAppCompanyChanged(companyId)
+    })()
   }
 
   useEffect(() => {
     let cancelled = false
-    let timerId: ReturnType<typeof setInterval> | null = null
 
-    const fetchPermissions = async () => {
+    const fetchPermissions = async (force = false) => {
       try {
+        const cached = force ? null : getClientCache<string[]>(permissionsCacheKey, 60_000)
+        if (cached) {
+          setAllowedModules(new Set(cached as MenuPermissionModule[]))
+          return
+        }
+
         const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}&includeMeta=true` : '?includeMeta=true'
         const response = await fetch(`/api/auth/permissions${qs}`, { cache: 'no-store' })
         if (cancelled) return
@@ -164,6 +175,7 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
           .filter((row: { module?: string; canRead?: boolean; canWrite?: boolean }) => row.canRead || row.canWrite)
           .map((row: { module?: string }) => row.module)
           .filter((module: unknown): module is MenuPermissionModule => typeof module === 'string')
+        setClientCache(permissionsCacheKey, readableModules)
         setAllowedModules(new Set(readableModules))
       } catch {
         if (cancelled) return
@@ -171,39 +183,33 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
       }
     }
 
-    void fetchPermissions()
-    timerId = setInterval(() => {
-      void fetchPermissions()
-    }, permissionsRefreshMs)
+    void fetchPermissions(false)
+
+    const onSessionRefresh = () => {
+      void fetchPermissions(true)
+    }
+    const onCompanyChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ companyId?: string }>).detail
+      if (!detail?.companyId || detail.companyId === companyId) {
+        void fetchPermissions(true)
+      }
+    }
+
+    window.addEventListener('sessionRefreshed', onSessionRefresh)
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
 
     return () => {
       cancelled = true
-      if (timerId) clearInterval(timerId)
+      window.removeEventListener('sessionRefreshed', onSessionRefresh)
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
-  }, [companyId, permissionsRefreshMs])
+  }, [companyId, permissionsCacheKey])
 
   const hasChildAccess = useCallback((child: MenuChild) => {
     if (!child.permissionModule) return true
     if (!allowedModules) return true
     return allowedModules.has(child.permissionModule)
   }, [allowedModules])
-
-  useEffect(() => {
-    const routeSet = new Set<string>()
-    for (const item of menuItems) {
-      if (item.href) routeSet.add(withCompany(item.href))
-      for (const child of item.children) {
-        if (hasChildAccess(child)) {
-          routeSet.add(withCompany(child.href))
-        }
-      }
-    }
-
-    routeSet.forEach((href) => {
-      if (!href) return
-      router.prefetch(href)
-    })
-  }, [router, hasChildAccess, withCompany])
 
   const toggleItem = (title: string) => {
     setOpenItems(prev =>

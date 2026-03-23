@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
 import { Badge } from '@/components/ui/badge'
@@ -52,6 +52,10 @@ type UserRow = {
   active?: boolean
   trader?: { id: string; name: string } | null
   company?: { id: string; name: string } | null
+  permissions?: Array<{
+    companyId?: string | null
+    company?: { id: string; name: string } | null
+  }>
 }
 
 type ModalState = {
@@ -74,6 +78,15 @@ type ModalState = {
   }
 }
 
+type KpiState = {
+  traders: number
+  lockedTraders: number
+  companies: number
+  lockedCompanies: number
+  users: number
+  lockedUsers: number
+}
+
 const tabs: Array<{ key: CrudSection; label: string; icon: LucideIcon }> = [
   { key: 'traders', label: 'Traders', icon: Store },
   { key: 'companies', label: 'Companies', icon: Building2 },
@@ -86,6 +99,7 @@ export default function SuperAdminCrudPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [search, setSearch] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [modalError, setModalError] = useState<string | null>(null)
   const [modal, setModal] = useState<ModalState | null>(null)
   const [saving, setSaving] = useState(false)
   const [lockingKey, setLockingKey] = useState<string | null>(null)
@@ -93,64 +107,119 @@ export default function SuperAdminCrudPage() {
   const [quickLimitCompanyId, setQuickLimitCompanyId] = useState('')
   const [quickLimitForm, setQuickLimitForm] = useState({ maxCompanies: '0', maxUsers: '0' })
   const [quickLimitSaving, setQuickLimitSaving] = useState(false)
+  const [kpis, setKpis] = useState<KpiState>({
+    traders: 0,
+    lockedTraders: 0,
+    companies: 0,
+    lockedCompanies: 0,
+    users: 0,
+    lockedUsers: 0
+  })
 
   const [traders, setTraders] = useState<TraderRow[]>([])
   const [companies, setCompanies] = useState<CompanyRow[]>([])
   const [users, setUsers] = useState<UserRow[]>([])
+  const modalScrollRef = useRef<HTMLDivElement | null>(null)
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (section: CrudSection = activeTab) => {
     setError(null)
     setRefreshing(true)
     try {
-      const [tradersRes, companiesRes, usersRes] = await Promise.all([
-        fetch('/api/super-admin/traders'),
-        fetch('/api/super-admin/companies'),
-        fetch('/api/super-admin/users')
-      ])
-
-      const [tradersPayload, companiesPayload, usersPayload] = await Promise.all([
-        tradersRes.json().catch(() => []),
-        companiesRes.json().catch(() => []),
-        usersRes.json().catch(() => [])
-      ])
-
-      if (!tradersRes.ok || !companiesRes.ok || !usersRes.ok) {
-        const fallbackError =
-          (tradersPayload?.error as string | undefined) ||
-          (companiesPayload?.error as string | undefined) ||
-          (usersPayload?.error as string | undefined) ||
-          'Failed to load super-admin data'
-        throw new Error(fallbackError)
+      const requests: Promise<Response>[] = [fetch('/api/super-admin/stats')]
+      if (section === 'traders') {
+        requests.push(fetch('/api/super-admin/traders'))
+      } else if (section === 'companies') {
+        requests.push(fetch('/api/super-admin/traders'), fetch('/api/super-admin/companies'))
+      } else {
+        requests.push(fetch('/api/super-admin/traders'), fetch('/api/super-admin/companies'), fetch('/api/super-admin/users'))
       }
 
-      setTraders(Array.isArray(tradersPayload) ? tradersPayload : [])
-      setCompanies(Array.isArray(companiesPayload) ? companiesPayload : [])
-      setUsers(Array.isArray(usersPayload) ? usersPayload : [])
+      const settledResponses = await Promise.allSettled(requests)
+      const responses = await Promise.all(
+        settledResponses.map(async (result) => {
+          if (result.status !== 'fulfilled') {
+            return {
+              ok: false,
+              payload: { error: 'Request failed' } as Record<string, unknown>
+            }
+          }
+
+          return {
+            ok: result.value.ok,
+            payload: await result.value.json().catch(() => ({} as Record<string, unknown>))
+          }
+        })
+      )
+
+      const [statsResult, ...sectionResults] = responses
+      const statsPayload = statsResult?.payload || {}
+
+      if (statsResult?.ok) {
+        setKpis({
+          traders: Number((statsPayload as Record<string, unknown>).totalTraders || 0),
+          lockedTraders: Number((statsPayload as Record<string, unknown>).lockedTraders || 0),
+          companies: Number((statsPayload as Record<string, unknown>).totalCompanies || 0),
+          lockedCompanies: Number((statsPayload as Record<string, unknown>).lockedCompanies || 0),
+          users: Number((statsPayload as Record<string, unknown>).totalUsers || 0),
+          lockedUsers: Number((statsPayload as Record<string, unknown>).lockedUsers || 0)
+        })
+      } else {
+        setKpis({
+          traders: 0,
+          lockedTraders: 0,
+          companies: 0,
+          lockedCompanies: 0,
+          users: 0,
+          lockedUsers: 0
+        })
+      }
+
+      if (section === 'traders') {
+        if (sectionResults[0]?.ok && Array.isArray(sectionResults[0].payload)) {
+          setTraders(sectionResults[0].payload as TraderRow[])
+        } else if (!traders.length) {
+          setError('Failed to load traders')
+        }
+      } else if (section === 'companies') {
+        if (sectionResults[0]?.ok && Array.isArray(sectionResults[0].payload)) {
+          setTraders(sectionResults[0].payload as TraderRow[])
+        } else if (!traders.length) {
+          setError('Failed to load traders')
+        }
+        if (sectionResults[1]?.ok && Array.isArray(sectionResults[1].payload)) {
+          setCompanies(sectionResults[1].payload as CompanyRow[])
+        } else if (!companies.length) {
+          setError((current) => current || 'Failed to load companies')
+        }
+      } else {
+        if (sectionResults[0]?.ok && Array.isArray(sectionResults[0].payload)) {
+          setTraders(sectionResults[0].payload as TraderRow[])
+        } else if (!traders.length) {
+          setError('Failed to load traders')
+        }
+        if (sectionResults[1]?.ok && Array.isArray(sectionResults[1].payload)) {
+          setCompanies(sectionResults[1].payload as CompanyRow[])
+        } else if (!companies.length) {
+          setError((current) => current || 'Failed to load companies')
+        }
+        if (sectionResults[2]?.ok && Array.isArray(sectionResults[2].payload)) {
+          setUsers(sectionResults[2].payload as UserRow[])
+        } else if (!users.length) {
+          setError((current) => current || 'Failed to load users')
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load data')
     } finally {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [])
+  }, [activeTab, companies.length, traders.length, users.length])
 
   useEffect(() => {
-    void fetchData()
-  }, [fetchData])
-
-  const kpis = useMemo(() => {
-    const lockedTraders = traders.filter((row) => row.locked).length
-    const lockedCompanies = companies.filter((row) => row.locked).length
-    const lockedUsers = users.filter((row) => row.locked).length
-    return {
-      traders: traders.length,
-      lockedTraders,
-      companies: companies.length,
-      lockedCompanies,
-      users: users.length,
-      lockedUsers
-    }
-  }, [traders, companies, users])
+    setLoading(true)
+    void fetchData(activeTab)
+  }, [activeTab, fetchData])
 
   const lowerSearch = search.trim().toLowerCase()
 
@@ -184,13 +253,17 @@ export default function SuperAdminCrudPage() {
     })
   }, [lowerSearch, users])
 
+  const traderMap = useMemo(() => new Map(traders.map((row) => [row.id, row])), [traders])
+
   const resetModal = () => {
     setModal(null)
+    setModalError(null)
     setError(null)
   }
 
   const openCreateModal = (section: CrudSection) => {
     setError(null)
+    setModalError(null)
     if (section === 'traders') {
       setModal({
         section,
@@ -238,6 +311,7 @@ export default function SuperAdminCrudPage() {
 
   const openEditModal = (section: CrudSection, record: TraderRow | CompanyRow | UserRow) => {
     setError(null)
+    setModalError(null)
     if (section === 'traders') {
       const row = record as TraderRow
       setModal({
@@ -309,6 +383,67 @@ export default function SuperAdminCrudPage() {
       canWrite: preset === 'all'
     }))
 
+  const resolveActionError = async (error: unknown, fallback: string) => {
+    if (error instanceof Response) {
+      const payload = await error.json().catch(() => null)
+      if (payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string') {
+        return payload.error
+      }
+
+      const text = await error.text().catch(() => '')
+      return text || fallback
+    }
+
+    return error instanceof Error ? error.message : fallback
+  }
+
+  const extractValidationDetails = (payload: unknown): string[] => {
+    if (!payload || typeof payload !== 'object') return []
+
+    if ('details' in payload && Array.isArray(payload.details)) {
+      return payload.details
+        .map((detail) => {
+          if (!detail || typeof detail !== 'object') return ''
+          const path =
+            'path' in detail && typeof detail.path === 'string' && detail.path.trim().length > 0
+              ? detail.path.trim()
+              : ''
+          const message =
+            'message' in detail && typeof detail.message === 'string' && detail.message.trim().length > 0
+              ? detail.message.trim()
+              : ''
+          if (!message) return ''
+          return path ? `${path}: ${message}` : message
+        })
+        .filter(Boolean)
+    }
+
+    if ('errors' in payload && Array.isArray(payload.errors)) {
+      return payload.errors.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    }
+
+    return []
+  }
+
+  const extractResponseError = (payload: unknown, fallback: string, status?: number) => {
+    const details = extractValidationDetails(payload)
+    const withDetails = (base: string) => (details.length ? [base, ...details.map((detail) => `- ${detail}`)].join('\n') : base)
+
+    if (payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string') {
+      return withDetails(payload.error)
+    }
+    if (payload && typeof payload === 'object' && 'timedOut' in payload && payload.timedOut === true) {
+      return 'Request timed out. Please retry once.'
+    }
+    if (status === 504) {
+      return 'Request timed out. Please retry once.'
+    }
+    if (status === 499) {
+      return 'Request was interrupted. Please retry.'
+    }
+    return withDetails(fallback)
+  }
+
   const applyUserPrivileges = async (
     userDbId: string,
     companyId: string,
@@ -325,7 +460,7 @@ export default function SuperAdminCrudPage() {
 
     const payload = await response.json().catch(() => ({}))
     if (!response.ok) {
-      throw new Error(payload.error || 'Failed to save privileges')
+      throw new Error(extractResponseError(payload, 'Failed to save privileges', response.status))
     }
   }
 
@@ -333,6 +468,7 @@ export default function SuperAdminCrudPage() {
     if (!modal) return
     setSaving(true)
     setError(null)
+    setModalError(null)
 
     try {
       const { section, mode, recordId, form } = modal
@@ -388,6 +524,9 @@ export default function SuperAdminCrudPage() {
           userId,
           name: form.name?.trim() || null,
           locked: form.locked === true,
+          ...(mode === 'create'
+            ? { privilegePreset: (form.privilegePreset || 'all') as 'none' | 'read' | 'all' }
+            : {}),
           ...(password ? { password } : {})
         }
       }
@@ -400,10 +539,10 @@ export default function SuperAdminCrudPage() {
 
       const responsePayload = await response.json().catch(() => ({}))
       if (!response.ok) {
-        throw new Error(responsePayload.error || 'Failed to save')
+        throw new Error(extractResponseError(responsePayload, 'Failed to save', response.status))
       }
 
-      if (section === 'users') {
+      if (section === 'users' && mode === 'edit') {
         const preset = (form.privilegePreset || 'keep') as 'keep' | 'none' | 'read' | 'all'
         const targetUserId = String(responsePayload?.id || recordId || '')
         const targetCompanyId = String(form.companyId?.trim() || '')
@@ -413,9 +552,9 @@ export default function SuperAdminCrudPage() {
       }
 
       resetModal()
-      await fetchData()
+      await fetchData(activeTab)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save')
+      setModalError(await resolveActionError(err, 'Failed to save'))
     } finally {
       setSaving(false)
     }
@@ -435,9 +574,9 @@ export default function SuperAdminCrudPage() {
       setError(null)
       setPrivilegeSavingKey(key)
       await applyUserPrivileges(row.id, targetCompanyId, preset)
-      await fetchData()
+      await fetchData(activeTab)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update privileges')
+      setError(await resolveActionError(err, 'Failed to update privileges'))
     } finally {
       setPrivilegeSavingKey(null)
     }
@@ -449,6 +588,7 @@ export default function SuperAdminCrudPage() {
     if (!confirmDelete) return
 
     try {
+      setModalError(null)
       const endpoint =
         modal.section === 'traders'
           ? `/api/super-admin/traders/${modal.recordId}`
@@ -459,13 +599,13 @@ export default function SuperAdminCrudPage() {
       const response = await fetch(endpoint, { method: 'DELETE' })
       const responsePayload = await response.json().catch(() => ({}))
       if (!response.ok) {
-        throw new Error(responsePayload.error || 'Failed to delete')
+        throw new Error(extractResponseError(responsePayload, 'Failed to delete', response.status))
       }
 
       resetModal()
-      await fetchData()
+      await fetchData(activeTab)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete')
+      setModalError(await resolveActionError(err, 'Failed to delete'))
     }
   }
 
@@ -492,12 +632,12 @@ export default function SuperAdminCrudPage() {
 
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}))
-        throw new Error(payload.error || 'Failed to update status')
+        throw new Error(extractResponseError(payload, 'Failed to update status', response.status))
       }
 
-      await fetchData()
+      await fetchData(activeTab)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update status')
+      setError(await resolveActionError(err, 'Failed to update status'))
     } finally {
       setLockingKey(null)
     }
@@ -529,6 +669,14 @@ export default function SuperAdminCrudPage() {
       maxUsers: String(nextTrader?.maxUsers ?? 0)
     })
   }, [activeTab, companies, traders, quickLimitCompanyId])
+
+  useEffect(() => {
+    if (!modalError) return
+    const container = modalScrollRef.current
+    if (!container) return
+
+    container.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [modalError])
 
   const selectQuickLimitCompany = (companyId: string) => {
     setError(null)
@@ -570,7 +718,7 @@ export default function SuperAdminCrudPage() {
         throw new Error(payload.error || 'Failed to update limits')
       }
 
-      await fetchData()
+      await fetchData(activeTab)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update limits')
     } finally {
@@ -587,7 +735,7 @@ export default function SuperAdminCrudPage() {
     >
       <div className="space-y-4">
         {error ? (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+          <div className="whitespace-pre-line rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
         ) : null}
 
         <Card className="border-slate-200">
@@ -630,7 +778,7 @@ export default function SuperAdminCrudPage() {
                 className="md:max-w-sm"
               />
               <div className="flex gap-2">
-                <Button type="button" size="sm" variant="outline" onClick={() => fetchData()} disabled={refreshing}>
+                <Button type="button" size="sm" variant="outline" onClick={() => fetchData(activeTab)} disabled={refreshing}>
                   {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   Refresh
                 </Button>
@@ -786,8 +934,8 @@ export default function SuperAdminCrudPage() {
                     <TableRow key={row.id}>
                       <TableCell className="font-medium">{row.name}</TableCell>
                       <TableCell>{row.trader?.name || row.traderId || '-'}</TableCell>
-                      <TableCell>{traders.find((trader) => trader.id === row.traderId)?.maxCompanies ?? 0}</TableCell>
-                      <TableCell>{traders.find((trader) => trader.id === row.traderId)?.maxUsers ?? 0}</TableCell>
+                      <TableCell>{(row.traderId ? traderMap.get(row.traderId)?.maxCompanies : undefined) ?? 0}</TableCell>
+                      <TableCell>{(row.traderId ? traderMap.get(row.traderId)?.maxUsers : undefined) ?? 0}</TableCell>
                       <TableCell>{row.mandiAccountNumber || '-'}</TableCell>
                       <TableCell>{row._count?.users || 0}</TableCell>
                       <TableCell>
@@ -846,12 +994,31 @@ export default function SuperAdminCrudPage() {
                 <TableBody>
                   {filteredUsers.map((row) => {
                     const locked = row.locked
+                    const accessCompanyNames = Array.from(
+                      new Set(
+                        [
+                          row.company?.name || null,
+                          ...(Array.isArray(row.permissions)
+                            ? row.permissions.map((permission) => permission.company?.name || null)
+                            : [])
+                        ].filter((value): value is string => Boolean(value))
+                      )
+                    )
                     return (
                       <TableRow key={row.id}>
                         <TableCell className="font-medium">{row.userId}</TableCell>
                         <TableCell>{row.name || '-'}</TableCell>
                         <TableCell>{row.trader?.name || row.traderId}</TableCell>
-                        <TableCell>{row.company?.name || row.companyId || '-'}</TableCell>
+                        <TableCell>
+                          <div className="space-y-1">
+                            <div>{row.company?.name || row.companyId || '-'}</div>
+                            {accessCompanyNames.length > 1 ? (
+                              <div className="text-xs text-slate-500">
+                                Access: {accessCompanyNames.join(', ')}
+                              </div>
+                            ) : null}
+                          </div>
+                        </TableCell>
                         <TableCell>{row.role || 'company_user'}</TableCell>
                         <TableCell>
                           <Badge variant={locked ? 'destructive' : 'default'}>
@@ -930,7 +1097,7 @@ export default function SuperAdminCrudPage() {
       {modal ? (
         <>
           <div className="fixed inset-0 z-40 bg-black/30" onClick={resetModal} />
-          <Card className="fixed inset-0 z-50 m-auto w-full max-w-3xl max-h-[90vh] overflow-auto shadow-xl">
+          <Card ref={modalScrollRef} className="fixed inset-0 z-50 m-auto max-h-[90vh] w-full max-w-3xl overflow-auto shadow-xl">
             <CardHeader className="sticky top-0 z-10 border-b bg-white">
               <div className="flex items-center justify-between">
                 <CardTitle>
@@ -943,6 +1110,11 @@ export default function SuperAdminCrudPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4 pt-4">
+              {modalError ? (
+                <div className="whitespace-pre-line rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {modalError}
+                </div>
+              ) : null}
               {modal.section === 'traders' ? (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div className="md:col-span-2">

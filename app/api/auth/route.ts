@@ -9,7 +9,7 @@ import { loginSchema } from '@/lib/validation'
 import { getRequestIp } from '@/lib/api-security'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { createSupabaseRouteClient } from '@/lib/supabase/route'
-import { ensureSupabaseIdentityForLegacyUser, loadLegacyUserForSupabaseSync } from '@/lib/supabase/legacy-user-sync'
+import { buildSupabaseLoginEmail, ensureSupabaseIdentityForLegacyUser, loadLegacyUserForSupabaseSync } from '@/lib/supabase/legacy-user-sync'
 import { getAppCompanyCookieOptions } from '@/lib/supabase/app-session'
 import { getCompanyCookieName } from '@/lib/session-cookies'
 
@@ -18,6 +18,13 @@ const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
 const accountLockoutStore = new Map<string, { count: number; lockedUntil: number }>()
 const ENFORCE_LOGIN_GUARDS = false
 const isDev = env.NODE_ENV === 'development' || !ENFORCE_LOGIN_GUARDS
+const SUPABASE_LOGIN_BRIDGE_TIMEOUT_MS = (() => {
+  const configuredTimeout = Number(process.env.SUPABASE_LOGIN_BRIDGE_TIMEOUT_MS || 6000)
+  if (!Number.isFinite(configuredTimeout)) {
+    return 6000
+  }
+  return Math.max(3000, Math.min(15000, configuredTimeout))
+})()
 
 async function checkRateLimit(identifier: string, windowMs: number, maxRequests: number) {
   const now = Date.now()
@@ -38,6 +45,28 @@ async function checkRateLimit(identifier: string, windowMs: number, maxRequests:
 
   entry.count++
   return { blocked: false }
+}
+
+async function withTimeoutResult<T>(
+  task: Promise<T>,
+  timeoutMs: number,
+  onTimeout: () => T
+): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null
+
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      resolve(onTimeout())
+    }, timeoutMs)
+  })
+
+  try {
+    return await Promise.race([task, timeoutPromise])
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle)
+    }
+  }
 }
 
 function parseOrigin(value: string | null | undefined) {
@@ -289,88 +318,128 @@ export async function POST(request: NextRequest) {
     let preferredCompanyId = authResult.company?.id || null
 
     if (isSupabaseConfigured()) {
-      const legacyUser = await loadLegacyUserForSupabaseSync(authResult.user!.id)
-      if (!legacyUser) {
-        return NextResponse.json(
-          { error: 'Account is locked or inactive' },
-          { status: 403, headers }
-        )
-      }
+      const supabaseBridgeResult = await withTimeoutResult(
+        (async () => {
+          const routeClient = createSupabaseRouteClient(request)
+          if (!routeClient) {
+            throw new Error('Supabase client is not configured correctly')
+          }
 
-      const routeClient = createSupabaseRouteClient(request)
-      if (!routeClient) {
-        return NextResponse.json(
-          { error: 'Supabase client is not configured correctly' },
-          { status: 500, headers }
-        )
-      }
+          let resolvedCompanyId = preferredCompanyId
+          let loginEmail = buildSupabaseLoginEmail({
+            legacyUserId: authResult.user!.id,
+            traderId: authResult.user!.traderId,
+            userId: authResult.user!.userId
+          })
 
-      const supabaseIdentity = await ensureSupabaseIdentityForLegacyUser({
-        legacyUser,
-        password
-      })
+          let signInResult = await routeClient.supabase.auth.signInWithPassword({
+            email: loginEmail,
+            password
+          })
 
-      preferredCompanyId = supabaseIdentity.defaultCompanyId || preferredCompanyId
+          if (signInResult.error) {
+            const legacyUser = await loadLegacyUserForSupabaseSync(authResult.user!.id)
+            if (!legacyUser) {
+              throw new Error('Account is locked or inactive')
+            }
 
-      const signInResult = await routeClient.supabase.auth.signInWithPassword({
-        email: supabaseIdentity.loginEmail,
-        password
-      })
+            const supabaseIdentity = await ensureSupabaseIdentityForLegacyUser({
+              legacyUser,
+              password
+            })
 
-      if (signInResult.error) {
-        await auditLogger.logAuthentication(
-          authResult.user!.userId,
-          authResult.user!.traderId,
-          'LOGIN_FAILURE',
-          ipAddress,
-          userAgent,
-          `Supabase sign-in failed: ${signInResult.error.message}`
-        )
+            loginEmail = supabaseIdentity.loginEmail
+            resolvedCompanyId = supabaseIdentity.defaultCompanyId || resolvedCompanyId
 
-        return NextResponse.json(
-          { error: 'Failed to start Supabase session' },
-          { status: 500, headers }
-        )
-      }
+            signInResult = await routeClient.supabase.auth.signInWithPassword({
+              email: loginEmail,
+              password
+            })
 
-      // Prepare success response so we can attach both Supabase and legacy compatibility cookies.
-      const response = routeClient.applyCookies(
-        NextResponse.json({
-          success: true,
-          user: authResult.user,
-          trader: authResult.trader,
-          company: authResult.company
-        }, {
-          headers
+            if (signInResult.error) {
+              throw new Error(`Supabase sign-in failed: ${signInResult.error.message}`)
+            }
+          }
+
+          // Prepare success response so we can attach both Supabase and legacy compatibility cookies.
+          const response = routeClient.applyCookies(
+            NextResponse.json({
+              success: true,
+              user: authResult.user,
+              trader: authResult.trader,
+              company: authResult.company
+            }, {
+              headers
+            })
+          )
+
+          await setSession(authResult.token!, authResult.refreshToken, response, 'app', scopeSource)
+
+          if (resolvedCompanyId) {
+            response.cookies.set(
+              getCompanyCookieName(scopeSource),
+              resolvedCompanyId,
+              getAppCompanyCookieOptions()
+            )
+          }
+
+          return {
+            response,
+            preferredCompanyId: resolvedCompanyId,
+            warning: null as string | null
+          }
+        })().catch((supabaseError) => ({
+          response: null as NextResponse | null,
+          preferredCompanyId,
+          warning: supabaseError instanceof Error ? supabaseError.message : 'Supabase login bridge failed'
+        })),
+        SUPABASE_LOGIN_BRIDGE_TIMEOUT_MS,
+        () => ({
+          response: null as NextResponse | null,
+          preferredCompanyId,
+          warning: 'Cloud login is taking too long. Please try again in a moment.'
         })
       )
 
-      await setSession(authResult.token!, authResult.refreshToken, response, 'app', scopeSource)
+      if (supabaseBridgeResult.response) {
+        preferredCompanyId = supabaseBridgeResult.preferredCompanyId || preferredCompanyId
 
-      if (preferredCompanyId) {
-        response.cookies.set(
-          getCompanyCookieName(scopeSource),
-          preferredCompanyId,
-          getAppCompanyCookieOptions()
+        // Record successful attempt (resets brute force counter) only after both sessions are ready.
+        recordSuccessfulAttempt(request)
+
+        await auditLogger.logAuthentication(
+          authResult.user!.userId,
+          authResult.user!.traderId,
+          'LOGIN_SUCCESS',
+          ipAddress,
+          userAgent
         )
-      }
 
-      // Record successful attempt (resets brute force counter) only after both sessions are ready.
-      recordSuccessfulAttempt(request)
+        if (!isDev) {
+          accountLockoutStore.delete(accountKey)
+        }
+
+        return supabaseBridgeResult.response
+      }
 
       await auditLogger.logAuthentication(
         authResult.user!.userId,
         authResult.user!.traderId,
-        'LOGIN_SUCCESS',
+        'LOGIN_FAILURE',
         ipAddress,
-        userAgent
+        userAgent,
+        `Supabase bridge failed: ${supabaseBridgeResult.warning}`
       )
 
-      if (!isDev) {
-        accountLockoutStore.delete(accountKey)
-      }
-
-      return response
+      return NextResponse.json(
+        {
+          error: supabaseBridgeResult.warning || 'Cloud login bridge failed'
+        },
+        {
+          status: 503,
+          headers
+        }
+      )
     }
 
     // Record successful attempt (resets brute force counter)
@@ -412,6 +481,11 @@ export async function POST(request: NextRequest) {
     return response
 
   } catch (error) {
+    console.error('POST /api/auth failed', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    })
+
     await auditLogger.logAuthentication(
       'unknown',
       'unknown',

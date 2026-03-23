@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
-import { cookies } from 'next/headers'
-import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
+import { ensureCompanyAccess, parseJsonWithSchema, requireAuthContext } from '@/lib/api-security'
 import { cleanString, normalizeTenDigitPhone, parseNonNegativeNumber } from '@/lib/field-validation'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 
@@ -111,8 +110,9 @@ export async function POST(request: NextRequest) {
     if (rate === null) return NextResponse.json({ error: 'Rate must be a non-negative number' }, { status: 400 })
     if (netAmount === null) return NextResponse.json({ error: 'Net amount must be a non-negative number' }, { status: 400 })
 
-    const cookieStore = await cookies()
-    const userId = cookieStore.get('userId')?.value || 'test-user'
+    const authResult = requireAuthContext(request)
+    if (!authResult.ok) return authResult.response
+    const userId = authResult.auth.userId
 
     const product = await prisma.product.findFirst({
       where: {

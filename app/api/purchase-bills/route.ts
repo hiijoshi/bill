@@ -8,6 +8,7 @@ import {
   hasCompanyAccess,
   isSuperAdmin,
   parseJsonWithSchema,
+  requireAuthContext,
   unauthorized
 } from '@/lib/api-security'
 import { normalizeTenDigitPhone, parseNonNegativeNumber } from '@/lib/field-validation'
@@ -227,8 +228,9 @@ export async function POST(request: NextRequest) {
 
     const parsedKgEquivalent = parseNonNegativeNumber(kgEquivalent)
     const parsedTotalWeightQt = parseNonNegativeNumber(totalWeightQt) ?? parsedWeight
-    const auth = getRequestAuthContext(request)
-    const userId = auth?.userId || 'system'
+    const authResult = requireAuthContext(request)
+    if (!authResult.ok) return authResult.response
+    const userId = authResult.auth.userId
 
     const purchaseBill = await prisma.$transaction(async (tx) => {
       const [company, product] = await Promise.all([

@@ -21,8 +21,7 @@ const postSchema = z.object({
   name: z.string().trim().min(1).optional(),
   code: z.string().trim().min(1).optional(),
   description: z.string().optional().nullable(),
-  isActive: z.boolean().optional(),
-  seed: z.boolean().optional()
+  isActive: z.boolean().optional()
 }).strict()
 
 const putSchema = z.object({
@@ -31,13 +30,6 @@ const putSchema = z.object({
   description: z.string().optional().nullable(),
   isActive: z.boolean().optional()
 }).strict()
-
-const DUMMY_PAYMENT_MODES = [
-  { name: 'Cash', code: 'CASH', description: 'Cash payment', isActive: true },
-  { name: 'UPI', code: 'UPI', description: 'UPI transfer', isActive: true },
-  { name: 'Bank Transfer', code: 'NEFT', description: 'Bank transfer mode', isActive: true },
-  { name: 'Cheque', code: 'CHEQUE', description: 'Cheque payment', isActive: true }
-] as const
 
 function supabaseErrorResponse(error: { message: string; code?: string | null }) {
   const status = error.code === 'PGRST116' ? 404 : 403
@@ -92,25 +84,6 @@ export async function POST(request: NextRequest) {
 
     const supabaseContext = await getSupabaseClaimsFromRequest(request)
     if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
-      if (parsed.data.seed === true) {
-        const payload = DUMMY_PAYMENT_MODES.map((item) => ({
-          companyId,
-          name: item.name,
-          code: item.code,
-          description: item.description,
-          isActive: item.isActive
-        }))
-
-        const { error } = await supabaseContext.supabase.from('PaymentMode').insert(payload)
-        if (error) {
-          return supabaseContext.applyCookies(supabaseErrorResponse(error))
-        }
-
-        return supabaseContext.applyCookies(
-          NextResponse.json({ success: true, message: `${payload.length} dummy payment modes added successfully`, count: payload.length })
-        )
-      }
-
       const name = clean(parsed.data.name)
       const code = clean(parsed.data.code)?.toUpperCase() || null
       if (!name || !code) {
@@ -140,24 +113,6 @@ export async function POST(request: NextRequest) {
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
-
-    if (parsed.data.seed === true) {
-      const created = await prisma.$transaction(
-        DUMMY_PAYMENT_MODES.map((item) =>
-          prisma.paymentMode.create({
-            data: {
-              companyId,
-              name: item.name,
-              code: item.code,
-              description: item.description,
-              isActive: item.isActive
-            }
-          })
-        )
-      )
-
-      return NextResponse.json({ success: true, message: `${created.length} dummy payment modes added successfully`, count: created.length })
-    }
 
     const name = clean(parsed.data.name)
     const code = clean(parsed.data.code)?.toUpperCase() || null

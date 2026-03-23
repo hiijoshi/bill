@@ -9,6 +9,7 @@ import {
 } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { generateUniqueMandiAccountNumber } from '@/lib/mandi-account-number'
+import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
 
 function setCORSHeaders() {
   const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000']
@@ -21,10 +22,60 @@ function setCORSHeaders() {
 }
 
 export async function GET(request: NextRequest) {
-  const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin', 'company_user'])
-  if (!authResult.ok) return authResult.response
-
   try {
+    const supabaseSession = await resolveSupabaseAppSession(request)
+    if (supabaseSession) {
+      const searchParams = new URL(request.url).searchParams
+      const requestedTraderId = normalizeId(searchParams.get('traderId'))
+      const scopedIds = supabaseSession.companies
+        .filter((company) => !requestedTraderId || company.traderId === requestedTraderId)
+        .map((company) => company.id)
+
+      if (scopedIds.length === 0) {
+        return supabaseSession.applyCookies(NextResponse.json([], { headers: setCORSHeaders() }))
+      }
+
+      const companies = await prisma.company.findMany({
+        where: {
+          deletedAt: null,
+          id: { in: scopedIds }
+        },
+        include: {
+          trader: {
+            select: {
+              id: true,
+              name: true,
+              locked: true,
+              deletedAt: true
+            }
+          }
+        },
+        orderBy: { name: 'asc' }
+      })
+
+      if (companies.length > 0) {
+        return supabaseSession.applyCookies(NextResponse.json(companies, { headers: setCORSHeaders() }))
+      }
+
+      return supabaseSession.applyCookies(
+        NextResponse.json(
+          supabaseSession.companies
+            .filter((company) => !requestedTraderId || company.traderId === requestedTraderId)
+            .map((company) => ({
+              id: company.id,
+              name: company.name,
+              locked: company.locked,
+              traderId: company.traderId,
+              trader: null
+            })),
+          { headers: setCORSHeaders() }
+        )
+      )
+    }
+
+    const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin', 'company_user'])
+    if (!authResult.ok) return authResult.response
+
     const auth = authResult.auth
     const searchParams = new URL(request.url).searchParams
     const includeDeleted = auth.role === 'super_admin' && parseBooleanParam(searchParams.get('includeDeleted'))
@@ -104,81 +155,6 @@ export async function POST(request: NextRequest) {
 
     if (!body || typeof body !== 'object') {
       return NextResponse.json({ error: 'Invalid request body' }, { status: 400, headers: setCORSHeaders() })
-    }
-
-    if ((body as { seed?: unknown }).seed === true) {
-      const rawCount = Number((body as { count?: unknown }).count || 5)
-      const count = Number.isFinite(rawCount) ? Math.min(Math.max(rawCount, 1), 20) : 5
-
-      const targetTraderId = normalizeId((body as { traderId?: unknown }).traderId)
-
-      if (!targetTraderId) {
-        return NextResponse.json(
-          { error: 'Trader ID is required for super admin seed requests' },
-          { status: 400, headers: setCORSHeaders() }
-        )
-      }
-
-      const trader = await prisma.trader.findFirst({
-        where: {
-          id: targetTraderId,
-          deletedAt: null
-        },
-        select: { id: true }
-      })
-
-      if (!trader) {
-        return NextResponse.json({ error: 'Trader not found' }, { status: 404, headers: setCORSHeaders() })
-      }
-
-      const now = Date.now()
-      const created = await prisma.$transaction(async (tx) => {
-        const rows = []
-        for (let idx = 0; idx < count; idx += 1) {
-          const mandiAccountNumber = await generateUniqueMandiAccountNumber(tx)
-          const row = await tx.company.create({
-            data: {
-              traderId: targetTraderId,
-              name: `Demo Company ${now}-${idx + 1}`,
-              address: `Demo Address ${idx + 1}`,
-              phone: `90000${String(now + idx).slice(-5)}`,
-              mandiAccountNumber
-            }
-          })
-          rows.push(row)
-        }
-        return rows
-      })
-
-      await Promise.all(
-        created.map((company) =>
-          writeAuditLog({
-            actor: {
-              id: auth.userDbId || auth.userId,
-              role: auth.role
-            },
-            action: 'CREATE',
-            resourceType: 'COMPANY',
-            resourceId: company.id,
-            scope: {
-              traderId: company.traderId,
-              companyId: company.id
-            },
-            after: company,
-            requestMeta: getAuditRequestMeta(request)
-          })
-        )
-      )
-
-      return NextResponse.json(
-        {
-          success: true,
-          message: `${created.length} demo companies created successfully`,
-          count: created.length,
-          companies: created
-        },
-        { headers: setCORSHeaders() }
-      )
     }
 
     const validation = validateRequest(createCompanySchema, body)

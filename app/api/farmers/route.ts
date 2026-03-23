@@ -16,8 +16,7 @@ const postSchema = z.object({
   name: z.string().trim().min(1).optional(),
   address: z.string().optional().nullable(),
   phone1: z.string().optional().nullable(),
-  krashakAnubandhNumber: z.string().optional().nullable(),
-  seed: z.boolean().optional()
+  krashakAnubandhNumber: z.string().optional().nullable()
 }).strict()
 
 const putSchema = z.object({
@@ -26,11 +25,6 @@ const putSchema = z.object({
   phone1: z.string().optional().nullable(),
   krashakAnubandhNumber: z.string().optional().nullable()
 }).strict()
-
-const DUMMY_FARMERS = [
-  { name: 'Ramesh Yadav', address: 'Rampura', phone1: '9876543210', krashakAnubandhNumber: 'KA-1001' },
-  { name: 'Mohan Patidar', address: 'Mandsaur', phone1: '9890011122', krashakAnubandhNumber: 'KA-1002' }
-] as const
 
 export async function GET(request: NextRequest) {
   try {
@@ -84,23 +78,6 @@ export async function POST(request: NextRequest) {
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
-
-    if (parsed.data.seed === true) {
-      const created = await prisma.$transaction(
-        DUMMY_FARMERS.map((row) =>
-          prisma.farmer.create({
-            data: {
-              companyId,
-              name: row.name,
-              address: row.address,
-              phone1: row.phone1,
-              krashakAnubandhNumber: row.krashakAnubandhNumber
-            }
-          })
-        )
-      )
-      return NextResponse.json({ success: true, message: `${created.length} dummy farmers added successfully`, count: created.length })
-    }
 
     if (!name) {
       return NextResponse.json({ error: 'Company ID and name are required' }, { status: 400 })

@@ -5,6 +5,7 @@ import { normalizeOptionalString, normalizePhone, parseBooleanParam, requireRole
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { generateUniqueMandiAccountNumber } from '@/lib/mandi-account-number'
 import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
+import { normalizePrismaApiError } from '@/lib/prisma-errors'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'Company ID is required') })
 
@@ -403,8 +404,14 @@ export async function PUT(
 
     const response = await getCompanyById(companyId, false)
     return NextResponse.json(response)
-  } catch {
-    return NextResponse.json({ error: 'Failed to update company' }, { status: 500 })
+  } catch (error) {
+    const apiError = normalizePrismaApiError(error, 'Failed to update company', {
+      uniqueMessages: {
+        'traderId,name': 'Company with this name already exists for the selected trader',
+        mandiAccountNumber: 'Mandi account number already exists'
+      }
+    })
+    return NextResponse.json({ error: apiError.message }, { status: apiError.status })
   }
 }
 
@@ -476,7 +483,8 @@ export async function DELETE(
     })
 
     return NextResponse.json({ success: true })
-  } catch {
-    return NextResponse.json({ error: 'Failed to delete company' }, { status: 500 })
+  } catch (error) {
+    const apiError = normalizePrismaApiError(error, 'Failed to delete company')
+    return NextResponse.json({ error: apiError.message }, { status: apiError.status })
   }
 }

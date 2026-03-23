@@ -6,7 +6,7 @@ import { z } from 'zod'
 // this is primarily for CLI/utility use.
 if (typeof window === 'undefined' && typeof process !== 'undefined') {
   try {
-    loadDotenv()
+    loadDotenv({ quiet: true })
   } catch {
     // ignore when dotenv isn't available (e.g., production) or import fails
   }

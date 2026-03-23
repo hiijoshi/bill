@@ -534,6 +534,7 @@ export default function OperationsReportWorkspace({
   const [lastGeneratedAt, setLastGeneratedAt] = useState('')
   const [reportData, setReportData] = useState<OperationsReportPayload | null>(null)
   const selectedCompanyId = selectedCompanyIds[0] || ''
+  const canAggregateCompanies = reportData?.meta?.canAggregateCompanies ?? true
 
   useEffect(() => {
     setActiveView(initialView)
@@ -586,6 +587,11 @@ export default function OperationsReportWorkspace({
       setSelectedCompanyIds([companies[0].id])
     }
   }, [companies, scope, selectedCompanyIds.length])
+
+  useEffect(() => {
+    if (canAggregateCompanies || selectedCompanyIds.length <= 1) return
+    setSelectedCompanyIds([selectedCompanyIds[0]])
+  }, [canAggregateCompanies, selectedCompanyIds])
 
   const generateReport = useCallback(async () => {
     if (scope === 'company' && selectedCompanyIds.length === 0) {
@@ -886,6 +892,9 @@ export default function OperationsReportWorkspace({
 
   const toggleCompanySelection = (companyId: string) => {
     setSelectedCompanyIds((previous) => {
+      if (!canAggregateCompanies) {
+        return [companyId]
+      }
       if (previous.includes(companyId)) {
         if (previous.length === 1) return previous
         return previous.filter((value) => value !== companyId)
@@ -1360,6 +1369,7 @@ export default function OperationsReportWorkspace({
                         <button
                           type="button"
                           className="rounded-full border border-slate-200 px-2 py-1 text-slate-600 hover:bg-slate-50"
+                          disabled={!canAggregateCompanies}
                           onClick={() => setSelectedCompanyIds(companies.map((company) => company.id))}
                         >
                           Select all
@@ -1373,6 +1383,11 @@ export default function OperationsReportWorkspace({
                         </button>
                       </div>
                     </div>
+                    {!canAggregateCompanies ? (
+                      <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                        Multi-company reports are disabled for this user. Use All Companies report access to enable aggregation.
+                      </p>
+                    ) : null}
                     <div className="mt-3 max-h-56 space-y-2 overflow-auto pr-1">
                       {companies.length === 0 ? (
                         <p className="text-sm text-slate-500">No company found.</p>
@@ -1388,6 +1403,7 @@ export default function OperationsReportWorkspace({
                                 type="checkbox"
                                 className="mt-1 h-4 w-4 rounded border-slate-300"
                                 checked={checked}
+                                disabled={!canAggregateCompanies && !checked && selectedCompanyIds.length >= 1}
                                 onChange={() => toggleCompanySelection(company.id)}
                               />
                               <span className="min-w-0">

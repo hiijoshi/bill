@@ -13,6 +13,7 @@ import DashboardLayout from '@/app/components/DashboardLayout'
 import { Eye, Plus, TrendingUp, TrendingDown } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { isAbortError } from '@/lib/http'
 
 interface Product {
   id: string
@@ -44,6 +45,33 @@ interface StockSummary {
   totalIn: number
   totalOut: number
   closingStock: number
+}
+
+type OverviewPayload = {
+  products?: Array<{
+    id: string
+    name?: string
+    unit?: {
+      symbol?: string
+    } | null
+  }>
+  stockLedger?: Array<{
+    id: string
+    entryDate?: string
+    type?: 'purchase' | 'sales' | 'adjustment' | string
+    qtyIn?: number
+    qtyOut?: number
+    refTable?: string
+    refId?: string
+    createdAt?: string
+    product?: {
+      id?: string
+      name?: string
+      unit?: {
+        symbol?: string
+      } | null
+    } | null
+  }>
 }
 
 const clampNonNegative = (value: number): number => {
@@ -104,34 +132,57 @@ export default function StockDashboardPage() {
         setLoading(false)
       }
 
-      // Fetch products
-      const [productsResponse, ledgerResponse] = await Promise.all([
-        fetch(`/api/products?companyId=${companyIdParam}`),
-        fetch(`/api/stock-ledger?companyId=${companyIdParam}`)
-      ])
-      if (productsResponse.status === 401 || ledgerResponse.status === 401) {
+      const overviewParams = new URLSearchParams({
+        companyId: companyIdParam,
+        include: 'products,stockLedger'
+      })
+      const overviewResponse = await fetch(`/api/main-dashboard/overview?${overviewParams.toString()}`)
+      if (overviewResponse.status === 401) {
         setLoading(false)
         router.push('/login')
         return
       }
-      if (productsResponse.status === 403 || ledgerResponse.status === 403) {
+      if (overviewResponse.status === 403) {
         setProducts([])
         setStockLedger([])
         setLoading(false)
         return
       }
-      const [productsRaw, ledgerRaw] = await Promise.all([
-        productsResponse.json().catch(() => []),
-        ledgerResponse.json().catch(() => [])
-      ])
-      const productsData = Array.isArray(productsRaw) ? productsRaw : []
-      const ledgerData = Array.isArray(ledgerRaw) ? ledgerRaw : []
+      const overview = await overviewResponse.json().catch(() => ({} as OverviewPayload))
+      const productsData: Product[] = Array.isArray(overview.products)
+        ? overview.products.map((product: NonNullable<OverviewPayload['products']>[number]) => ({
+            id: product.id,
+            name: product.name || 'Unknown Product',
+            unit: product.unit?.symbol || ''
+          }))
+        : []
+      const ledgerData: StockLedger[] = Array.isArray(overview.stockLedger)
+        ? overview.stockLedger.map((entry: NonNullable<OverviewPayload['stockLedger']>[number]) => ({
+            id: entry.id,
+            entryDate: entry.entryDate || '',
+            product: {
+              id: entry.product?.id || '',
+              name: entry.product?.name || 'Unknown Product',
+              unit: entry.product?.unit?.symbol || ''
+            },
+            type:
+              entry.type === 'purchase' || entry.type === 'sales' || entry.type === 'adjustment'
+                ? entry.type
+                : 'adjustment',
+            qtyIn: clampNonNegative(entry.qtyIn || 0),
+            qtyOut: clampNonNegative(entry.qtyOut || 0),
+            refTable: entry.refTable || '',
+            refId: entry.refId || '',
+            createdAt: entry.createdAt || entry.entryDate || ''
+          }))
+        : []
       setProducts(productsData)
       setStockLedger(ledgerData)
       setClientCache(cacheKey, { products: productsData, stockLedger: ledgerData })
 
       setLoading(false)
     } catch (error) {
+      if (isAbortError(error)) return
       console.error('Error fetching data:', error)
       setProducts([])
       setStockLedger([])

@@ -5,9 +5,13 @@ import { getSupabaseBrowserConfig } from './shared'
 
 export async function createSupabaseServerClient() {
   const cookieStore = await cookies()
-  const { url, publishableKey } = getSupabaseBrowserConfig()
+  const config = getSupabaseBrowserConfig()
 
-  return createServerClient(url, publishableKey, {
+  if (!config) {
+    throw new Error('Supabase is not configured')
+  }
+
+  return createServerClient(config.url, config.publishableKey, {
     cookies: {
       getAll() {
         return cookieStore.getAll()

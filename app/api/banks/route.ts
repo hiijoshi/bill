@@ -24,8 +24,7 @@ const postSchema = z.object({
   accountNumber: z.string().optional().nullable(),
   address: z.string().optional().nullable(),
   phone: z.string().optional().nullable(),
-  isActive: z.boolean().optional(),
-  seed: z.boolean().optional()
+  isActive: z.boolean().optional()
 }).strict()
 
 const putSchema = z.object({
@@ -37,27 +36,6 @@ const putSchema = z.object({
   phone: z.string().optional().nullable(),
   isActive: z.boolean().optional()
 }).strict()
-
-const DUMMY_BANKS = [
-  {
-    name: 'State Bank of India',
-    branch: 'Neemuch Main',
-    ifscCode: 'SBIN0001234',
-    accountNumber: '123456789012',
-    address: 'Main Road, Neemuch',
-    phone: '07423223344',
-    isActive: true
-  },
-  {
-    name: 'HDFC Bank',
-    branch: 'Ujjain Branch',
-    ifscCode: 'HDFC0000123',
-    accountNumber: '001122334455',
-    address: 'Dewas Gate, Ujjain',
-    phone: '07342555111',
-    isActive: true
-  }
-] as const
 
 function supabaseErrorResponse(error: { message: string; code?: string | null }) {
   const status = error.code === 'PGRST116' ? 404 : 403
@@ -112,28 +90,6 @@ export async function POST(request: NextRequest) {
 
     const supabaseContext = await getSupabaseClaimsFromRequest(request)
     if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
-      if (parsed.data.seed === true) {
-        const payload = DUMMY_BANKS.map((item) => ({
-          companyId,
-          name: item.name,
-          branch: item.branch,
-          ifscCode: item.ifscCode,
-          accountNumber: item.accountNumber,
-          address: item.address,
-          phone: item.phone,
-          isActive: item.isActive
-        }))
-
-        const { error } = await supabaseContext.supabase.from('Bank').insert(payload)
-        if (error) {
-          return supabaseContext.applyCookies(supabaseErrorResponse(error))
-        }
-
-        return supabaseContext.applyCookies(
-          NextResponse.json({ success: true, message: `${payload.length} dummy banks added successfully`, count: payload.length })
-        )
-      }
-
       const name = clean(parsed.data.name)
       const ifscCode = clean(parsed.data.ifscCode)?.toUpperCase() || null
       if (!name || !ifscCode) {
@@ -168,27 +124,6 @@ export async function POST(request: NextRequest) {
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
-
-    if (parsed.data.seed === true) {
-      const created = await prisma.$transaction(
-        DUMMY_BANKS.map((item) =>
-          prisma.bank.create({
-            data: {
-              companyId,
-              name: item.name,
-              branch: item.branch,
-              ifscCode: item.ifscCode,
-              accountNumber: item.accountNumber,
-              address: item.address,
-              phone: item.phone,
-              isActive: item.isActive
-            }
-          })
-        )
-      )
-
-      return NextResponse.json({ success: true, message: `${created.length} dummy banks added successfully`, count: created.length })
-    }
 
     const name = clean(parsed.data.name)
     const ifscCode = clean(parsed.data.ifscCode)?.toUpperCase() || null

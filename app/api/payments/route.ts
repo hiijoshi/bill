@@ -248,9 +248,29 @@ export async function GET(request: NextRequest) {
     const [payments, total] = await Promise.all([
       prisma.payment.findMany({
         where,
-        include: {
-          party: true,
-          farmer: true
+        select: {
+          id: true,
+          companyId: true,
+          billType: true,
+          billId: true,
+          billDate: true,
+          payDate: true,
+          amount: true,
+          mode: true,
+          status: true,
+          txnRef: true,
+          note: true,
+          createdAt: true,
+          party: {
+            select: {
+              name: true
+            }
+          },
+          farmer: {
+            select: {
+              name: true
+            }
+          }
         },
         orderBy: { createdAt: 'desc' },
         ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})

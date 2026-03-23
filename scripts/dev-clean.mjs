@@ -15,6 +15,7 @@ const nextBin = path.join(
   '.bin',
   process.platform === 'win32' ? 'next.cmd' : 'next'
 )
+const devSafeScript = path.join(projectRoot, 'scripts', 'dev-safe.mjs')
 
 async function pathExists(targetPath) {
   try {
@@ -26,15 +27,19 @@ async function pathExists(targetPath) {
 }
 
 async function run() {
-  if (!(await pathExists(nextBin))) {
-    console.error('next binary not found. Run: npm install')
+  if (!(await pathExists(nextBin)) || !(await pathExists(devSafeScript))) {
+    console.error('dev dependencies not found. Run: npm install')
     process.exit(1)
   }
 
   await fs.rm(path.join(projectRoot, '.next'), { recursive: true, force: true })
 
-  const args = ['dev', '--turbopack', ...process.argv.slice(2)]
-  const child = spawn(nextBin, args, {
+  // After a full clean, fall back to the safer dev bootstrap instead of forcing
+  // Turbopack immediately. This avoids the persistent-cache "write batch /
+  // compaction already active" failure when a previous dev cache is still
+  // settling. If Turbopack is explicitly desired, NEXT_DEV_ENGINE=turbopack
+  // can still be provided and dev-safe will honor it.
+  const child = spawn(process.execPath, [devSafeScript, ...process.argv.slice(2)], {
     cwd: projectRoot,
     stdio: 'inherit',
     env: process.env

@@ -4,6 +4,9 @@ import { prisma } from '@/lib/prisma'
 import { setSession } from '@/lib/session'
 import { generateRefreshToken, generateToken, normalizeRole } from '@/lib/auth'
 import { env } from '@/lib/config'
+import { isSupabaseConfigured } from '@/lib/supabase/client'
+import { createSupabaseRouteClient } from '@/lib/supabase/route'
+import { ensureSupabaseIdentityForLegacyUser, loadLegacyUserForSupabaseSync } from '@/lib/supabase/legacy-user-sync'
 
 const SUPER_ADMIN_ACCESS_EXPIRES_IN: Parameters<typeof generateToken>[1] =
   (env.SUPER_ADMIN_ACCESS_EXPIRES_IN || '30m') as Parameters<typeof generateToken>[1]
@@ -33,13 +36,13 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}))
     const userId = typeof body?.userId === 'string' ? body.userId.trim() : ''
     const password = typeof body?.password === 'string' ? body.password : ''
-    const secondSecret = typeof body?.secondSecret === 'string' ? body.secondSecret : ''
+    const mfaToken = typeof body?.secondSecret === 'string' ? body.secondSecret : ''
 
     if (!userId || !password) {
       return NextResponse.json({ error: 'User ID and password are required' }, { status: 400 })
     }
 
-    if (env.SUPER_ADMIN_SECOND_SECRET && secondSecret !== env.SUPER_ADMIN_SECOND_SECRET) {
+    if (env.SUPER_ADMIN_SECOND_SECRET && mfaToken !== env.SUPER_ADMIN_SECOND_SECRET) {
       return NextResponse.json({ error: 'Invalid second secret' }, { status: 401 })
     }
 
@@ -49,9 +52,26 @@ export async function POST(request: NextRequest) {
         userId,
         deletedAt: null
       },
-      include: {
-        trader: true,
-        company: true
+      select: {
+        id: true,
+        userId: true,
+        traderId: true,
+        name: true,
+        role: true,
+        password: true,
+        locked: true,
+        deletedAt: true,
+        trader: {
+          select: {
+            locked: true,
+            deletedAt: true
+          }
+        },
+        company: {
+          select: {
+            locked: true
+          }
+        }
       }
     })
 
@@ -81,16 +101,18 @@ export async function POST(request: NextRequest) {
       userId: user.userId,
       traderId: user.traderId,
       name: user.name || 'System Administrator',
-      role: user.role || undefined
+      role: user.role || undefined,
+      dbId: user.id
     }, SUPER_ADMIN_ACCESS_EXPIRES_IN)
     const refreshToken = generateRefreshToken({
       userId: user.userId,
       traderId: user.traderId,
       name: user.name || 'System Administrator',
-      role: user.role || undefined
+      role: user.role || undefined,
+      dbId: user.id
     }, SUPER_ADMIN_REFRESH_EXPIRES_IN)
 
-    const response = NextResponse.json({
+    let response = NextResponse.json({
       success: true,
       user: {
         userId: user.userId,
@@ -99,9 +121,44 @@ export async function POST(request: NextRequest) {
         traderId: user.traderId
       }
     })
-    await setSession(token, refreshToken, response, 'super_admin')
+
+    if (isSupabaseConfigured()) {
+      const routeClient = createSupabaseRouteClient(request)
+      if (!routeClient) {
+        return NextResponse.json({ error: 'Supabase client is not configured correctly' }, { status: 500 })
+      }
+
+      const legacyUser = await loadLegacyUserForSupabaseSync(user.id)
+      if (!legacyUser) {
+        return NextResponse.json({ error: 'Super admin account is not active for cloud login' }, { status: 403 })
+      }
+
+      const identity = await ensureSupabaseIdentityForLegacyUser({
+        legacyUser,
+        password
+      })
+
+      const signInResult = await routeClient.supabase.auth.signInWithPassword({
+        email: identity.loginEmail,
+        password
+      })
+
+      if (signInResult.error) {
+        return NextResponse.json(
+          { error: `Supabase super admin sign-in failed: ${signInResult.error.message}` },
+          { status: 503 }
+        )
+      }
+
+      response = routeClient.applyCookies(response)
+    }
+
+    await setSession(token, refreshToken, response, 'super_admin', requestHost)
     return response
-  } catch {
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500 }
+    )
   }
 }

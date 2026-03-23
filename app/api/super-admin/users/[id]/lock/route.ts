@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { normalizeAppRole, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
+import { normalizePrismaApiError } from '@/lib/prisma-errors'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'User ID is required') })
 const lockSchema = z.object({ locked: z.boolean() }).strict()
@@ -92,7 +93,8 @@ export async function PATCH(
         active: !updated.locked
       }
     })
-  } catch {
-    return NextResponse.json({ error: 'Failed to update lock state' }, { status: 500 })
+  } catch (error) {
+    const apiError = normalizePrismaApiError(error, 'Failed to update lock state')
+    return NextResponse.json({ error: apiError.message }, { status: apiError.status })
   }
 }

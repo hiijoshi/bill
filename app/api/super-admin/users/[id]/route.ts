@@ -5,6 +5,9 @@ import { prisma } from '@/lib/prisma'
 import { normalizeOptionalString, parseBooleanParam, requireRoles, normalizeAppRole } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
+import { isSupabaseConfigured } from '@/lib/supabase/client'
+import { syncSupabaseForLegacyUserMutationWithTimeout } from '@/lib/supabase/legacy-user-sync'
+import { normalizePrismaApiError } from '@/lib/prisma-errors'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'User ID is required') })
 
@@ -308,12 +311,40 @@ export async function PUT(
       requestMeta: getAuditRequestMeta(request)
     })
 
+    let cloudSyncWarning: string | null = null
+    if (isSupabaseConfigured()) {
+      try {
+        const syncResult = await syncSupabaseForLegacyUserMutationWithTimeout({
+          legacyUserId: user.id,
+          password: parsedBody.data.password || null
+        })
+        if (!syncResult.synced && syncResult.reason) {
+          cloudSyncWarning = syncResult.reason
+        }
+      } catch (syncErr) {
+        cloudSyncWarning = syncErr instanceof Error ? syncErr.message : 'Cloud sync failed'
+        console.warn('Supabase sync warning (non-fatal):', cloudSyncWarning)
+      }
+    }
+
     return NextResponse.json({
       ...userWithoutPassword,
-      active: !userWithoutPassword.locked
+      active: !userWithoutPassword.locked,
+      ...(cloudSyncWarning ? { cloudSyncWarning } : {})
     })
-  } catch {
-    return NextResponse.json({ error: 'Failed to update user' }, { status: 500 })
+  } catch (error) {
+    console.error('PUT /api/super-admin/users/[id] failed', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    })
+
+    const apiError = normalizePrismaApiError(error, 'Failed to update user', {
+      uniqueMessages: {
+        'traderId,userId': 'User with this ID already exists for this trader'
+      }
+    })
+
+    return NextResponse.json({ error: apiError.message }, { status: apiError.status })
   }
 }
 

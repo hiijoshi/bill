@@ -3,8 +3,9 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { normalizeOptionalString, normalizePhone, parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
-import { backfillMissingMandiAccountNumbers, generateUniqueMandiAccountNumber } from '@/lib/mandi-account-number'
+import { generateUniqueMandiAccountNumber } from '@/lib/mandi-account-number'
 import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
+import { normalizePrismaApiError } from '@/lib/prisma-errors'
 
 const companyPayloadSchema = z
   .object({
@@ -44,8 +45,6 @@ export async function GET(request: NextRequest) {
   if (!authResult.ok) return authResult.response
 
   try {
-    await backfillMissingMandiAccountNumbers(prisma)
-
     const searchParams = new URL(request.url).searchParams
     const includeDeleted = parseBooleanParam(searchParams.get('includeDeleted'))
     const traderIdFilter = normalizeTraderId(searchParams.get('traderId'))
@@ -72,16 +71,17 @@ export async function GET(request: NextRequest) {
             name: true
           }
         },
-        users: {
-          where: includeDeleted ? undefined : { deletedAt: null },
-          select: { id: true }
-        },
-        parties: { select: { id: true } },
-        farmers: { select: { id: true } },
-        suppliers: { select: { id: true } },
-        products: { select: { id: true } },
-        purchaseBills: { select: { id: true } },
-        salesBills: { select: { id: true } }
+        _count: {
+          select: {
+            users: includeDeleted ? true : { where: { deletedAt: null } },
+            parties: true,
+            farmers: true,
+            suppliers: true,
+            products: true,
+            purchaseBills: true,
+            salesBills: true
+          }
+        }
       },
       orderBy: {
         createdAt: 'desc'
@@ -101,13 +101,13 @@ export async function GET(request: NextRequest) {
       updatedAt: company.updatedAt,
       trader: company.trader,
       _count: {
-        users: company.users.length,
-        parties: company.parties.length,
-        farmers: company.farmers.length,
-        suppliers: company.suppliers.length,
-        products: company.products.length,
-        purchaseBills: company.purchaseBills.length,
-        salesBills: company.salesBills.length
+        users: company._count.users,
+        parties: company._count.parties,
+        farmers: company._count.farmers,
+        suppliers: company._count.suppliers,
+        products: company._count.products,
+        purchaseBills: company._count.purchaseBills,
+        salesBills: company._count.salesBills
       }
     }))
 
@@ -248,6 +248,12 @@ export async function POST(request: NextRequest) {
     )
   } catch (error) {
     console.error('super-admin companies POST failed:', error)
-    return NextResponse.json({ error: 'Failed to create company' }, { status: 500 })
+    const apiError = normalizePrismaApiError(error, 'Failed to create company', {
+      uniqueMessages: {
+        'traderId,name': 'Company with this name already exists for the selected trader',
+        mandiAccountNumber: 'Mandi account number already exists'
+      }
+    })
+    return NextResponse.json({ error: apiError.message }, { status: apiError.status })
   }
 }

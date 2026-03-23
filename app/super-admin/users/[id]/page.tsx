@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Loader2, Save } from 'lucide-react'
+import { getSessionCookieNameCandidates, type SessionNamespace } from '@/lib/session-cookies'
 
 type PermissionRow = {
   module: string
@@ -33,6 +34,26 @@ type CompanyOption = {
 }
 
 type ReportAccessLevel = 'none' | 'company-only' | 'all-companies'
+
+function getCookieValue(name: string): string | null {
+  if (typeof document === 'undefined') return null
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function authHeadersScoped(namespace: SessionNamespace = 'app'): HeadersInit {
+  const headers = new Headers({ 'Content-Type': 'application/json' })
+  const csrfToken =
+    getSessionCookieNameCandidates(namespace, typeof window !== 'undefined' ? window.location.host : null)
+      .map((cookieNames) => getCookieValue(cookieNames.csrfToken))
+      .find((value): value is string => Boolean(value)) || null
+
+  if (csrfToken) {
+    headers.set('x-csrf-token', csrfToken)
+  }
+
+  return headers
+}
 
 export default function SuperAdminUserPermissionsPage() {
   const params = useParams<{ id: string }>()
@@ -67,20 +88,15 @@ export default function SuperAdminUserPermissionsPage() {
       }
 
       const nextUser = payload.user || null
+      const nextCompanyOptions = Array.isArray(payload.companyOptions) ? payload.companyOptions : []
+      const nextCompanyId =
+        typeof payload.companyId === 'string' && payload.companyId.trim().length > 0
+          ? payload.companyId
+          : nextCompanyOptions[0]?.id || ''
       setUser(nextUser)
-      setCompanyId(payload.companyId || '')
+      setCompanyId(nextCompanyId)
       setRows(Array.isArray(payload.permissions) ? payload.permissions : [])
-
-      if (nextUser?.traderId) {
-        const companiesResponse = await fetch(`/api/super-admin/companies?traderId=${encodeURIComponent(nextUser.traderId)}`)
-        const companiesPayload = await companiesResponse.json().catch(() => [])
-        if (!companiesResponse.ok) {
-          throw new Error(companiesPayload.error || 'Failed to load companies')
-        }
-        setCompanyOptions(Array.isArray(companiesPayload) ? companiesPayload : [])
-      } else {
-        setCompanyOptions([])
-      }
+      setCompanyOptions(nextCompanyOptions)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load permissions')
     } finally {
@@ -130,7 +146,7 @@ export default function SuperAdminUserPermissionsPage() {
     try {
       const response = await fetch(`/api/super-admin/users/${userId}/permissions`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeadersScoped('super_admin'),
         body: JSON.stringify({
           companyId: companyId.trim(),
           permissions: rows.map((row) => ({

@@ -13,6 +13,7 @@ import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Eye } from 'lucide-react'
 import { isAbortError } from '@/lib/http'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 
 interface PurchaseBill {
   id: string
@@ -101,11 +102,26 @@ function PaymentPageContent() {
   const [filterBillType, setFilterBillType] = useState('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const cacheKey = companyId ? `payment-page:${companyId}` : ''
 
   const fetchPaymentData = useCallback(async (isCancelled: () => boolean = () => false) => {
     try {
       if (isCancelled()) return
       setLoading(true)
+
+      if (cacheKey) {
+        const cached = getClientCache<{
+          purchaseBills: PurchaseBill[]
+          salesBills: SalesBill[]
+          payments: Payment[]
+        }>(cacheKey, 15_000)
+        if (cached) {
+          setPurchaseBills(cached.purchaseBills)
+          setSalesBills(cached.salesBills)
+          setPayments(cached.payments)
+          setLoading(false)
+        }
+      }
       
       // Fetch all data
       const [purchaseRes, salesRes, paymentsRes] = await Promise.all([
@@ -156,6 +172,13 @@ function PaymentPageContent() {
       setPurchaseBills(safePurchaseBills)
       setSalesBills(safeSalesBills)
       setPayments(safePayments)
+      if (cacheKey) {
+        setClientCache(cacheKey, {
+          purchaseBills: safePurchaseBills,
+          salesBills: safeSalesBills,
+          payments: safePayments
+        })
+      }
       
       setLoading(false)
     } catch (error) {
@@ -166,7 +189,7 @@ function PaymentPageContent() {
       setPayments([])
       setLoading(false)
     }
-  }, [companyId])
+  }, [cacheKey, companyId])
 
   useEffect(() => {
     let cancelled = false

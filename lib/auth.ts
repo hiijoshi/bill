@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
+import { Prisma } from '@prisma/client'
 import { env } from './config'
 import { prisma } from './prisma'
 
@@ -17,6 +18,7 @@ type DecodedAuthPayload = jwt.JwtPayload & {
   traderId?: string
   name?: string
   role?: string
+  dbId?: string   // DB primary key (User.id)
 }
 
 function parseDecodedPayload(decoded: string | jwt.JwtPayload): Omit<AuthUser, 'id'> | null {
@@ -32,7 +34,8 @@ function parseDecodedPayload(decoded: string | jwt.JwtPayload): Omit<AuthUser, '
     userId: payload.userId,
     traderId: payload.traderId,
     name: typeof payload.name === 'string' ? payload.name : undefined,
-    role: normalizeRole(typeof payload.role === 'string' ? payload.role : undefined)
+    role: normalizeRole(typeof payload.role === 'string' ? payload.role : undefined),
+    dbId: typeof payload.dbId === 'string' ? payload.dbId : undefined
   }
 }
 
@@ -42,6 +45,7 @@ export interface AuthUser {
   traderId: string
   name?: string
   role?: string
+  dbId?: string   // DB primary key
 }
 
 export interface LoginCredentials {
@@ -65,6 +69,39 @@ export interface AuthResponse {
   refreshToken?: string
   error?: string
 }
+
+const authUserSelect = {
+  id: true,
+  userId: true,
+  traderId: true,
+  password: true,
+  companyId: true,
+  name: true,
+  role: true,
+  locked: true,
+  deletedAt: true,
+  trader: {
+    select: {
+      id: true,
+      name: true,
+      locked: true,
+      deletedAt: true
+    }
+  },
+  company: {
+    select: {
+      id: true,
+      name: true,
+      locked: true,
+      deletedAt: true,
+      traderId: true
+    }
+  }
+} as const
+
+type AuthUserRecord = Prisma.UserGetPayload<{
+  select: typeof authUserSelect
+}>
 
 export async function hashPassword(password: string): Promise<string> {
   return await bcrypt.hash(password, 14)
@@ -131,18 +168,32 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
     const { userId, password, traderId } = credentials
     const normalizedUserId = userId.toLowerCase().trim()
     const traderInput = traderId?.trim()
-
-    // Find all matching user IDs first; trader filtering will be applied safely below.
-    const candidates = await prisma.user.findMany({
-      where: {
-        userId: normalizedUserId,
-        deletedAt: null
-      },
-      include: {
-        trader: true,
-        company: true
-      }
-    })
+    const candidates: AuthUserRecord[] = traderInput
+      ? await prisma.user.findMany({
+          where: {
+            userId: normalizedUserId,
+            deletedAt: null,
+            OR: [
+              { traderId: traderInput },
+              {
+                trader: {
+                  name: {
+                    equals: traderInput,
+                    mode: 'insensitive'
+                  }
+                }
+              }
+            ]
+          },
+          select: authUserSelect
+        })
+      : await prisma.user.findMany({
+          where: {
+            userId: normalizedUserId,
+            deletedAt: null
+          },
+          select: authUserSelect
+        })
 
     if (candidates.length === 0) {
       return {
@@ -165,14 +216,7 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       }
     }
 
-    const traderMatchedCandidates = traderInput
-      ? validCandidates.filter((candidate) => {
-          const id = candidate.traderId.toLowerCase()
-          const traderName = candidate.trader?.name?.toLowerCase() || ''
-          const input = traderInput.toLowerCase()
-          return id === input || traderName === input
-        })
-      : validCandidates
+    const traderMatchedCandidates = validCandidates
 
     if (traderInput && traderMatchedCandidates.length === 0) {
       return {
@@ -182,12 +226,16 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
     }
 
     const verificationPool = traderInput ? traderMatchedCandidates : validCandidates
-    const passwordMatched: typeof candidates = []
-
-    for (const candidate of verificationPool) {
-      const isValid = await verifyPassword(password, candidate.password)
-      if (isValid) passwordMatched.push(candidate)
-    }
+    const passwordMatched = (
+      await Promise.all(
+        verificationPool.map(async (candidate) => ({
+          candidate,
+          isValid: await verifyPassword(password, candidate.password)
+        }))
+      )
+    )
+      .filter((entry) => entry.isValid)
+      .map((entry) => entry.candidate)
 
     if (passwordMatched.length === 0) {
       return {
@@ -226,20 +274,36 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       }
     }
 
-    const permissionRows = await prisma.userPermission.findMany({
-      where: {
-        userId: user.id,
-        OR: [{ canRead: true }, { canWrite: true }],
-        company: {
-          deletedAt: null,
-          locked: false,
-          OR: [{ traderId: user.traderId }, { traderId: null }]
+    const [permissionRows, assignedCompany] = await Promise.all([
+      prisma.userPermission.findMany({
+        where: {
+          userId: user.id,
+          OR: [{ canRead: true }, { canWrite: true }],
+          company: {
+            deletedAt: null,
+            locked: false,
+            OR: [{ traderId: user.traderId }, { traderId: null }]
+          }
+        },
+        select: {
+          companyId: true
         }
-      },
-      select: {
-        companyId: true
-      }
-    })
+      }),
+      user.companyId
+        ? prisma.company.findFirst({
+            where: {
+              id: user.companyId,
+              deletedAt: null,
+              locked: false,
+              OR: [{ traderId: user.traderId }, { traderId: null }]
+            },
+            select: {
+              id: true,
+              name: true
+            }
+          })
+        : Promise.resolve(null)
+    ])
 
     const fallbackCompanyIds = Array.from(
       new Set([
@@ -248,19 +312,8 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       ])
     )
 
-    const company = user.companyId
-      ? await prisma.company.findFirst({
-          where: {
-            id: user.companyId,
-            deletedAt: null,
-            locked: false,
-            OR: [{ traderId: user.traderId }, { traderId: null }]
-          }
-        })
-      : null
-
     const resolvedCompany =
-      company ||
+      assignedCompany ||
       (fallbackCompanyIds.length > 0
         ? await prisma.company.findFirst({
             where: {
@@ -269,7 +322,11 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
               locked: false,
               OR: [{ traderId: user.traderId }, { traderId: null }]
             },
-            orderBy: { name: 'asc' }
+            orderBy: { name: 'asc' },
+            select: {
+              id: true,
+              name: true
+            }
           })
         : await prisma.company.findFirst({
             where: {
@@ -277,22 +334,28 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
               locked: false,
               OR: [{ traderId: user.traderId }, { traderId: null }]
             },
-            orderBy: { name: 'asc' }
+            orderBy: { name: 'asc' },
+            select: {
+              id: true,
+              name: true
+            }
           }))
 
-    // Generate JWT tokens
+    // Generate JWT tokens — embed DB id so middleware never needs a DB lookup
     const token = generateToken({
       userId: user.userId,
       traderId: user.traderId,
       name: user.name || undefined,
-      role: user.role || undefined
+      role: user.role || undefined,
+      dbId: user.id
     })
     
     const refreshToken = generateRefreshToken({
       userId: user.userId,
       traderId: user.traderId,
       name: user.name || undefined,
-      role: user.role || undefined
+      role: user.role || undefined,
+      dbId: user.id
     })
 
     return {

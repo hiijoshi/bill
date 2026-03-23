@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { printSimpleTableReport } from '@/lib/report-print'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 
 const BASE_HEADERS = [
   'Party_Type',
@@ -192,7 +193,11 @@ interface ReportDashboardProps {
   embedded?: boolean
   onBackToDashboard?: () => void
   reportType?: ReportType
+  companyOptions?: CompanyRecord[]
 }
+
+const COMPANIES_CACHE_KEY = 'shell:companies'
+const COMPANIES_CACHE_AGE_MS = 60_000
 
 const MAIN_HEADERS: CsvHeader[] = [
   'Party_Type',
@@ -414,7 +419,8 @@ export default function ReportDashboard({
   initialCompanyId,
   embedded = false,
   onBackToDashboard,
-  reportType = 'main'
+  reportType = 'main',
+  companyOptions
 }: ReportDashboardProps) {
   const today = useMemo(() => new Date(), [])
   const firstDay = useMemo(() => new Date(today.getFullYear(), today.getMonth(), 1), [today])
@@ -460,6 +466,31 @@ export default function ReportDashboard({
     const loadCompanies = async () => {
       setLoadingCompanies(true)
       try {
+        if (Array.isArray(companyOptions) && companyOptions.length > 0) {
+          if (cancelled) return
+          setCompanies(companyOptions)
+          const availableIds = new Set(companyOptions.map((row) => row.id))
+          setSelectedCompanyId((previous) => {
+            if (initialCompanyId && availableIds.has(initialCompanyId)) return initialCompanyId
+            if (previous && availableIds.has(previous)) return previous
+            return companyOptions[0]?.id || ''
+          })
+          return
+        }
+
+        const cachedCompanies = getClientCache<CompanyRecord[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS)
+        if (cachedCompanies && cachedCompanies.length > 0) {
+          if (cancelled) return
+          setCompanies(cachedCompanies)
+          const availableIds = new Set(cachedCompanies.map((row) => row.id))
+          setSelectedCompanyId((previous) => {
+            if (initialCompanyId && availableIds.has(initialCompanyId)) return initialCompanyId
+            if (previous && availableIds.has(previous)) return previous
+            return cachedCompanies[0]?.id || ''
+          })
+          return
+        }
+
         const response = await fetch('/api/companies', { cache: 'no-store' })
         if (!response.ok) {
           throw new Error('Unable to load companies')
@@ -471,6 +502,7 @@ export default function ReportDashboard({
         if (cancelled) return
 
         setCompanies(rows)
+        setClientCache(COMPANIES_CACHE_KEY, rows)
 
         const availableIds = new Set(rows.map((row) => row.id))
         setSelectedCompanyId((previous) => {
@@ -500,7 +532,7 @@ export default function ReportDashboard({
     return () => {
       cancelled = true
     }
-  }, [initialCompanyId])
+  }, [companyOptions, initialCompanyId])
 
   const generateReport = useCallback(async () => {
     if (!dateFrom || !dateTo) {
@@ -531,10 +563,25 @@ export default function ReportDashboard({
 
       const datasets = await Promise.all(
         targetCompanyIds.map(async (companyId) => {
+          const purchaseRequest =
+            reportType === 'sales'
+              ? Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+              : fetch(`/api/purchase-bills?companyId=${encodeURIComponent(companyId)}&dateFrom=${queryFrom}&dateTo=${queryTo}`)
+
+          const specialPurchaseRequest =
+            reportType === 'sales'
+              ? Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+              : fetch(`/api/special-purchase-bills?companyId=${encodeURIComponent(companyId)}&dateFrom=${queryFrom}&dateTo=${queryTo}`)
+
+          const salesRequest =
+            reportType === 'purchase'
+              ? Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+              : fetch(`/api/sales-bills?companyId=${encodeURIComponent(companyId)}`)
+
           const [purchaseRes, specialPurchaseRes, salesRes, paymentRes, banksRes] = await Promise.all([
-            fetch(`/api/purchase-bills?companyId=${encodeURIComponent(companyId)}&dateFrom=${queryFrom}&dateTo=${queryTo}`),
-            fetch(`/api/special-purchase-bills?companyId=${encodeURIComponent(companyId)}&dateFrom=${queryFrom}&dateTo=${queryTo}`),
-            fetch(`/api/sales-bills?companyId=${encodeURIComponent(companyId)}`),
+            purchaseRequest,
+            specialPurchaseRequest,
+            salesRequest,
             fetch(`/api/payments?companyId=${encodeURIComponent(companyId)}`),
             fetch(`/api/banks?companyId=${encodeURIComponent(companyId)}`)
           ])

@@ -158,7 +158,14 @@ export async function updateSelfProfile(input: {
       return { ok: false as const, status: 400, error: 'Current password is incorrect' }
     }
 
-    if (currentPassword === input.newPassword) {
+    // CWE-208: use constant-time comparison to avoid timing side-channel
+    const { timingSafeEqual } = await import('crypto')
+    const a = Buffer.from(currentPassword)
+    const b = Buffer.from(input.newPassword)
+    const sameLength = a.length === b.length
+    const paddedA = sameLength ? a : Buffer.alloc(b.length)
+    const isSamePassword = sameLength && timingSafeEqual(paddedA, b)
+    if (isSamePassword) {
       return { ok: false as const, status: 400, error: 'New password must be different from current password' }
     }
 

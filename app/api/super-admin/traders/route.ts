@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { normalizeTraderLimitInput } from '@/lib/trader-limits'
+import { normalizePrismaApiError } from '@/lib/prisma-errors'
 
 const createTraderSchema = z
   .object({
@@ -32,13 +33,11 @@ export async function GET(request: NextRequest) {
         deletedAt: true,
         createdAt: true,
         updatedAt: true,
-        companies: {
-          where: includeDeleted ? undefined : { deletedAt: null },
-          select: { id: true }
-        },
-        users: {
-          where: includeDeleted ? undefined : { deletedAt: null },
-          select: { id: true }
+        _count: {
+          select: {
+            companies: includeDeleted ? true : { where: { deletedAt: null } },
+            users: includeDeleted ? true : { where: { deletedAt: null } }
+          }
         }
       },
       orderBy: {
@@ -56,8 +55,8 @@ export async function GET(request: NextRequest) {
       createdAt: trader.createdAt,
       updatedAt: trader.updatedAt,
       _count: {
-        companies: trader.companies.length,
-        users: trader.users.length
+        companies: trader._count.companies,
+        users: trader._count.users
       }
     }))
 
@@ -132,7 +131,12 @@ export async function POST(request: NextRequest) {
       },
       { status: 201 }
     )
-  } catch {
-    return NextResponse.json({ error: 'Failed to create trader' }, { status: 500 })
+  } catch (error) {
+    const apiError = normalizePrismaApiError(error, 'Failed to create trader', {
+      uniqueMessages: {
+        name: 'Trader with this name already exists'
+      }
+    })
+    return NextResponse.json({ error: apiError.message }, { status: apiError.status })
   }
 }

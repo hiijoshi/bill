@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
-import { env } from '@/lib/config'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
+import { getSupabaseBrowserConfig } from '@/lib/supabase/shared'
 
 type PendingCookie = {
   name: string
@@ -14,11 +14,14 @@ export function createSupabaseRouteClient(request: NextRequest) {
     return null
   }
 
+  const config = getSupabaseBrowserConfig()
+  if (!config) return null
+
   const pendingCookies: PendingCookie[] = []
 
   const supabase = createServerClient(
-    env.NEXT_PUBLIC_SUPABASE_URL!,
-    env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    config.url,
+    config.publishableKey,
     {
       cookies: {
         getAll() {

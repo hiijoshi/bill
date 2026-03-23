@@ -7,8 +7,8 @@ export type TraderCapacitySnapshot = {
   id: string
   name: string
   locked: boolean
-  maxCompanies: number
-  maxUsers: number
+  maxCompanies: number | null
+  maxUsers: number | null
   currentCompanies: number
   currentUsers: number
 }
@@ -59,8 +59,8 @@ export async function getTraderCapacitySnapshot(
 
   return {
     ...trader,
-    maxCompanies: trader.maxCompanies ?? 0,
-    maxUsers: trader.maxUsers ?? 0,
+    maxCompanies: trader.maxCompanies,
+    maxUsers: trader.maxUsers,
     currentCompanies,
     currentUsers
   }

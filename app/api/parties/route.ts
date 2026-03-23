@@ -5,49 +5,6 @@ import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { cleanString, normalizeTenDigitPhone } from '@/lib/field-validation'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 
-const DUMMY_PARTIES = [
-  {
-    type: 'farmer',
-    name: 'Ramesh Patel',
-    address: 'Village Rampura, Neemuch',
-    phone1: '9876543210',
-    phone2: '9822001144',
-    bankName: 'State Bank of India',
-    accountNo: '123456789012',
-    ifscCode: 'SBIN0001234'
-  },
-  {
-    type: 'buyer',
-    name: 'Shree Traders',
-    address: 'Mandi Road, Ujjain',
-    phone1: '9898989898',
-    phone2: '',
-    bankName: 'HDFC Bank',
-    accountNo: '001122334455',
-    ifscCode: 'HDFC0000123'
-  },
-  {
-    type: 'farmer',
-    name: 'Suresh Yadav',
-    address: 'Village Borkhedi, Mandsaur',
-    phone1: '9765432109',
-    phone2: '',
-    bankName: 'Bank of Baroda',
-    accountNo: '556677889900',
-    ifscCode: 'BARB0MDSAUR'
-  },
-  {
-    type: 'buyer',
-    name: 'Mahalaxmi Foods',
-    address: 'Industrial Area, Indore',
-    phone1: '9001100223',
-    phone2: '9001100224',
-    bankName: 'ICICI Bank',
-    accountNo: '667788990011',
-    ifscCode: 'ICIC0000456'
-  }
-] as const
-
 function normalizeCompanyId(raw: string | null): string | null {
   if (!raw) return null
   const value = raw.trim()
@@ -65,8 +22,7 @@ const postSchema = z.object({
   creditDays: z.union([z.number(), z.string()]).optional().nullable(),
   ifscCode: z.string().optional().nullable(),
   bankName: z.string().optional().nullable(),
-  accountNo: z.string().optional().nullable(),
-  seed: z.boolean().optional()
+  accountNo: z.string().optional().nullable()
 }).strict()
 
 const putSchema = z.object({
@@ -155,34 +111,6 @@ export async function POST(request: NextRequest) {
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
-
-    if (parsed.data.seed === true) {
-      const created = await prisma.$transaction(
-        DUMMY_PARTIES.map((item) =>
-          prisma.party.create({
-            data: {
-              companyId,
-              type: item.type,
-              name: item.name,
-              address: cleanString(item.address),
-              phone1: normalizeTenDigitPhone(item.phone1),
-              phone2: normalizeTenDigitPhone(item.phone2),
-              creditLimit: null,
-              creditDays: null,
-              ifscCode: cleanString(item.ifscCode)?.toUpperCase(),
-              bankName: cleanString(item.bankName),
-              accountNo: cleanString(item.accountNo)
-            }
-          })
-        )
-      )
-
-      return NextResponse.json({
-        success: true,
-        message: `${created.length} dummy parties added successfully`,
-        count: created.length
-      })
-    }
 
     if (!parsed.data.type || !parsed.data.name) {
       return NextResponse.json({ error: 'Party type and name are required' }, { status: 400 })

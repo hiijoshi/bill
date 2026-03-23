@@ -38,6 +38,8 @@ export type ResolvedSupabaseAppSession = {
   applyCookies: <T>(response: import('next/server').NextResponse<T>) => import('next/server').NextResponse<T>
 }
 
+type SupabaseRequestContext = NonNullable<Awaited<ReturnType<typeof getSupabaseClaimsFromRequest>>>
+
 function normalizeCompanyId(value: string | null | undefined): string | null {
   if (!value) return null
   const trimmed = value.trim()
@@ -58,21 +60,18 @@ function resolveCookieCompanyId(request: NextRequest): string | null {
 }
 
 async function loadScopedCompanies(params: {
+  supabaseContext: SupabaseRequestContext
   request: NextRequest
   claims: ResolvedSupabaseAppSession['claims']
   profile: SupabaseProfileRow
   requestedCompanyId?: string | null
 }) {
-  const supabaseContext = await getSupabaseClaimsFromRequest(params.request)
-  if (!supabaseContext || !hasSupabaseAppContext(supabaseContext.claims)) {
-    return { companies: [] as SupabaseCompanyRow[], applyCookies: null as ResolvedSupabaseAppSession['applyCookies'] | null }
-  }
-
   const requestedCompanyId = normalizeCompanyId(params.requestedCompanyId)
   const role = params.claims.app_role
+  const { supabase, applyCookies } = params.supabaseContext
 
   if (role === 'super_admin' || role === 'trader_admin') {
-    let query = supabaseContext.supabase
+    let query = supabase
       .from('Company')
       .select('id, name, locked, traderId')
       .is('deletedAt', null)
@@ -89,11 +88,11 @@ async function loadScopedCompanies(params: {
 
     return {
       companies: (data ?? []) as SupabaseCompanyRow[],
-      applyCookies: supabaseContext.applyCookies
+      applyCookies
     }
   }
 
-  const { data: accessRows, error: accessError } = await supabaseContext.supabase
+  const { data: accessRows, error: accessError } = await supabase
     .from('profile_company_access')
     .select('company_id')
     .eq('profile_id', params.profile.id)
@@ -117,7 +116,7 @@ async function loadScopedCompanies(params: {
   if (companyIds.length === 0) {
     return {
       companies: [],
-      applyCookies: supabaseContext.applyCookies
+      applyCookies
     }
   }
 
@@ -125,11 +124,11 @@ async function loadScopedCompanies(params: {
   if (scopedIds.length === 0) {
     return {
       companies: [],
-      applyCookies: supabaseContext.applyCookies
+      applyCookies
     }
   }
 
-  const query = supabaseContext.supabase
+  const query = supabase
     .from('Company')
     .select('id, name, locked, traderId')
     .in('id', scopedIds)
@@ -143,7 +142,7 @@ async function loadScopedCompanies(params: {
 
   return {
     companies: (data ?? []) as SupabaseCompanyRow[],
-    applyCookies: supabaseContext.applyCookies
+    applyCookies
   }
 }
 
@@ -188,6 +187,7 @@ export async function resolveSupabaseAppSession(
   }
 
   const scoped = await loadScopedCompanies({
+    supabaseContext,
     request,
     claims: supabaseContext.claims,
     profile: profile as SupabaseProfileRow,
