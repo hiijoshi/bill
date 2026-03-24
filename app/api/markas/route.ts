@@ -11,6 +11,35 @@ function normalizeCompanyId(raw: string | null): string | null {
   return value
 }
 
+function readCompanyIdFromAuth(request: NextRequest): string | null {
+  const req = request as NextRequest & {
+    user?: { companyId?: string | null; defaultCompanyId?: string | null }
+    auth?: { companyId?: string | null; defaultCompanyId?: string | null }
+  }
+  const candidates = [
+    req.user?.companyId,
+    req.user?.defaultCompanyId,
+    req.auth?.companyId,
+    req.auth?.defaultCompanyId,
+    request.headers.get('x-auth-company-id'),
+    request.headers.get('x-company-id')
+  ]
+  for (const raw of candidates) {
+    if (typeof raw !== 'string') continue
+    const value = raw.trim()
+    if (value && value !== 'null' && value !== 'undefined') return value
+  }
+  return null
+}
+
+function getCompanyIdFromAuthenticatedRequest(request: NextRequest): string {
+  const companyId = readCompanyIdFromAuth(request)
+  if (!companyId) {
+    throw new Error('No company assigned to this user')
+  }
+  return companyId
+}
+
 function clean(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const v = value.trim()
@@ -36,13 +65,13 @@ function supabaseErrorResponse(error: { message: string; code?: string | null })
 
 export async function GET(request: NextRequest) {
   try {
-    const companyId = normalizeCompanyId(new URL(request.url).searchParams.get('companyId'))
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
-    }
-
     const supabaseContext = await getSupabaseClaimsFromRequest(request)
     if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
+      const companyId =
+        normalizeCompanyId(new URL(request.url).searchParams.get('companyId')) ||
+        normalizeCompanyId(supabaseContext.claims.default_company_id || null) ||
+        getCompanyIdFromAuthenticatedRequest(request)
+
       const { data, error } = await supabaseContext.supabase
         .from('Marka')
         .select('*')
@@ -55,6 +84,10 @@ export async function GET(request: NextRequest) {
 
       return supabaseContext.applyCookies(NextResponse.json(data ?? []))
     }
+
+    const companyId =
+      normalizeCompanyId(new URL(request.url).searchParams.get('companyId')) ||
+      getCompanyIdFromAuthenticatedRequest(request)
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
@@ -75,13 +108,13 @@ export async function POST(request: NextRequest) {
     const parsed = await parseJsonWithSchema(request, postSchema)
     if (!parsed.ok) return parsed.response
 
-    const companyId = normalizeCompanyId(new URL(request.url).searchParams.get('companyId'))
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
-    }
-
     const supabaseContext = await getSupabaseClaimsFromRequest(request)
     if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
+      const companyId =
+        normalizeCompanyId(new URL(request.url).searchParams.get('companyId')) ||
+        normalizeCompanyId(supabaseContext.claims.default_company_id || null) ||
+        getCompanyIdFromAuthenticatedRequest(request)
+
       const markaNumber = clean(parsed.data.markaNumber)?.toUpperCase() || null
       if (!markaNumber) {
         return NextResponse.json({ error: 'Marka number is required' }, { status: 400 })
@@ -104,6 +137,10 @@ export async function POST(request: NextRequest) {
 
       return supabaseContext.applyCookies(NextResponse.json({ success: true, message: 'Marka data stored successfully', marka: data }))
     }
+
+    const companyId =
+      normalizeCompanyId(new URL(request.url).searchParams.get('companyId')) ||
+      getCompanyIdFromAuthenticatedRequest(request)
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
@@ -145,14 +182,18 @@ export async function PUT(request: NextRequest) {
     if (!parsed.ok) return parsed.response
 
     const { searchParams } = new URL(request.url)
-    const companyId = normalizeCompanyId(searchParams.get('companyId'))
     const id = clean(searchParams.get('id'))
-    if (!companyId || !id) {
+    if (!id) {
       return NextResponse.json({ error: 'Marka ID and Company ID required' }, { status: 400 })
     }
 
     const supabaseContext = await getSupabaseClaimsFromRequest(request)
     if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
+      const companyId =
+        normalizeCompanyId(searchParams.get('companyId')) ||
+        normalizeCompanyId(supabaseContext.claims.default_company_id || null) ||
+        getCompanyIdFromAuthenticatedRequest(request)
+
       const markaNumber = parsed.data.markaNumber.toUpperCase()
       const { data, error } = await supabaseContext.supabase
         .from('Marka')
@@ -172,6 +213,10 @@ export async function PUT(request: NextRequest) {
 
       return supabaseContext.applyCookies(NextResponse.json({ success: true, message: 'Marka updated successfully', marka: data }))
     }
+
+    const companyId =
+      normalizeCompanyId(searchParams.get('companyId')) ||
+      getCompanyIdFromAuthenticatedRequest(request)
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
@@ -215,15 +260,16 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const companyId = normalizeCompanyId(searchParams.get('companyId'))
     const id = clean(searchParams.get('id'))
     const all = searchParams.get('all') === 'true'
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
-    }
 
     const supabaseContext = await getSupabaseClaimsFromRequest(request)
     if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
+      const companyId =
+        normalizeCompanyId(searchParams.get('companyId')) ||
+        normalizeCompanyId(supabaseContext.claims.default_company_id || null) ||
+        getCompanyIdFromAuthenticatedRequest(request)
+
       if (all) {
         const { error, count } = await supabaseContext.supabase
           .from('Marka')
@@ -259,6 +305,10 @@ export async function DELETE(request: NextRequest) {
 
       return supabaseContext.applyCookies(NextResponse.json({ success: true, message: 'Marka deleted successfully' }))
     }
+
+    const companyId =
+      normalizeCompanyId(searchParams.get('companyId')) ||
+      getCompanyIdFromAuthenticatedRequest(request)
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied

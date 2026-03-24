@@ -9,7 +9,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Edit, Trash2, Ruler } from 'lucide-react'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 interface Unit {
   id: string
@@ -37,18 +36,18 @@ export default function UnitMasterPage() {
     kgEquivalent: '1',
     description: ''
   })
-  const fetchUnits = useCallback(async (targetCompanyId = companyId) => {
-    if (!targetCompanyId) {
-      setLoading(false)
-      return
-    }
-
+  const fetchUnits = useCallback(async () => {
     try {
-      const response = await fetch(`/api/units?companyId=${encodeURIComponent(targetCompanyId)}`)
+      const response = await fetch('/api/units')
       
       if (response.ok) {
-        const data = await response.json()
-        setUnits(data)
+        const data = await response.json().catch(() => ({}))
+        const rows = Array.isArray(data?.units) ? data.units : Array.isArray(data) ? data : []
+        const resolvedCompanyId = typeof data?.companyId === 'string' ? data.companyId : ''
+        setUnits(rows)
+        if (resolvedCompanyId) {
+          setCompanyId((prev) => prev || resolvedCompanyId)
+        }
       } else {
         setUnits([])
       }
@@ -58,20 +57,10 @@ export default function UnitMasterPage() {
     } finally {
       setLoading(false)
     }
-  }, [companyId])
+  }, [])
 
   useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
-      if (!resolvedCompanyId) {
-        setErrorMessage('Failed to resolve active company. Please re-login.')
-        setLoading(false)
-        return
-      }
-      setCompanyId(resolvedCompanyId)
-      stripCompanyParamsFromUrl()
-      await fetchUnits(resolvedCompanyId)
-    })()
+    void fetchUnits()
   }, [fetchUnits])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -81,11 +70,6 @@ export default function UnitMasterPage() {
       alert('Unit name and symbol are required')
       return
     }
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
-
     const reservedSymbol = formData.symbol.trim().toLowerCase()
     if (!editingUnit && (reservedSymbol === 'kg' || reservedSymbol === 'qt')) {
       alert('kg and qt are universal system units and cannot be created manually.')
@@ -94,8 +78,8 @@ export default function UnitMasterPage() {
 
     try {
       const url = editingUnit 
-        ? `/api/units?id=${editingUnit.id}&companyId=${companyId}`
-        : `/api/units?companyId=${companyId}`
+        ? `/api/units?id=${editingUnit.id}`
+        : `/api/units`
       
       const method = editingUnit ? 'PUT' : 'POST'
       
@@ -150,13 +134,9 @@ export default function UnitMasterPage() {
       return
     }
     if (!confirm('Are you sure you want to delete this unit? This may affect existing products.')) return
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
 
     try {
-      const response = await fetch(`/api/units?id=${id}&companyId=${companyId}`, {
+      const response = await fetch(`/api/units?id=${id}`, {
         method: 'DELETE',
       })
 
@@ -175,11 +155,7 @@ export default function UnitMasterPage() {
 
   const handleDeleteAll = async () => {
     if (!confirm('Delete all user units for this company? Universal units (kg, qt) will be kept.')) return
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
-    const response = await fetch(`/api/units?companyId=${companyId}&all=true`, { method: 'DELETE' })
+    const response = await fetch(`/api/units?all=true`, { method: 'DELETE' })
     const result = await response.json().catch(() => ({}))
     alert(result.message || result.error || 'Operation completed')
     if (response.ok) fetchUnits()

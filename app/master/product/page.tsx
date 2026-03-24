@@ -15,7 +15,6 @@ import {
   getDefaultPurchaseProductId,
   setDefaultPurchaseProductId
 } from '@/lib/default-product'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 interface Product {
   id: string
@@ -48,7 +47,6 @@ export default function ProductMasterPage() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [defaultPurchaseProductId, setDefaultPurchaseProductIdState] = useState('')
 
-  // Form state
   const [formData, setFormData] = useState({
     name: '',
     unit: '',
@@ -61,13 +59,21 @@ export default function ProductMasterPage() {
   })
 
   const gstRates = ['0', '5', '12', '18', '28']
-  const fetchUnits = useCallback(async (targetCompanyId = companyId) => {
-    if (!targetCompanyId) return
+
+  const fetchUnits = useCallback(async () => {
     try {
-      const response = await fetch(`/api/units?companyId=${encodeURIComponent(targetCompanyId)}`)
+      const response = await fetch('/api/units')
+
       if (response.ok) {
-        const data = await response.json()
-        setUnits(data)
+        const data = await response.json().catch(() => ({}))
+        const rows = Array.isArray(data?.units) ? data.units : Array.isArray(data) ? data : []
+        const resolvedCompanyId = typeof data?.companyId === 'string' ? data.companyId : ''
+
+        setUnits(rows)
+
+        if (resolvedCompanyId) {
+          setCompanyId((prev) => prev || resolvedCompanyId)
+        }
       } else {
         const payload = await response.json().catch(() => ({}))
         if (typeof payload?.error === 'string' && payload.error.trim()) {
@@ -80,29 +86,42 @@ export default function ProductMasterPage() {
       setErrorMessage('Unable to load units right now. Please refresh and try again.')
       setUnits([])
     }
-  }, [companyId])
+  }, [])
 
-  const fetchProducts = useCallback(async (targetCompanyId = companyId) => {
-    if (!targetCompanyId) {
-      setLoading(false)
-      return
-    }
-
+  const fetchProducts = useCallback(async () => {
     try {
-      const response = await fetch(`/api/products?companyId=${encodeURIComponent(targetCompanyId)}`)
+      const response = await fetch('/api/products')
+
       if (response.ok) {
-        const data = await response.json()
-        const rows = Array.isArray(data) ? data : []
+        const data = await response.json().catch(() => ({}))
+        const rows = (Array.isArray((data as { products?: unknown })?.products)
+          ? (data as { products: Product[] }).products
+          : Array.isArray((data as { data?: unknown })?.data)
+            ? ((data as { data: Product[] }).data ?? [])
+            : Array.isArray(data)
+              ? (data as Product[])
+              : []) as Product[]
+        const resolvedCompanyId =
+          typeof data?.companyId === 'string' ? data.companyId : ''
+
+        if (resolvedCompanyId) {
+          setCompanyId(resolvedCompanyId)
+        }
+
         setProducts(rows)
         setErrorMessage('')
 
-        const rememberedDefault = getDefaultPurchaseProductId(targetCompanyId)
-        if (!rememberedDefault) {
-          setDefaultPurchaseProductIdState('')
-        } else if (rows.some((product) => product.id === rememberedDefault)) {
-          setDefaultPurchaseProductIdState(rememberedDefault)
+        if (resolvedCompanyId) {
+          const rememberedDefault = getDefaultPurchaseProductId(resolvedCompanyId)
+          if (!rememberedDefault) {
+            setDefaultPurchaseProductIdState('')
+          } else if (rows.some((product) => product.id === rememberedDefault)) {
+            setDefaultPurchaseProductIdState(rememberedDefault)
+          } else {
+            clearDefaultPurchaseProductId(resolvedCompanyId)
+            setDefaultPurchaseProductIdState('')
+          }
         } else {
-          clearDefaultPurchaseProductId(targetCompanyId)
           setDefaultPurchaseProductIdState('')
         }
       } else {
@@ -121,41 +140,27 @@ export default function ProductMasterPage() {
     } finally {
       setLoading(false)
     }
-  }, [companyId])
+  }, [])
 
   useEffect(() => {
     ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
-      if (!resolvedCompanyId) {
-        setErrorMessage('Failed to resolve active company. Please re-login.')
-        setLoading(false)
-        return
-      }
-
-      setCompanyId(resolvedCompanyId)
-      setDefaultPurchaseProductIdState(getDefaultPurchaseProductId(resolvedCompanyId))
-      stripCompanyParamsFromUrl()
-      await Promise.all([fetchProducts(resolvedCompanyId), fetchUnits(resolvedCompanyId)])
+      await Promise.all([fetchProducts(), fetchUnits()])
     })()
   }, [fetchProducts, fetchUnits])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (!formData.name.trim() || !formData.unit) {
       alert('Product name and unit are required')
       return
     }
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
 
     try {
-      const url = editingProduct 
-        ? `/api/products?id=${editingProduct.id}&companyId=${companyId}`
-        : `/api/products?companyId=${companyId}`
-      
+      const url = editingProduct
+        ? `/api/products?id=${editingProduct.id}`
+        : '/api/products'
+
       const method = editingProduct ? 'PUT' : 'POST'
       const payload = {
         name: formData.name,
@@ -166,7 +171,7 @@ export default function ProductMasterPage() {
         description: formData.description,
         isActive: formData.isActive
       }
-      
+
       const response = await fetch(url, {
         method,
         headers: {
@@ -178,8 +183,17 @@ export default function ProductMasterPage() {
       if (response.ok) {
         const responseData = await response.json().catch(() => ({}))
         const savedProductId = responseData?.product?.id || editingProduct?.id || ''
-        if (companyId && formData.setAsDefaultPurchaseProduct && savedProductId) {
-          setDefaultPurchaseProductId(companyId, savedProductId)
+        const resolvedCompanyId =
+          typeof responseData?.companyId === 'string'
+            ? responseData.companyId
+            : companyId
+
+        if (resolvedCompanyId) {
+          setCompanyId((prev) => prev || resolvedCompanyId)
+        }
+
+        if (resolvedCompanyId && formData.setAsDefaultPurchaseProduct && savedProductId) {
+          setDefaultPurchaseProductId(resolvedCompanyId, savedProductId)
           setDefaultPurchaseProductIdState(savedProductId)
         }
 
@@ -187,8 +201,8 @@ export default function ProductMasterPage() {
         resetForm()
         fetchProducts()
       } else {
-        const error = await response.json()
-        alert(error.error || 'Operation failed')
+        const error = await response.json().catch(() => ({}))
+        alert(error?.error || 'Operation failed')
       }
     } catch (error) {
       console.error('Error:', error)
@@ -212,15 +226,12 @@ export default function ProductMasterPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this product? This may affect existing transactions.')) return
+    if (!confirm('Are you sure you want to delete this product? This may affect existing transactions.')) {
+      return
+    }
 
     try {
-      if (!companyId) {
-        alert('Active company not found. Please re-login.')
-        return
-      }
-      
-      const response = await fetch(`/api/products?id=${id}&companyId=${companyId}`, {
+      const response = await fetch(`/api/products?id=${id}`, {
         method: 'DELETE',
       })
 
@@ -229,11 +240,12 @@ export default function ProductMasterPage() {
           clearDefaultPurchaseProductId(companyId)
           setDefaultPurchaseProductIdState('')
         }
+
         alert('Product deleted successfully!')
         fetchProducts()
       } else {
-        const error = await response.json()
-        alert(error.error || 'Delete failed')
+        const error = await response.json().catch(() => ({}))
+        alert(error?.error || 'Delete failed')
       }
     } catch (error) {
       console.error('Error:', error)
@@ -243,22 +255,31 @@ export default function ProductMasterPage() {
 
   const handleDeleteAll = async () => {
     if (!confirm('Delete all products for this company?')) return
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
-    const response = await fetch(`/api/products?companyId=${companyId}&all=true`, { method: 'DELETE' })
-    const result = await response.json().catch(() => ({}))
-    alert(result.message || result.error || 'Operation completed')
-    if (response.ok) {
-      clearDefaultPurchaseProductId(companyId)
-      setDefaultPurchaseProductIdState('')
-      fetchProducts()
+
+    try {
+      const response = await fetch('/api/products?all=true', { method: 'DELETE' })
+      const result = await response.json().catch(() => ({}))
+
+      alert(result.message || result.error || 'Operation completed')
+
+      if (response.ok) {
+        if (companyId) {
+          clearDefaultPurchaseProductId(companyId)
+        }
+        setDefaultPurchaseProductIdState('')
+        fetchProducts()
+      }
+    } catch (error) {
+      console.error('Error deleting all products:', error)
+      alert('Delete failed')
     }
   }
 
   const handleSetDefaultPurchaseProduct = (productId: string) => {
-    if (!companyId) return
+    if (!companyId) {
+      alert('Company context is not loaded yet. Please refresh once.')
+      return
+    }
 
     setDefaultPurchaseProductId(companyId, productId)
     setDefaultPurchaseProductIdState(productId)
@@ -267,9 +288,25 @@ export default function ProductMasterPage() {
 
   const handleExportCsv = () => {
     if (products.length === 0) return alert('No product data to export')
+
     const headers = ['Name', 'Unit', 'HSN', 'GST', 'SellingPrice', 'Description', 'Active', 'Stock', 'CreatedAt']
-    const rows = products.map((p) => [p.name, p.unit, p.hsnCode || '', p.gstRate ?? '', p.sellingPrice ?? '', p.description || '', p.isActive ? 'Yes' : 'No', p.currentStock, p.createdAt])
-    const csv = [headers.join(','), ...rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))].join('\n')
+    const rows = products.map((p) => [
+      p.name,
+      p.unit,
+      p.hsnCode || '',
+      p.gstRate ?? '',
+      p.sellingPrice ?? '',
+      p.description || '',
+      p.isActive ? 'Yes' : 'No',
+      p.currentStock,
+      p.createdAt
+    ])
+
+    const csv = [
+      headers.join(','),
+      ...rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))
+    ].join('\n')
+
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
@@ -280,13 +317,13 @@ export default function ProductMasterPage() {
   }
 
   const resetForm = () => {
-    setFormData({ 
-      name: '', 
-      unit: '', 
-      hsnCode: '', 
-      gstRate: '', 
-      sellingPrice: '', 
-      description: '', 
+    setFormData({
+      name: '',
+      unit: '',
+      hsnCode: '',
+      gstRate: '',
+      sellingPrice: '',
+      description: '',
       isActive: true,
       setAsDefaultPurchaseProduct: false
     })
@@ -296,7 +333,7 @@ export default function ProductMasterPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId="">
+      <DashboardLayout companyId={companyId}>
         <div className="flex justify-center items-center h-screen">Loading...</div>
       </DashboardLayout>
     )
@@ -311,14 +348,19 @@ export default function ProductMasterPage() {
               {errorMessage}
             </div>
           )}
+
           <div className="flex justify-between items-center mb-6">
             <div className="flex items-center gap-3">
               <Package className="h-8 w-8 text-blue-600" />
               <h1 className="text-3xl font-bold">Product Master</h1>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={handleExportCsv}>Export CSV</Button>
-              <Button variant="destructive" onClick={handleDeleteAll}>Delete All</Button>
+              <Button variant="outline" onClick={handleExportCsv}>
+                Export CSV
+              </Button>
+              <Button variant="destructive" onClick={handleDeleteAll}>
+                Delete All
+              </Button>
               <Button onClick={() => setIsFormOpen(true)} className="flex items-center gap-2">
                 <Plus className="h-4 w-4" />
                 Add Product
@@ -326,7 +368,6 @@ export default function ProductMasterPage() {
             </div>
           </div>
 
-          {/* Form */}
           {isFormOpen && (
             <Card className="mb-6">
               <CardHeader>
@@ -345,9 +386,13 @@ export default function ProductMasterPage() {
                         required
                       />
                     </div>
+
                     <div>
                       <Label htmlFor="unit">Unit *</Label>
-                      <Select value={formData.unit} onValueChange={(value) => setFormData({ ...formData, unit: value })}>
+                      <Select
+                        value={formData.unit}
+                        onValueChange={(value) => setFormData({ ...formData, unit: value })}
+                      >
                         <SelectTrigger id="unit">
                           <SelectValue placeholder="Select unit" />
                         </SelectTrigger>
@@ -360,6 +405,7 @@ export default function ProductMasterPage() {
                         </SelectContent>
                       </Select>
                     </div>
+
                     <div>
                       <Label htmlFor="hsnCode">HSN Code</Label>
                       <Input
@@ -369,9 +415,13 @@ export default function ProductMasterPage() {
                         placeholder="Enter HSN code"
                       />
                     </div>
+
                     <div>
                       <Label htmlFor="gstRate">GST Rate (%)</Label>
-                      <Select value={formData.gstRate} onValueChange={(value) => setFormData({ ...formData, gstRate: value })}>
+                      <Select
+                        value={formData.gstRate}
+                        onValueChange={(value) => setFormData({ ...formData, gstRate: value })}
+                      >
                         <SelectTrigger>
                           <SelectValue placeholder="Select GST rate" />
                         </SelectTrigger>
@@ -384,6 +434,7 @@ export default function ProductMasterPage() {
                         </SelectContent>
                       </Select>
                     </div>
+
                     <div>
                       <Label htmlFor="sellingPrice">Selling Price</Label>
                       <Input
@@ -395,6 +446,7 @@ export default function ProductMasterPage() {
                         placeholder="Enter selling price"
                       />
                     </div>
+
                     <div>
                       <Label htmlFor="description">Description</Label>
                       <Input
@@ -404,6 +456,7 @@ export default function ProductMasterPage() {
                         placeholder="Enter description"
                       />
                     </div>
+
                     <div className="flex items-center space-x-2">
                       <input
                         type="checkbox"
@@ -414,19 +467,26 @@ export default function ProductMasterPage() {
                       />
                       <Label htmlFor="isActive">Active</Label>
                     </div>
+
                     <div className="flex items-center space-x-2">
                       <input
                         type="checkbox"
                         id="setAsDefaultPurchaseProduct"
                         checked={formData.setAsDefaultPurchaseProduct}
                         onChange={(e) =>
-                          setFormData({ ...formData, setAsDefaultPurchaseProduct: e.target.checked })
+                          setFormData({
+                            ...formData,
+                            setAsDefaultPurchaseProduct: e.target.checked
+                          })
                         }
                         className="h-4 w-4"
                       />
-                      <Label htmlFor="setAsDefaultPurchaseProduct">Set as default purchase product</Label>
+                      <Label htmlFor="setAsDefaultPurchaseProduct">
+                        Set as default purchase product
+                      </Label>
                     </div>
                   </div>
+
                   <div className="flex justify-end space-x-2">
                     <Button type="button" variant="outline" onClick={resetForm}>
                       Cancel
@@ -440,7 +500,6 @@ export default function ProductMasterPage() {
             </Card>
           )}
 
-          {/* Table */}
           <Card>
             <CardHeader>
               <CardTitle>Product List</CardTitle>
@@ -474,6 +533,7 @@ export default function ProductMasterPage() {
                     {products.map((product) => (
                       <TableRow key={product.id}>
                         <TableCell className="font-medium">{product.name}</TableCell>
+
                         <TableCell>
                           {defaultPurchaseProductId === product.id ? (
                             <Badge className="bg-green-600 hover:bg-green-600">Default</Badge>
@@ -487,15 +547,19 @@ export default function ProductMasterPage() {
                             </Button>
                           )}
                         </TableCell>
+
                         <TableCell>
                           <Badge variant="outline">{product.unit.toUpperCase()}</Badge>
                         </TableCell>
+
                         <TableCell>
-                          <Badge variant={product.currentStock > 0 ? "default" : "destructive"}>
+                          <Badge variant={product.currentStock > 0 ? 'default' : 'destructive'}>
                             {product.currentStock} {product.unit}
                           </Badge>
                         </TableCell>
+
                         <TableCell>{product.hsnCode || '-'}</TableCell>
+
                         <TableCell>
                           {product.gstRate ? (
                             <Badge variant="secondary">{product.gstRate}%</Badge>
@@ -503,6 +567,7 @@ export default function ProductMasterPage() {
                             <span className="text-gray-400">-</span>
                           )}
                         </TableCell>
+
                         <TableCell>
                           {product.sellingPrice ? (
                             <span>₹{product.sellingPrice.toFixed(2)}</span>
@@ -510,14 +575,15 @@ export default function ProductMasterPage() {
                             <span className="text-gray-400">-</span>
                           )}
                         </TableCell>
+
                         <TableCell>
                           <Badge variant={product.isActive ? 'default' : 'secondary'}>
                             {product.isActive ? 'Active' : 'Inactive'}
                           </Badge>
                         </TableCell>
-                        <TableCell>
-                          {new Date(product.createdAt).toLocaleDateString()}
-                        </TableCell>
+
+                        <TableCell>{new Date(product.createdAt).toLocaleDateString()}</TableCell>
+
                         <TableCell>
                           <div className="flex space-x-2">
                             <Button

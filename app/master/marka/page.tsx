@@ -9,7 +9,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Edit, Trash2, Hash } from 'lucide-react'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 interface Marka {
   id: string
@@ -21,7 +20,6 @@ interface Marka {
 }
 
 export default function MarkaMasterPage() {
-  const [companyId, setCompanyId] = useState('')
   const [markas, setMarkas] = useState<Marka[]>([])
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
@@ -34,14 +32,9 @@ export default function MarkaMasterPage() {
     description: '',
     isActive: true
   })
-  const fetchMarkas = useCallback(async (targetCompanyId = companyId) => {
-    if (!targetCompanyId) {
-      setLoading(false)
-      return
-    }
-
+  const fetchMarkas = useCallback(async () => {
     try {
-      const response = await fetch(`/api/markas?companyId=${encodeURIComponent(targetCompanyId)}`)
+      const response = await fetch('/api/markas')
       if (response.ok) {
         const data = await response.json()
         setMarkas(data)
@@ -54,21 +47,10 @@ export default function MarkaMasterPage() {
     } finally {
       setLoading(false)
     }
-  }, [companyId])
+  }, [])
 
   useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
-      if (!resolvedCompanyId) {
-        setErrorMessage('Failed to resolve active company. Please re-login.')
-        setLoading(false)
-        return
-      }
-
-      setCompanyId(resolvedCompanyId)
-      stripCompanyParamsFromUrl()
-      await fetchMarkas(resolvedCompanyId)
-    })()
+    void fetchMarkas()
   }, [fetchMarkas])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -78,11 +60,6 @@ export default function MarkaMasterPage() {
       alert('Marka number is required')
       return
     }
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
-
     // Check for duplicate marka number (excluding current one if editing)
     const isDuplicate = markas.some(marka => 
       marka.markaNumber === formData.markaNumber && 
@@ -96,8 +73,8 @@ export default function MarkaMasterPage() {
 
     try {
       const url = editingMarka 
-        ? `/api/markas?id=${editingMarka.id}&companyId=${companyId}`
-        : `/api/markas?companyId=${companyId}`
+        ? `/api/markas?id=${editingMarka.id}`
+        : `/api/markas`
       
       const method = editingMarka ? 'PUT' : 'POST'
       
@@ -135,13 +112,9 @@ export default function MarkaMasterPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this marka? This may affect existing transactions.')) return
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
 
     try {
-      const response = await fetch(`/api/markas?id=${id}&companyId=${companyId}`, {
+      const response = await fetch(`/api/markas?id=${id}`, {
         method: 'DELETE',
       })
 
@@ -160,11 +133,7 @@ export default function MarkaMasterPage() {
 
   const handleDeleteAll = async () => {
     if (!confirm('Delete all markas for this company?')) return
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
-    const response = await fetch(`/api/markas?companyId=${companyId}&all=true`, { method: 'DELETE' })
+    const response = await fetch('/api/markas?all=true', { method: 'DELETE' })
     const result = await response.json().catch(() => ({}))
     alert(result.message || result.error || 'Operation completed')
     if (response.ok) fetchMarkas()
@@ -199,7 +168,7 @@ export default function MarkaMasterPage() {
   }
 
   return (
-    <DashboardLayout companyId={companyId}>
+    <DashboardLayout companyId="">
       <div className="p-6">
         <div className="max-w-6xl mx-auto">
           {errorMessage && (

@@ -9,7 +9,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Edit, Trash2, Truck } from 'lucide-react'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 interface Transport {
   id: string
@@ -26,7 +25,6 @@ interface Transport {
 }
 
 export default function TransportMasterPage() {
-  const [companyId, setCompanyId] = useState('')
   const [transports, setTransports] = useState<Transport[]>([])
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
@@ -44,14 +42,9 @@ export default function TransportMasterPage() {
     description: '',
     isActive: true
   })
-  const fetchTransports = useCallback(async (targetCompanyId = companyId) => {
-    if (!targetCompanyId) {
-      setLoading(false)
-      return
-    }
-
+  const fetchTransports = useCallback(async () => {
     try {
-      const response = await fetch(`/api/transports?companyId=${encodeURIComponent(targetCompanyId)}`)
+      const response = await fetch('/api/transports')
       if (response.ok) {
         const data = await response.json()
         setTransports(
@@ -69,30 +62,14 @@ export default function TransportMasterPage() {
     } finally {
       setLoading(false)
     }
-  }, [companyId])
+  }, [])
 
   useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
-      if (!resolvedCompanyId) {
-        setErrorMessage('Failed to resolve active company. Please re-login.')
-        setLoading(false)
-        return
-      }
-
-      setCompanyId(resolvedCompanyId)
-      stripCompanyParamsFromUrl()
-      await fetchTransports(resolvedCompanyId)
-    })()
+    void fetchTransports()
   }, [fetchTransports])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
     
     if (!formData.transporterName.trim()) {
       alert('Transporter name is required')
@@ -112,8 +89,8 @@ export default function TransportMasterPage() {
 
     try {
       const url = editingTransport 
-        ? `/api/transports?id=${editingTransport.id}&companyId=${companyId}`
-        : `/api/transports?companyId=${companyId}`
+        ? `/api/transports?id=${editingTransport.id}`
+        : `/api/transports`
       
       const method = editingTransport ? 'PUT' : 'POST'
       
@@ -124,7 +101,6 @@ export default function TransportMasterPage() {
         },
         body: JSON.stringify({
           ...formData,
-          companyId,
           vehicleNumber: formData.vehicleNumber.trim() || null,
           transporterName: formData.transporterName.trim(),
           driverPhone: formData.driverPhone.trim() || null,
@@ -164,13 +140,9 @@ export default function TransportMasterPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this transport? This may affect existing transactions.')) return
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
 
     try {
-      const response = await fetch(`/api/transports?id=${id}&companyId=${companyId}`, {
+      const response = await fetch(`/api/transports?id=${id}`, {
         method: 'DELETE',
       })
 
@@ -189,11 +161,7 @@ export default function TransportMasterPage() {
 
   const handleDeleteAll = async () => {
     if (!confirm('Delete all transports for this company?')) return
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
-    const response = await fetch(`/api/transports?companyId=${companyId}&all=true`, { method: 'DELETE' })
+    const response = await fetch('/api/transports?all=true', { method: 'DELETE' })
     const result = await response.json().catch(() => ({}))
     alert(result.message || result.error || 'Operation completed')
     if (response.ok) fetchTransports()
@@ -237,7 +205,7 @@ export default function TransportMasterPage() {
   }
 
   return (
-    <DashboardLayout companyId={companyId}>
+    <DashboardLayout companyId="">
       <div className="p-6">
         <div className="max-w-6xl mx-auto">
           {errorMessage && (

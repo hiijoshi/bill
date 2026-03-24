@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { UNIVERSAL_UNITS, toNumber } from '@/lib/unit-conversion'
-import { ensureCompanyAccess, normalizeId, requireRoles } from '@/lib/api-security'
+import { ensureCompanyAccess, normalizeId, requireAuthContext, requireRoles } from '@/lib/api-security'
 
 function setCORSHeaders() {
   const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000']
@@ -60,12 +60,34 @@ function readCompanyIdFromAuth(request: NextRequest): string | null {
   return null
 }
 
-function getCompanyIdFromAuthenticatedRequest(request: NextRequest): string {
-  const companyId = readCompanyIdFromAuth(request)
-  if (!companyId) {
-    throw new Error('No company assigned to this user')
+function resolveCompanyId(
+  request: NextRequest,
+  companyIdFromQuery: string
+): { ok: true; companyId: string } | { ok: false; response: NextResponse } {
+  const normalizedQuery = companyIdFromQuery.trim()
+  if (normalizedQuery) {
+    return { ok: true, companyId: normalizedQuery }
   }
-  return companyId
+
+  const fromAuth = readCompanyIdFromAuth(request)
+  if (fromAuth) {
+    return { ok: true, companyId: fromAuth }
+  }
+
+  const authResult = requireAuthContext(request)
+  if (!authResult.ok) {
+    // Authentication missing -> 401 (not a server error).
+    return { ok: false, response: authResult.response }
+  }
+
+  // Authenticated but no company scope -> 403 (not a server error).
+  return {
+    ok: false,
+    response: NextResponse.json(
+      { error: 'No company assigned to this user' },
+      { status: 403, headers: setCORSHeaders() }
+    )
+  }
 }
 
 function isUniversalSymbol(symbol: string): boolean {
@@ -147,7 +169,9 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = new URL(request.url).searchParams
     const companyIdFromQuery = normalizeId(searchParams.get('companyId'))
-    const companyId = companyIdFromQuery || getCompanyIdFromAuthenticatedRequest(request)
+    const companyScope = resolveCompanyId(request, companyIdFromQuery)
+    if (!companyScope.ok) return companyScope.response
+    const companyId = companyScope.companyId
 
     const denied = await ensureReadAccess(request, companyId)
     if (denied) return denied
@@ -179,7 +203,9 @@ export async function POST(request: NextRequest) {
   try {
     const searchParams = new URL(request.url).searchParams
     const companyIdFromQuery = normalizeId(searchParams.get('companyId'))
-    const companyId = companyIdFromQuery || getCompanyIdFromAuthenticatedRequest(request)
+    const companyScope = resolveCompanyId(request, companyIdFromQuery)
+    if (!companyScope.ok) return companyScope.response
+    const companyId = companyScope.companyId
 
     const denied = await ensureWriteAccess(request, companyId)
     if (denied) return denied
@@ -269,7 +295,9 @@ export async function PUT(request: NextRequest) {
     const searchParams = new URL(request.url).searchParams
     const id = normalizeId(searchParams.get('id'))
     const companyIdFromQuery = normalizeId(searchParams.get('companyId'))
-    const companyId = companyIdFromQuery || getCompanyIdFromAuthenticatedRequest(request)
+    const companyScope = resolveCompanyId(request, companyIdFromQuery)
+    if (!companyScope.ok) return companyScope.response
+    const companyId = companyScope.companyId
 
     if (!id) {
       return NextResponse.json(
@@ -388,7 +416,9 @@ export async function DELETE(request: NextRequest) {
     const id = normalizeId(searchParams.get('id'))
     const all = searchParams.get('all') === 'true'
     const companyIdFromQuery = normalizeId(searchParams.get('companyId'))
-    const companyId = companyIdFromQuery || getCompanyIdFromAuthenticatedRequest(request)
+    const companyScope = resolveCompanyId(request, companyIdFromQuery)
+    if (!companyScope.ok) return companyScope.response
+    const companyId = companyScope.companyId
 
     const denied = await ensureWriteAccess(request, companyId)
     if (denied) return denied

@@ -10,7 +10,6 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Edit, Trash2, Package } from 'lucide-react'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 interface SalesItem {
   id: string
@@ -43,7 +42,6 @@ interface ProductOption {
 }
 
 export default function SalesItemMasterPage() {
-  const [companyId, setCompanyId] = useState('')
   const [salesItems, setSalesItems] = useState<SalesItem[]>([])
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
@@ -63,13 +61,13 @@ export default function SalesItemMasterPage() {
 
   const [products, setProducts] = useState<ProductOption[]>([])
   const gstRates = ['5', '12', '18', '28']
-  const fetchProducts = useCallback(async (targetCompanyId = companyId) => {
-    if (!targetCompanyId) return
+  const fetchProducts = useCallback(async () => {
     try {
-      const response = await fetch(`/api/products?companyId=${encodeURIComponent(targetCompanyId)}`)
+      const response = await fetch('/api/products')
       if (response.ok) {
-        const data = await response.json()
-        setProducts(data)
+        const data = await response.json().catch(() => ({}))
+        const rows = Array.isArray(data?.products) ? data.products : Array.isArray(data) ? data : []
+        setProducts(rows)
       } else {
         setProducts([])
       }
@@ -77,16 +75,11 @@ export default function SalesItemMasterPage() {
       console.error('Error fetching products:', error)
       setProducts([])
     }
-  }, [companyId])
+  }, [])
 
-  const fetchSalesItems = useCallback(async (targetCompanyId = companyId) => {
-    if (!targetCompanyId) {
-      setLoading(false)
-      return
-    }
-
+  const fetchSalesItems = useCallback(async () => {
     try {
-      const response = await fetch(`/api/sales-item-masters?companyId=${encodeURIComponent(targetCompanyId)}`)
+      const response = await fetch('/api/sales-item-masters')
       if (response.ok) {
         const data = await response.json()
         setSalesItems(data)
@@ -99,21 +92,10 @@ export default function SalesItemMasterPage() {
     } finally {
       setLoading(false)
     }
-  }, [companyId])
+  }, [])
 
   useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
-      if (!resolvedCompanyId) {
-        setErrorMessage('Failed to resolve active company. Please re-login.')
-        setLoading(false)
-        return
-      }
-
-      setCompanyId(resolvedCompanyId)
-      stripCompanyParamsFromUrl()
-      await Promise.all([fetchSalesItems(resolvedCompanyId), fetchProducts(resolvedCompanyId)])
-    })()
+    void Promise.all([fetchSalesItems(), fetchProducts()])
   }, [fetchProducts, fetchSalesItems])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -123,15 +105,10 @@ export default function SalesItemMasterPage() {
       alert('Product selection and Sales Item Name are required')
       return
     }
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
-
     try {
       const url = editingSalesItem 
-        ? `/api/sales-item-masters?id=${editingSalesItem.id}&companyId=${companyId}`
-        : `/api/sales-item-masters?companyId=${companyId}`
+        ? `/api/sales-item-masters?id=${editingSalesItem.id}`
+        : `/api/sales-item-masters`
       
       const method = editingSalesItem ? 'PUT' : 'POST'
       
@@ -142,7 +119,6 @@ export default function SalesItemMasterPage() {
         },
         body: JSON.stringify({
           ...formData,
-          companyId,
           gstRate: formData.gstRate ? parseFloat(formData.gstRate) : null,
           sellingPrice: formData.sellingPrice ? parseFloat(formData.sellingPrice) : null,
         }),
@@ -178,13 +154,9 @@ export default function SalesItemMasterPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this sales item? This may affect existing transactions.')) return
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
 
     try {
-      const response = await fetch(`/api/sales-item-masters?id=${id}&companyId=${companyId}`, {
+      const response = await fetch(`/api/sales-item-masters?id=${id}`, {
         method: 'DELETE',
       })
 
@@ -224,7 +196,7 @@ export default function SalesItemMasterPage() {
   }
 
   return (
-    <DashboardLayout companyId={companyId}>
+    <DashboardLayout companyId="">
       <div className="p-6">
         <div className="max-w-6xl mx-auto">
           {errorMessage && (

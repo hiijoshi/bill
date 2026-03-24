@@ -10,7 +10,6 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Edit, Trash2, Package } from 'lucide-react'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 interface Product {
   id: string
@@ -29,7 +28,6 @@ interface Unit {
 }
 
 export default function PurchaseItemMasterPage() {
-  const [companyId, setCompanyId] = useState('')
   const [products, setProducts] = useState<Product[]>([])
   const [units, setUnits] = useState<Unit[]>([])
   const [loading, setLoading] = useState(true)
@@ -42,13 +40,13 @@ export default function PurchaseItemMasterPage() {
     name: '',
     unit: ''
   })
-  const fetchUnits = useCallback(async (targetCompanyId = companyId) => {
-    if (!targetCompanyId) return
+  const fetchUnits = useCallback(async () => {
     try {
-      const response = await fetch(`/api/units?companyId=${encodeURIComponent(targetCompanyId)}`)
+      const response = await fetch('/api/units')
       if (response.ok) {
-        const data = await response.json()
-        setUnits(data)
+        const data = await response.json().catch(() => ({}))
+        const rows = Array.isArray(data?.units) ? data.units : Array.isArray(data) ? data : []
+        setUnits(rows)
       } else {
         setUnits([])
       }
@@ -56,19 +54,15 @@ export default function PurchaseItemMasterPage() {
       console.error('Error fetching units:', error)
       setUnits([])
     }
-  }, [companyId])
+  }, [])
 
-  const fetchProducts = useCallback(async (targetCompanyId = companyId) => {
-    if (!targetCompanyId) {
-      setLoading(false)
-      return
-    }
-
+  const fetchProducts = useCallback(async () => {
     try {
-      const response = await fetch(`/api/products?companyId=${encodeURIComponent(targetCompanyId)}`)
+      const response = await fetch('/api/products')
       if (response.ok) {
-        const data = await response.json()
-        setProducts(data)
+        const data = await response.json().catch(() => ({}))
+        const rows = Array.isArray(data?.products) ? data.products : Array.isArray(data) ? data : []
+        setProducts(rows)
       } else {
         setProducts([])
       }
@@ -78,21 +72,10 @@ export default function PurchaseItemMasterPage() {
     } finally {
       setLoading(false)
     }
-  }, [companyId])
+  }, [])
 
   useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
-      if (!resolvedCompanyId) {
-        setErrorMessage('Failed to resolve active company. Please re-login.')
-        setLoading(false)
-        return
-      }
-
-      setCompanyId(resolvedCompanyId)
-      stripCompanyParamsFromUrl()
-      await Promise.all([fetchProducts(resolvedCompanyId), fetchUnits(resolvedCompanyId)])
-    })()
+    void Promise.all([fetchProducts(), fetchUnits()])
   }, [fetchProducts, fetchUnits])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -102,15 +85,10 @@ export default function PurchaseItemMasterPage() {
       alert('Product name and unit are required')
       return
     }
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
-
     try {
       const url = editingProduct 
-        ? `/api/products?id=${editingProduct.id}&companyId=${companyId}`
-        : `/api/products?companyId=${companyId}`
+        ? `/api/products?id=${editingProduct.id}`
+        : `/api/products`
       
       const method = editingProduct ? 'PUT' : 'POST'
       
@@ -147,13 +125,9 @@ export default function PurchaseItemMasterPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this product? This may affect existing transactions.')) return
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
 
     try {
-      const response = await fetch(`/api/products?id=${id}&companyId=${companyId}`, {
+      const response = await fetch(`/api/products?id=${id}`, {
         method: 'DELETE',
       })
 
@@ -185,7 +159,7 @@ export default function PurchaseItemMasterPage() {
   }
 
   return (
-    <DashboardLayout companyId={companyId}>
+    <DashboardLayout companyId="">
       <div className="p-6">
         <div className="max-w-6xl mx-auto">
           {errorMessage && (

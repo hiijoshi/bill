@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Edit, Trash2, Truck } from 'lucide-react'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { getCompanyIdFromSearch } from '@/lib/company-context'
 
 interface Supplier {
   id: string
@@ -96,14 +96,13 @@ export default function SupplierMasterPage() {
 
   useEffect(() => {
     ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      const resolvedCompanyId = getCompanyIdFromSearch(window.location.search)
       if (!resolvedCompanyId) {
         setLoading(false)
-        setMessage({ type: 'error', text: 'Failed to resolve active company. Please re-login.' })
+        setMessage({ type: 'error', text: 'Company not selected. Please select company once.' })
         return
       }
       setCompanyId(resolvedCompanyId)
-      stripCompanyParamsFromUrl()
       const permission = await fetchSupplierPermissions(resolvedCompanyId)
       if (!permission.canRead) {
         setLoading(false)

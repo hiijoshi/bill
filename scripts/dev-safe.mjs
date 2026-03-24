@@ -126,11 +126,19 @@ async function run() {
   await fs.mkdir(nextDir, { recursive: true })
   await fs.writeFile(engineStateFile, engine, 'utf8')
 
-  const args = ['dev', engine === 'turbopack' ? '--turbopack' : '--webpack', ...process.argv.slice(2)]
+  const extraArgs = process.argv.slice(2)
+  const hasHostnameFlag = extraArgs.includes('--hostname') || extraArgs.includes('-H')
+  const hostnameArgs = hasHostnameFlag ? [] : ['--hostname', '127.0.0.1']
+  const args = ['dev', engine === 'turbopack' ? '--turbopack' : '--webpack', ...hostnameArgs, ...extraArgs]
   const child = spawn(nextBin, args, {
     cwd: projectRoot,
     stdio: 'inherit',
-    env: process.env
+    env: {
+      ...process.env,
+      // Avoid EMFILE "too many open files" watcher crashes in constrained environments.
+      WATCHPACK_POLLING: process.env.WATCHPACK_POLLING || 'true',
+      WATCHPACK_POLLING_INTERVAL: process.env.WATCHPACK_POLLING_INTERVAL || '1000'
+    }
   })
 
   child.on('exit', (code, signal) => {

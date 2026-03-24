@@ -123,7 +123,7 @@ export default function SpecialPurchaseEntryPage() {
 
       const productsData = await productsRes.json().catch(() => [])
       const suppliersData = await suppliersRes.json().catch(() => [])
-      const unitsData = await unitsRes.json().catch(() => [])
+      const unitsPayload = await unitsRes.json().catch(() => ({}))
       if (Array.isArray(productsData)) {
         setProducts(productsData)
         const rememberedDefault = getDefaultPurchaseProductId(companyId)
@@ -139,6 +139,11 @@ export default function SpecialPurchaseEntryPage() {
         setProducts([])
       }
       setSuppliers(Array.isArray(suppliersData) ? suppliersData : [])
+      const unitsData = Array.isArray(unitsPayload)
+        ? unitsPayload
+        : Array.isArray((unitsPayload as { units?: unknown })?.units)
+          ? (unitsPayload as { units: UserUnit[] }).units
+          : []
       if (Array.isArray(unitsData)) {
         setUserUnits(unitsData)
         const defaultUnit = unitsData.find((unit: UserUnit) => unit.symbol === 'qt') || unitsData[0]

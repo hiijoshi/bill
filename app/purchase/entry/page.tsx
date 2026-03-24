@@ -164,7 +164,12 @@ export default function PurchaseEntryPage() {
       setLastBillNumber(lastBillNum)
       setBillNumber((lastBillNum + 1).toString())
 
-      const unitsData = unitsRes.ok ? await unitsRes.json() : []
+      const unitsPayload = unitsRes.ok ? await unitsRes.json().catch(() => ({})) : []
+      const unitsData = Array.isArray(unitsPayload)
+        ? unitsPayload
+        : Array.isArray(unitsPayload?.units)
+          ? unitsPayload.units
+          : []
       if (Array.isArray(unitsData)) {
         setUserUnits(unitsData)
         const defaultUnit = unitsData.find((unit: UserUnit) => unit.symbol === 'qt') || unitsData[0]

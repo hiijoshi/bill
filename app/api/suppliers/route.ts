@@ -12,6 +12,35 @@ function normalizeCompanyId(raw: string | null): string | null {
   return value
 }
 
+function readCompanyIdFromAuth(request: NextRequest): string | null {
+  const req = request as NextRequest & {
+    user?: { companyId?: string | null; defaultCompanyId?: string | null }
+    auth?: { companyId?: string | null; defaultCompanyId?: string | null }
+  }
+  const candidates = [
+    req.user?.companyId,
+    req.user?.defaultCompanyId,
+    req.auth?.companyId,
+    req.auth?.defaultCompanyId,
+    request.headers.get('x-auth-company-id'),
+    request.headers.get('x-company-id')
+  ]
+  for (const raw of candidates) {
+    if (typeof raw !== 'string') continue
+    const value = raw.trim()
+    if (value && value !== 'null' && value !== 'undefined') return value
+  }
+  return null
+}
+
+function getCompanyIdFromAuthenticatedRequest(request: NextRequest): string {
+  const companyId = readCompanyIdFromAuth(request)
+  if (!companyId) {
+    throw new Error('No company assigned to this user')
+  }
+  return companyId
+}
+
 const postSchema = z.object({
   companyId: z.string().trim().min(1).optional(),
   name: z.string().trim().min(1).optional(),
@@ -28,11 +57,7 @@ const putSchema = z.object({
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const companyId = normalizeCompanyId(searchParams.get('companyId'))
-
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
-    }
+    const companyId = normalizeCompanyId(searchParams.get('companyId')) || getCompanyIdFromAuthenticatedRequest(request)
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
@@ -96,7 +121,9 @@ export async function POST(request: NextRequest) {
     if (!parsed.ok) return parsed.response
 
     const { searchParams } = new URL(request.url)
-    const companyId = normalizeCompanyId(searchParams.get('companyId') || parsed.data.companyId || null)
+    const companyId =
+      normalizeCompanyId(searchParams.get('companyId') || parsed.data.companyId || null) ||
+      getCompanyIdFromAuthenticatedRequest(request)
     const name = cleanString(parsed.data.name)
     const address = cleanString(parsed.data.address)
     const phone1 = normalizeTenDigitPhone(parsed.data.phone1)
@@ -106,9 +133,6 @@ export async function POST(request: NextRequest) {
     const accountNo = null
     const gstNumber = null
 
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID and name are required' }, { status: 400 })
-    }
     if (parsed.data.phone1 !== undefined && parsed.data.phone1 !== null && !phone1) {
       return NextResponse.json({ error: 'Primary phone must be exactly 10 digits' }, { status: 400 })
     }
@@ -158,9 +182,9 @@ export async function PUT(request: NextRequest) {
 
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
-    const companyId = normalizeCompanyId(searchParams.get('companyId'))
+    const companyId = normalizeCompanyId(searchParams.get('companyId')) || getCompanyIdFromAuthenticatedRequest(request)
 
-    if (!id || !companyId) {
+    if (!id) {
       return NextResponse.json({ error: 'Supplier ID and Company ID are required' }, { status: 400 })
     }
 
@@ -224,12 +248,8 @@ export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
-    const companyId = normalizeCompanyId(searchParams.get('companyId'))
+    const companyId = normalizeCompanyId(searchParams.get('companyId')) || getCompanyIdFromAuthenticatedRequest(request)
     const all = searchParams.get('all') === 'true'
-
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
-    }
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied

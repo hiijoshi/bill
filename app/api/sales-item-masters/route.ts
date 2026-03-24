@@ -4,7 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 
 const postSchema = z.object({
-  companyId: z.string().trim().min(1),
+  companyId: z.string().trim().min(1).optional(),
   productId: z.string().trim().min(1),
   salesItemName: z.string().trim().min(1),
   hsnCode: z.string().optional().nullable(),
@@ -24,14 +24,39 @@ const putSchema = z.object({
   isActive: z.boolean().optional()
 }).strict()
 
+function readCompanyIdFromAuth(request: NextRequest): string | null {
+  const req = request as NextRequest & {
+    user?: { companyId?: string | null; defaultCompanyId?: string | null }
+    auth?: { companyId?: string | null; defaultCompanyId?: string | null }
+  }
+  const candidates = [
+    req.user?.companyId,
+    req.user?.defaultCompanyId,
+    req.auth?.companyId,
+    req.auth?.defaultCompanyId,
+    request.headers.get('x-auth-company-id'),
+    request.headers.get('x-company-id')
+  ]
+  for (const raw of candidates) {
+    if (typeof raw !== 'string') continue
+    const value = raw.trim()
+    if (value && value !== 'null' && value !== 'undefined') return value
+  }
+  return null
+}
+
+function getCompanyIdFromAuthenticatedRequest(request: NextRequest): string {
+  const companyId = readCompanyIdFromAuth(request)
+  if (!companyId) {
+    throw new Error('No company assigned to this user')
+  }
+  return companyId
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const companyId = searchParams.get('companyId')
-
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
-    }
+    const companyId = searchParams.get('companyId') || getCompanyIdFromAuthenticatedRequest(request)
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
@@ -58,11 +83,16 @@ export async function POST(request: NextRequest) {
     const parsed = await parseJsonWithSchema(request, postSchema)
     if (!parsed.ok) return parsed.response
 
-    const denied = await ensureCompanyAccess(request, parsed.data.companyId)
+    const companyId =
+      new URL(request.url).searchParams.get('companyId') ||
+      parsed.data.companyId ||
+      getCompanyIdFromAuthenticatedRequest(request)
+
+    const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
     const product = await prisma.product.findFirst({
-      where: { id: parsed.data.productId, companyId: parsed.data.companyId },
+      where: { id: parsed.data.productId, companyId },
       include: { unit: true }
     })
 
@@ -72,7 +102,7 @@ export async function POST(request: NextRequest) {
 
     const existing = await prisma.salesItemMaster.findFirst({
       where: {
-        companyId: parsed.data.companyId,
+        companyId,
         productId: parsed.data.productId
       }
     })
@@ -83,7 +113,7 @@ export async function POST(request: NextRequest) {
 
     const created = await prisma.salesItemMaster.create({
       data: {
-        companyId: parsed.data.companyId,
+        companyId,
         productId: parsed.data.productId,
         salesItemName: parsed.data.salesItemName.trim(),
         hsnCode: parsed.data.hsnCode || null,
@@ -113,9 +143,9 @@ export async function PUT(request: NextRequest) {
 
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
-    const companyId = searchParams.get('companyId')
+    const companyId = searchParams.get('companyId') || getCompanyIdFromAuthenticatedRequest(request)
 
-    if (!id || !companyId) {
+    if (!id) {
       return NextResponse.json({ error: 'Sales Item Master ID and Company ID are required' }, { status: 400 })
     }
 
@@ -184,9 +214,9 @@ export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
-    const companyId = searchParams.get('companyId')
+    const companyId = searchParams.get('companyId') || getCompanyIdFromAuthenticatedRequest(request)
 
-    if (!id || !companyId) {
+    if (!id) {
       return NextResponse.json({ error: 'Sales Item Master ID and Company ID are required' }, { status: 400 })
     }
 

@@ -9,7 +9,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Edit, Trash2, CreditCard } from 'lucide-react'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 interface PaymentMode {
   id: string
@@ -22,7 +21,6 @@ interface PaymentMode {
 }
 
 export default function PaymentModeMasterPage() {
-  const [companyId, setCompanyId] = useState('')
   const [paymentModes, setPaymentModes] = useState<PaymentMode[]>([])
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
@@ -36,14 +34,9 @@ export default function PaymentModeMasterPage() {
     description: '',
     isActive: true
   })
-  const fetchPaymentModes = useCallback(async (targetCompanyId = companyId) => {
-    if (!targetCompanyId) {
-      setLoading(false)
-      return
-    }
-
+  const fetchPaymentModes = useCallback(async () => {
     try {
-      const response = await fetch(`/api/payment-modes?companyId=${encodeURIComponent(targetCompanyId)}`)
+      const response = await fetch('/api/payment-modes')
       if (response.ok) {
         const data = await response.json()
         setPaymentModes(data)
@@ -56,21 +49,10 @@ export default function PaymentModeMasterPage() {
     } finally {
       setLoading(false)
     }
-  }, [companyId])
+  }, [])
 
   useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = await resolveCompanyId(window.location.search)
-      if (!resolvedCompanyId) {
-        setErrorMessage('Failed to resolve active company. Please re-login.')
-        setLoading(false)
-        return
-      }
-
-      setCompanyId(resolvedCompanyId)
-      stripCompanyParamsFromUrl()
-      await fetchPaymentModes(resolvedCompanyId)
-    })()
+    void fetchPaymentModes()
   }, [fetchPaymentModes])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -80,15 +62,10 @@ export default function PaymentModeMasterPage() {
       alert('Payment mode name and code are required')
       return
     }
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
-
     try {
       const url = editingPaymentMode 
-        ? `/api/payment-modes?id=${editingPaymentMode.id}&companyId=${companyId}`
-        : `/api/payment-modes?companyId=${companyId}`
+        ? `/api/payment-modes?id=${editingPaymentMode.id}`
+        : `/api/payment-modes`
       
       const method = editingPaymentMode ? 'PUT' : 'POST'
       
@@ -127,13 +104,9 @@ export default function PaymentModeMasterPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this payment mode? This may affect existing transactions.')) return
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
 
     try {
-      const response = await fetch(`/api/payment-modes?id=${id}&companyId=${companyId}`, {
+      const response = await fetch(`/api/payment-modes?id=${id}`, {
         method: 'DELETE',
       })
 
@@ -152,11 +125,7 @@ export default function PaymentModeMasterPage() {
 
   const handleDeleteAll = async () => {
     if (!confirm('Delete all payment modes for this company?')) return
-    if (!companyId) {
-      alert('Active company not found. Please re-login.')
-      return
-    }
-    const response = await fetch(`/api/payment-modes?companyId=${companyId}&all=true`, { method: 'DELETE' })
+    const response = await fetch('/api/payment-modes?all=true', { method: 'DELETE' })
     const result = await response.json().catch(() => ({}))
     alert(result.message || result.error || 'Operation completed')
     if (response.ok) fetchPaymentModes()
@@ -191,7 +160,7 @@ export default function PaymentModeMasterPage() {
   }
 
   return (
-    <DashboardLayout companyId={companyId}>
+    <DashboardLayout companyId="">
       <div className="p-6">
         <div className="max-w-6xl mx-auto">
           {errorMessage && (
