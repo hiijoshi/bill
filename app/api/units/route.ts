@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { UNIVERSAL_UNITS, toNumber } from '@/lib/unit-conversion'
 import { ensureCompanyAccess, normalizeId, requireRoles } from '@/lib/api-security'
-import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
 
 function setCORSHeaders() {
   const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000']
@@ -15,37 +14,85 @@ function setCORSHeaders() {
   }
 }
 
+function clean(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const v = value.trim()
+  return v.length > 0 ? v : null
+}
+
+function readCompanyIdFromAuth(request: NextRequest): string | null {
+  const req = request as NextRequest & {
+    user?: {
+      companyId?: string | null
+      company_id?: string | null
+      defaultCompanyId?: string | null
+      default_company_id?: string | null
+    }
+    auth?: {
+      companyId?: string | null
+      company_id?: string | null
+      defaultCompanyId?: string | null
+      default_company_id?: string | null
+    }
+  }
+
+  const candidates = [
+    req.user?.companyId,
+    req.user?.company_id,
+    req.user?.defaultCompanyId,
+    req.user?.default_company_id,
+    req.auth?.companyId,
+    req.auth?.company_id,
+    req.auth?.defaultCompanyId,
+    req.auth?.default_company_id,
+    request.headers.get('x-auth-company-id'),
+    request.headers.get('x-company-id')
+  ]
+
+  for (const raw of candidates) {
+    if (typeof raw !== 'string') continue
+    const value = raw.trim()
+    if (value && value !== 'null' && value !== 'undefined') {
+      return value
+    }
+  }
+
+  return null
+}
+
+function getCompanyIdFromAuthenticatedRequest(request: NextRequest): string {
+  const companyId = readCompanyIdFromAuth(request)
+  if (!companyId) {
+    throw new Error('No company assigned to this user')
+  }
+  return companyId
+}
+
 function isUniversalSymbol(symbol: string): boolean {
   return symbol === UNIVERSAL_UNITS.KG || symbol === UNIVERSAL_UNITS.QUINTAL
 }
 
-async function ensureSupabaseCompanyAccess(request: NextRequest, companyId: string) {
-  const supabaseSession = await resolveSupabaseAppSession(request, companyId)
-  if (!supabaseSession) return null
-
-  const scopedCompany = supabaseSession.companies.find((company) => company.id === companyId) || null
-  if (!scopedCompany) {
-    return {
-      handled: true as const,
-      response: supabaseSession.applyCookies(
-        NextResponse.json({ error: 'Company not found or access denied' }, { status: 403, headers: setCORSHeaders() })
-      )
-    }
+async function ensureWriteAccess(request: NextRequest, companyId: string) {
+  const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin'])
+  if (!authResult.ok) {
+    return authResult.response
   }
 
-  if (scopedCompany.locked) {
-    return {
-      handled: true as const,
-      response: supabaseSession.applyCookies(
-        NextResponse.json({ error: 'Company is locked' }, { status: 403, headers: setCORSHeaders() })
-      )
-    }
+  const scopeGuard = await ensureCompanyAccess(request, companyId)
+  if (scopeGuard) {
+    return scopeGuard
   }
 
-  return {
-    handled: true as const,
-    response: null
+  return null
+}
+
+async function ensureReadAccess(request: NextRequest, companyId: string) {
+  const scopeGuard = await ensureCompanyAccess(request, companyId)
+  if (scopeGuard) {
+    return scopeGuard
   }
+
+  return null
 }
 
 async function ensureUniversalUnits(companyId: string) {
@@ -98,14 +145,13 @@ async function ensureUniversalUnits(companyId: string) {
 
 export async function GET(request: NextRequest) {
   try {
-    const companyId = normalizeId(new URL(request.url).searchParams.get('companyId'))
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID required' }, { status: 400, headers: setCORSHeaders() })
-    }
+    const searchParams = new URL(request.url).searchParams
+    const companyIdFromQuery = normalizeId(searchParams.get('companyId'))
+    const companyId = companyIdFromQuery || getCompanyIdFromAuthenticatedRequest(request)
 
-    // TEMP: skip supabase check
-      const scopeGuard = await ensureCompanyAccess(request, companyId)
-      if (scopeGuard) return scopeGuard
+    const denied = await ensureReadAccess(request, companyId)
+    if (denied) return denied
+
     await ensureUniversalUnits(companyId)
 
     const units = await prisma.unit.findMany({
@@ -113,38 +159,38 @@ export async function GET(request: NextRequest) {
       orderBy: [{ isUniversal: 'desc' }, { name: 'asc' }]
     })
 
-    return NextResponse.json(units, { headers: setCORSHeaders() })
-  } catch {
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500, headers: setCORSHeaders() })
+    return NextResponse.json(
+      {
+        units,
+        companyId
+      },
+      { headers: setCORSHeaders() }
+    )
+  } catch (error) {
+    console.error('GET /api/units failed', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500, headers: setCORSHeaders() }
+    )
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const companyId = normalizeId(new URL(request.url).searchParams.get('companyId'))
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID required' }, { status: 400, headers: setCORSHeaders() })
-    }
+    const searchParams = new URL(request.url).searchParams
+    const companyIdFromQuery = normalizeId(searchParams.get('companyId'))
+    const companyId = companyIdFromQuery || getCompanyIdFromAuthenticatedRequest(request)
 
-    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
-    if (supabaseGuard?.response) return supabaseGuard.response
-
-    if (!supabaseGuard) {
-      const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin'])
-      if (!authResult.ok) return authResult.response
-    }
-
-    const scopeGuard = await ensureCompanyAccess(request, companyId)
-    if (scopeGuard && !supabaseGuard) return scopeGuard
+    const denied = await ensureWriteAccess(request, companyId)
+    if (denied) return denied
 
     const body = await request.json().catch(() => ({}))
 
     const name = String((body as { name?: unknown }).name || '').trim()
-    const symbolNormalized = String((body as { symbol?: unknown }).symbol || '').trim().toLowerCase()
-    const description =
-      typeof (body as { description?: unknown }).description === 'string'
-        ? (body as { description?: string }).description
-        : null
+    const symbolNormalized = String((body as { symbol?: unknown }).symbol || '')
+      .trim()
+      .toLowerCase()
+    const description = clean((body as { description?: unknown }).description)
 
     const isUniversal = isUniversalSymbol(symbolNormalized)
     const kgEquivalent = isUniversal
@@ -154,11 +200,17 @@ export async function POST(request: NextRequest) {
       : toNumber((body as { kgEquivalent?: unknown }).kgEquivalent, 0)
 
     if (!name || !symbolNormalized) {
-      return NextResponse.json({ error: 'Unit name and symbol are required' }, { status: 400, headers: setCORSHeaders() })
+      return NextResponse.json(
+        { error: 'Unit name and symbol are required' },
+        { status: 400, headers: setCORSHeaders() }
+      )
     }
 
     if (kgEquivalent <= 0) {
-      return NextResponse.json({ error: 'KG equivalent must be greater than zero' }, { status: 400, headers: setCORSHeaders() })
+      return NextResponse.json(
+        { error: 'KG equivalent must be greater than zero' },
+        { status: 400, headers: setCORSHeaders() }
+      )
     }
 
     await ensureUniversalUnits(companyId)
@@ -178,7 +230,10 @@ export async function POST(request: NextRequest) {
     })
 
     if (existingUnit) {
-      return NextResponse.json({ error: 'Unit with this symbol already exists' }, { status: 400, headers: setCORSHeaders() })
+      return NextResponse.json(
+        { error: 'Unit with this symbol already exists' },
+        { status: 400, headers: setCORSHeaders() }
+      )
     }
 
     const unit = await prisma.unit.create({
@@ -192,9 +247,20 @@ export async function POST(request: NextRequest) {
       }
     })
 
-    return NextResponse.json(unit, { headers: setCORSHeaders() })
-  } catch {
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500, headers: setCORSHeaders() })
+    return NextResponse.json(
+      {
+        success: true,
+        companyId,
+        unit
+      },
+      { headers: setCORSHeaders() }
+    )
+  } catch (error) {
+    console.error('POST /api/units failed', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500, headers: setCORSHeaders() }
+    )
   }
 }
 
@@ -202,33 +268,25 @@ export async function PUT(request: NextRequest) {
   try {
     const searchParams = new URL(request.url).searchParams
     const id = normalizeId(searchParams.get('id'))
-    const companyId = normalizeId(searchParams.get('companyId'))
+    const companyIdFromQuery = normalizeId(searchParams.get('companyId'))
+    const companyId = companyIdFromQuery || getCompanyIdFromAuthenticatedRequest(request)
 
     if (!id) {
-      return NextResponse.json({ error: 'Unit ID required' }, { status: 400, headers: setCORSHeaders() })
-    }
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID required' }, { status: 400, headers: setCORSHeaders() })
-    }
-
-    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
-    if (supabaseGuard?.response) return supabaseGuard.response
-
-    if (!supabaseGuard) {
-      const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin'])
-      if (!authResult.ok) return authResult.response
+      return NextResponse.json(
+        { error: 'Unit ID required' },
+        { status: 400, headers: setCORSHeaders() }
+      )
     }
 
-    const scopeGuard = await ensureCompanyAccess(request, companyId)
-    if (scopeGuard && !supabaseGuard) return scopeGuard
+    const denied = await ensureWriteAccess(request, companyId)
+    if (denied) return denied
 
     const body = await request.json().catch(() => ({}))
     const name = String((body as { name?: unknown }).name || '').trim()
-    const symbolNormalized = String((body as { symbol?: unknown }).symbol || '').trim().toLowerCase()
-    const description =
-      typeof (body as { description?: unknown }).description === 'string'
-        ? (body as { description?: string }).description
-        : null
+    const symbolNormalized = String((body as { symbol?: unknown }).symbol || '')
+      .trim()
+      .toLowerCase()
+    const description = clean((body as { description?: unknown }).description)
 
     const isUniversal = isUniversalSymbol(symbolNormalized)
     const kgEquivalent = isUniversal
@@ -238,10 +296,17 @@ export async function PUT(request: NextRequest) {
       : toNumber((body as { kgEquivalent?: unknown }).kgEquivalent, 0)
 
     if (!name || !symbolNormalized) {
-      return NextResponse.json({ error: 'Unit name and symbol are required' }, { status: 400, headers: setCORSHeaders() })
+      return NextResponse.json(
+        { error: 'Unit name and symbol are required' },
+        { status: 400, headers: setCORSHeaders() }
+      )
     }
+
     if (kgEquivalent <= 0) {
-      return NextResponse.json({ error: 'KG equivalent must be greater than zero' }, { status: 400, headers: setCORSHeaders() })
+      return NextResponse.json(
+        { error: 'KG equivalent must be greater than zero' },
+        { status: 400, headers: setCORSHeaders() }
+      )
     }
 
     await ensureUniversalUnits(companyId)
@@ -254,11 +319,17 @@ export async function PUT(request: NextRequest) {
     })
 
     if (!currentUnit) {
-      return NextResponse.json({ error: 'Unit not found' }, { status: 404, headers: setCORSHeaders() })
+      return NextResponse.json(
+        { error: 'Unit not found' },
+        { status: 404, headers: setCORSHeaders() }
+      )
     }
 
     if (currentUnit.isUniversal) {
-      return NextResponse.json({ error: 'Universal units cannot be edited' }, { status: 403, headers: setCORSHeaders() })
+      return NextResponse.json(
+        { error: 'Universal units cannot be edited' },
+        { status: 403, headers: setCORSHeaders() }
+      )
     }
 
     if (isUniversalSymbol(symbolNormalized)) {
@@ -277,7 +348,10 @@ export async function PUT(request: NextRequest) {
     })
 
     if (existingUnit) {
-      return NextResponse.json({ error: 'Unit with this symbol already exists' }, { status: 400, headers: setCORSHeaders() })
+      return NextResponse.json(
+        { error: 'Unit with this symbol already exists' },
+        { status: 400, headers: setCORSHeaders() }
+      )
     }
 
     const unit = await prisma.unit.update({
@@ -291,9 +365,20 @@ export async function PUT(request: NextRequest) {
       }
     })
 
-    return NextResponse.json(unit, { headers: setCORSHeaders() })
-  } catch {
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500, headers: setCORSHeaders() })
+    return NextResponse.json(
+      {
+        success: true,
+        companyId,
+        unit
+      },
+      { headers: setCORSHeaders() }
+    )
+  } catch (error) {
+    console.error('PUT /api/units failed', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500, headers: setCORSHeaders() }
+    )
   }
 }
 
@@ -302,22 +387,11 @@ export async function DELETE(request: NextRequest) {
     const searchParams = new URL(request.url).searchParams
     const id = normalizeId(searchParams.get('id'))
     const all = searchParams.get('all') === 'true'
-    const companyId = normalizeId(searchParams.get('companyId'))
+    const companyIdFromQuery = normalizeId(searchParams.get('companyId'))
+    const companyId = companyIdFromQuery || getCompanyIdFromAuthenticatedRequest(request)
 
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID required' }, { status: 400, headers: setCORSHeaders() })
-    }
-
-    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
-    if (supabaseGuard?.response) return supabaseGuard.response
-
-    if (!supabaseGuard) {
-      const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin'])
-      if (!authResult.ok) return authResult.response
-    }
-
-    const scopeGuard = await ensureCompanyAccess(request, companyId)
-    if (scopeGuard && !supabaseGuard) return scopeGuard
+    const denied = await ensureWriteAccess(request, companyId)
+    if (denied) return denied
 
     if (all) {
       await ensureUniversalUnits(companyId)
@@ -330,13 +404,21 @@ export async function DELETE(request: NextRequest) {
       })
 
       return NextResponse.json(
-        { success: true, message: `${deleted.count} units deleted successfully`, count: deleted.count },
+        {
+          success: true,
+          companyId,
+          message: `${deleted.count} units deleted successfully`,
+          count: deleted.count
+        },
         { headers: setCORSHeaders() }
       )
     }
 
     if (!id) {
-      return NextResponse.json({ error: 'Unit ID required' }, { status: 400, headers: setCORSHeaders() })
+      return NextResponse.json(
+        { error: 'Unit ID required' },
+        { status: 400, headers: setCORSHeaders() }
+      )
     }
 
     const unit = await prisma.unit.findFirst({
@@ -344,11 +426,17 @@ export async function DELETE(request: NextRequest) {
     })
 
     if (!unit) {
-      return NextResponse.json({ error: 'Unit not found' }, { status: 404, headers: setCORSHeaders() })
+      return NextResponse.json(
+        { error: 'Unit not found' },
+        { status: 404, headers: setCORSHeaders() }
+      )
     }
 
     if (unit.isUniversal) {
-      return NextResponse.json({ error: 'Universal units cannot be deleted' }, { status: 403, headers: setCORSHeaders() })
+      return NextResponse.json(
+        { error: 'Universal units cannot be deleted' },
+        { status: 403, headers: setCORSHeaders() }
+      )
     }
 
     const productCount = await prisma.product.count({
@@ -364,9 +452,16 @@ export async function DELETE(request: NextRequest) {
 
     await prisma.unit.delete({ where: { id } })
 
-    return NextResponse.json({ success: true, message: 'Unit deleted successfully' }, { headers: setCORSHeaders() })
-  } catch {
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500, headers: setCORSHeaders() })
+    return NextResponse.json(
+      { success: true, companyId, message: 'Unit deleted successfully' },
+      { headers: setCORSHeaders() }
+    )
+  } catch (error) {
+    console.error('DELETE /api/units failed', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500, headers: setCORSHeaders() }
+    )
   }
 }
 
