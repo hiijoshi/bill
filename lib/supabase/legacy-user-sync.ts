@@ -124,7 +124,7 @@ async function syncProfileAccessGraph(params: {
       traderId: params.legacyUser.traderId,
       userId: params.legacyUser.userId,   // ✅ FIXED
       full_name: params.legacyUser.name,
-      app_role: role,
+      role,
       login_email: params.loginEmail,
       default_company_id: defaultCompanyId,
       is_active: true
