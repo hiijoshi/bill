@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
-import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
+import { ensureCompanyAccess, parseJsonWithSchema, requireRoles } from '@/lib/api-security'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
-import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
 
 function normalizeCompanyId(raw: string | null): string | null {
   if (!raw) return null
@@ -18,29 +17,22 @@ function clean(value: unknown): string | null {
   return v.length > 0 ? v : null
 }
 
-async function ensureSupabaseCompanyAccess(request: NextRequest, companyId: string) {
-  const supabaseSession = await resolveSupabaseAppSession(request, companyId)
-  if (!supabaseSession) return null
+async function ensureReadAccess(request: NextRequest, companyId: string) {
+  const denied = await ensureCompanyAccess(request, companyId)
+  if (denied) return denied
+  return null
+}
 
-  const scopedCompany = supabaseSession.companies.find((company) => company.id === companyId) || null
-  if (!scopedCompany) {
-    return {
-      handled: true as const,
-      response: NextResponse.json({ error: 'Company not found or access denied' }, { status: 403 })
-    }
+async function ensureWriteAccess(request: NextRequest, companyId: string) {
+  const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin'])
+  if (!authResult.ok) {
+    return authResult.response
   }
 
-  if (scopedCompany.locked) {
-    return {
-      handled: true as const,
-      response: NextResponse.json({ error: 'Company is locked' }, { status: 403 })
-    }
-  }
+  const denied = await ensureCompanyAccess(request, companyId)
+  if (denied) return denied
 
-  return {
-    handled: true as const,
-    response: null
-  }
+  return null
 }
 
 const postSchema = z.object({
@@ -71,11 +63,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
     }
 
-    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
-    if (supabaseGuard?.response) return supabaseGuard.response
-
-    const denied = await ensureCompanyAccess(request, companyId)
-    if (denied && !supabaseGuard) return denied
+    const denied = await ensureReadAccess(request, companyId)
+    if (denied) return denied
 
     const pagination = parsePaginationParams(searchParams, { defaultPageSize: 50, maxPageSize: 200 })
     const where = {
@@ -155,7 +144,11 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(rows)
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
+    console.error('GET /api/products failed', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500 }
+    )
   }
 }
 
@@ -169,9 +162,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
     }
 
-    // TEMP: skip supabase check
-        const denied = await ensureCompanyAccess(request, companyId)
-        if (denied) return denied
+    const denied = await ensureWriteAccess(request, companyId)
+    if (denied) return denied
 
     const name = clean(parsed.data.name)
     const unit = clean(parsed.data.unit)
@@ -217,7 +209,11 @@ export async function POST(request: NextRequest) {
       }
     })
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
+    console.error('POST /api/products failed', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500 }
+    )
   }
 }
 
@@ -233,11 +229,8 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Product ID and Company ID required' }, { status: 400 })
     }
 
-    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
-    if (supabaseGuard?.response) return supabaseGuard.response
-
-    const denied = await ensureCompanyAccess(request, companyId)
-    if (denied && !supabaseGuard) return denied
+    const denied = await ensureWriteAccess(request, companyId)
+    if (denied) return denied
 
     const existingProduct = await prisma.product.findFirst({
       where: { id, companyId },
@@ -285,7 +278,11 @@ export async function PUT(request: NextRequest) {
       }
     })
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
+    console.error('PUT /api/products failed', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500 }
+    )
   }
 }
 
@@ -300,15 +297,16 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
     }
 
-    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
-    if (supabaseGuard?.response) return supabaseGuard.response
-
-    const denied = await ensureCompanyAccess(request, companyId)
-    if (denied && !supabaseGuard) return denied
+    const denied = await ensureWriteAccess(request, companyId)
+    if (denied) return denied
 
     if (all) {
       const result = await prisma.product.deleteMany({ where: { companyId } })
-      return NextResponse.json({ success: true, message: `${result.count} products deleted successfully`, count: result.count })
+      return NextResponse.json({
+        success: true,
+        message: `${result.count} products deleted successfully`,
+        count: result.count
+      })
     }
 
     if (!id) {
@@ -326,6 +324,10 @@ export async function DELETE(request: NextRequest) {
     await prisma.product.delete({ where: { id } })
     return NextResponse.json({ success: true, message: 'Product deleted successfully' })
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
+    console.error('DELETE /api/products failed', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500 }
+    )
   }
 }
