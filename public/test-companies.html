@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Companies API Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 5px; }
+        .error { color: red; }
+        .success { color: green; }
+    </style>
+</head>
+<body>
+    <h1>Companies API Debug Test</h1>
+    <button onclick="testCompaniesAPI()">Test Companies API</button>
+    <button onclick="testTradersAPI()">Test Traders API</button>
+    <button onclick="testBoth()">Test Both APIs</button>
+    <pre id="result"></pre>
+
+    <script>
+        async function testCompaniesAPI() {
+            try {
+                document.getElementById('result').textContent = 'Testing Companies API...';
+                const response = await fetch('/api/companies');
+                const data = await response.json();
+                
+                const result = {
+                    status: response.status,
+                    ok: response.ok,
+                    count: data.length,
+                    data: data
+                };
+                
+                document.getElementById('result').textContent = JSON.stringify(result, null, 2);
+                console.log('Companies API Result:', result);
+            } catch (error) {
+                document.getElementById('result').textContent = 'Error: ' + error.message;
+                console.error('Companies API Error:', error);
+            }
+        }
+        
+        async function testTradersAPI() {
+            try {
+                document.getElementById('result').textContent = 'Testing Traders API...';
+                const response = await fetch('/api/traders');
+                const data = await response.json();
+                
+                const result = {
+                    status: response.status,
+                    ok: response.ok,
+                    count: data.length,
+                    data: data
+                };
+                
+                document.getElementById('result').textContent = JSON.stringify(result, null, 2);
+                console.log('Traders API Result:', result);
+            } catch (error) {
+                document.getElementById('result').textContent = 'Error: ' + error.message;
+                console.error('Traders API Error:', error);
+            }
+        }
+        
+        async function testBoth() {
+            try {
+                document.getElementById('result').textContent = 'Testing Both APIs...';
+                
+                const [companiesResponse, tradersResponse] = await Promise.all([
+                    fetch('/api/companies'),
+                    fetch('/api/traders')
+                ]);
+                
+                const [companiesData, tradersData] = await Promise.all([
+                    companiesResponse.json(),
+                    tradersResponse.json()
+                ]);
+                
+                const result = {
+                    companies: {
+                        status: companiesResponse.status,
+                        ok: companiesResponse.ok,
+                        count: companiesData.length,
+                        data: companiesData
+                    },
+                    traders: {
+                        status: tradersResponse.status,
+                        ok: tradersResponse.ok,
+                        count: tradersData.length,
+                        data: tradersData
+                    }
+                };
+                
+                document.getElementById('result').textContent = JSON.stringify(result, null, 2);
+                console.log('Both APIs Result:', result);
+            } catch (error) {
+                document.getElementById('result').textContent = 'Error: ' + error.message;
+                console.error('Both APIs Error:', error);
+            }
+        }
+        
+        // Auto-test on page load
+        window.onload = function() {
+            console.log('Page loaded, auto-testing APIs...');
+            testBoth();
+        };
+    </script>
+</body>
+</html>

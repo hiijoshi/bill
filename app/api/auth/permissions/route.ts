@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { PERMISSION_MODULES, type PermissionModule } from '@/lib/permissions'
+import { PERMISSION_MODULES } from '@/lib/permissions'
 import { ensureCompanyAccess, parseBooleanParam, requireAuthContext } from '@/lib/api-security'
 
 type PermissionRow = {
-  module: PermissionModule
+  module: string
   canRead: boolean
   canWrite: boolean
 }
 
-// Builds default rows from the compile-time constant enum — no user input involved (not CWE-94)
 function buildDefaultRows(): PermissionRow[] {
   return PERMISSION_MODULES.map((module) => ({
     module,

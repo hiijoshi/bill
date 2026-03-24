@@ -122,7 +122,7 @@ async function syncProfileAccessGraph(params: {
       id: params.authUserId,
       legacy_user_id: params.legacyUser.id,
       trader_id: params.legacyUser.traderId,
-      user_code: params.legacyUser.userId,
+      userId: params.legacyUser.userId,   // ✅ FIXED
       full_name: params.legacyUser.name,
       app_role: role,
       login_email: params.loginEmail,
@@ -252,7 +252,7 @@ export async function ensureSupabaseIdentityForLegacyUser(params: {
   const userMetadata = {
     legacy_user_id: params.legacyUser.id,
     trader_id: params.legacyUser.traderId,
-    user_code: params.legacyUser.userId,
+    userId: params.legacyUser.userId,
     full_name: params.legacyUser.name || '',
     app_role: normalizeAppRole(params.legacyUser.role),
     login_email: loginEmail,

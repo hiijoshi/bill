@@ -98,18 +98,17 @@ export async function POST(request: NextRequest) {
     }
 
     const token = generateToken({
-      userId: user.userId,
-      traderId: user.traderId,
-      name: user.name || 'System Administrator',
-      role: user.role || undefined,
-      dbId: user.id
+    userId: user.userId,
+    traderId: user.traderId,
+    name: user.name || 'System Administrator',
+    role: user.role || undefined,
     }, SUPER_ADMIN_ACCESS_EXPIRES_IN)
+    
     const refreshToken = generateRefreshToken({
-      userId: user.userId,
-      traderId: user.traderId,
-      name: user.name || 'System Administrator',
-      role: user.role || undefined,
-      dbId: user.id
+    userId: user.userId,
+    traderId: user.traderId,
+    name: user.name || 'System Administrator',
+    role: user.role || undefined,
     }, SUPER_ADMIN_REFRESH_EXPIRES_IN)
 
     let response = NextResponse.json({
