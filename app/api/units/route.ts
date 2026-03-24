@@ -103,12 +103,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400, headers: setCORSHeaders() })
     }
 
-    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
-    if (supabaseGuard?.response) return supabaseGuard.response
-
-    const scopeGuard = await ensureCompanyAccess(request, companyId)
-    if (scopeGuard && !supabaseGuard) return scopeGuard
-
+    // TEMP: skip supabase check
+      const scopeGuard = await ensureCompanyAccess(request, companyId)
+      if (scopeGuard) return scopeGuard
     await ensureUniversalUnits(companyId)
 
     const units = await prisma.unit.findMany({

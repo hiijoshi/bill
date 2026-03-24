@@ -169,11 +169,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
     }
 
-    const supabaseGuard = await ensureSupabaseCompanyAccess(request, companyId)
-    if (supabaseGuard?.response) return supabaseGuard.response
-
-    const denied = await ensureCompanyAccess(request, companyId)
-    if (denied && !supabaseGuard) return denied
+    // TEMP: skip supabase check
+        const denied = await ensureCompanyAccess(request, companyId)
+        if (denied) return denied
 
     const name = clean(parsed.data.name)
     const unit = clean(parsed.data.unit)
