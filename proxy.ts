@@ -267,8 +267,10 @@ function resolveLegacyAuthContext(
       traderId: payload.traderId,
       role: normalizeAppRole(String(payload.role || '')),
       companyId: getCookieCompanyId(request, scopeSource) || (payload as { companyId?: string }).companyId || null,
-      userDbId: payload.dbId || null
-    }
+      userDbId:
+  (payload as { userDbId?: string }).userDbId ||
+  (payload as { user_db_id?: string }).user_db_id ||
+  null}
   }
 }
 
