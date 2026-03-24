@@ -55,8 +55,7 @@ function LoginPageContent() {
     e.preventDefault()
     setError('')
     setLoading(true)
-    const controller = new AbortController()
-    const timeoutId = window.setTimeout(() => controller.abort(), 10000)
+  
 
     try {
       clearClientCache()
@@ -68,12 +67,12 @@ function LoginPageContent() {
       }
 
       // Call login API
-      const response = await fetch('/api/auth', {
+      const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        signal: controller.signal,
+       
         body: JSON.stringify({ traderId, userId, password }),
       })
 
@@ -103,13 +102,9 @@ function LoginPageContent() {
       // Redirect to dashboard (multi-company ready)
       router.push('/main/dashboard')
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        setError('Login is taking too long. Please try again.')
-        return
-      }
+      
       setError(error instanceof Error ? error.message : 'Login failed. Please try again.')
     } finally {
-      window.clearTimeout(timeoutId)
       setLoading(false)
     }
   }
