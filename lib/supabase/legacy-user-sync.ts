@@ -118,21 +118,29 @@ async function syncProfileAccessGraph(params: {
   // Upsert on both 'id' and the unique (trader_id, user_code) constraint
   // to avoid duplicate key errors when the same user is synced multiple times.
   const { error: profileError } = await admin.from('profiles').upsert(
-    {
-      id: params.authUserId,
-      legacy_user_id: params.legacyUser.id,
-      traderId: params.legacyUser.traderId,
-      userId: params.legacyUser.userId,   // ✅ FIXED
-      full_name: params.legacyUser.name,
-      role,
-      login_email: params.loginEmail,
-      default_company_id: defaultCompanyId,
-      is_active: true
-    },
-    {
-      onConflict: 'id'
-    }
-  )
+  {
+    id: params.authUserId,
+    legacy_user_id: params.legacyUser.id,
+
+    // required/new columns
+    traderId: params.legacyUser.traderId,
+    userId: params.legacyUser.userId,
+    role,
+    email: params.loginEmail,
+
+    // existing/legacy columns still present in your table
+    full_name: params.legacyUser.name,
+    default_company_id: defaultCompanyId,
+    is_active: true,
+    login_email: params.loginEmail,
+    trader_id: params.legacyUser.traderId,
+    user_code: params.legacyUser.userId,
+    app_role: role
+  },
+  {
+    onConflict: 'id'
+  }
+)
 
   if (profileError) {
     // If upsert fails due to (trader_id, user_code) unique conflict,
