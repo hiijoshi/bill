@@ -102,6 +102,7 @@ export async function POST(request: NextRequest) {
     traderId: user.traderId,
     name: user.name || 'System Administrator',
     role: user.role || undefined,
+    userDbId: user.id
     }, SUPER_ADMIN_ACCESS_EXPIRES_IN)
     
     const refreshToken = generateRefreshToken({
@@ -109,6 +110,7 @@ export async function POST(request: NextRequest) {
     traderId: user.traderId,
     name: user.name || 'System Administrator',
     role: user.role || undefined,
+    userDbId: user.id
     }, SUPER_ADMIN_REFRESH_EXPIRES_IN)
 
     let response = NextResponse.json({

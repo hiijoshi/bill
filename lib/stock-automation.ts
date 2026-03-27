@@ -1,6 +1,5 @@
-import { PrismaClient, type StockLedger } from '@prisma/client'
-
-const prisma = new PrismaClient()
+import type { StockLedger } from '@prisma/client'
+import { prisma } from './prisma'
 
 export interface StockUpdateResult {
   success: boolean

@@ -2,13 +2,13 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
 }
 
 // ... the rest of your models remain the same
@@ -371,6 +371,8 @@ model StockLedger {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  @@index([companyId, entryDate], map: "idx_stock_ledger_company_date")
+  @@index([companyId, productId, entryDate], map: "idx_stock_ledger_company_product_date")
   @@index([productId, entryDate], map: "idx_stock_ledger_product_date")
 }
 

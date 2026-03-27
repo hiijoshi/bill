@@ -41,13 +41,15 @@ export default function RootLayout({
 }>) {
   // Add global fetch interceptor for authentication with automatic token refresh
   useEffect(() => {
+    const defaultApiTimeoutMs = process.env.NODE_ENV === 'development' ? 20000 : 15000
+    const defaultSuperAdminApiTimeoutMs = process.env.NODE_ENV === 'development' ? 45000 : 30000
     const apiTimeoutMs = Math.max(
-      5000,
-      Math.min(60000, Number(process.env.NEXT_PUBLIC_API_TIMEOUT_MS || 12000))
+      8000,
+      Math.min(60000, Number(process.env.NEXT_PUBLIC_API_TIMEOUT_MS || defaultApiTimeoutMs))
     )
     const superAdminApiTimeoutMs = Math.max(
       apiTimeoutMs,
-      Math.min(120000, Number(process.env.NEXT_PUBLIC_SUPER_ADMIN_API_TIMEOUT_MS || 30000))
+      Math.min(120000, Number(process.env.NEXT_PUBLIC_SUPER_ADMIN_API_TIMEOUT_MS || defaultSuperAdminApiTimeoutMs))
     )
     const originalFetch = window.fetch;
     const abortRejectionHandler = (event: PromiseRejectionEvent) => {
@@ -67,6 +69,11 @@ export default function RootLayout({
     const getCookieValue = (name: string): string | null => {
       const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))
       return match ? decodeURIComponent(match[1]) : null
+    }
+
+    const isAuthScreen = () => {
+      const pathname = window.location.pathname
+      return pathname === '/login' || pathname === '/super-admin/login'
     }
     
     const refreshToken = async (useSuperAdminSession: boolean) => {
@@ -213,8 +220,14 @@ export default function RootLayout({
         return response;
       }
       
-      // If 401, try to refresh token and retry once
+      // If 401, try to refresh token and retry once.
+      // Never do this on login screens, otherwise the page can get stuck in a
+      // refresh -> redirect -> login loop while already unauthenticated.
       if (response.status === 401 && typeof url === 'string' && url.includes('/api/')) {
+        if (isAuthScreen()) {
+          return response;
+        }
+
         const refreshed = await refreshToken(isSuperAdminApi);
         
         if (refreshed) {
@@ -231,12 +244,16 @@ export default function RootLayout({
         }
 
         if (isSuperAdminApi) {
-          window.location.href = '/super-admin/login';
+          if (!isAuthScreen()) {
+            window.location.href = '/super-admin/login';
+          }
           return response;
         }
 
         // Token refresh failed, redirect to login
-        window.location.href = '/login';
+        if (!isAuthScreen()) {
+          window.location.href = '/login';
+        }
         return response;
       }
 

@@ -165,6 +165,13 @@ async function ensureUniversalUnits(companyId: string) {
   })
 }
 
+async function listUnits(companyId: string) {
+  return prisma.unit.findMany({
+    where: { companyId },
+    orderBy: [{ isUniversal: 'desc' }, { name: 'asc' }]
+  })
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = new URL(request.url).searchParams
@@ -176,12 +183,17 @@ export async function GET(request: NextRequest) {
     const denied = await ensureReadAccess(request, companyId)
     if (denied) return denied
 
-    await ensureUniversalUnits(companyId)
+    let units = await listUnits(companyId)
+    const unitSymbols = new Set(
+      units.map((unit) => String(unit.symbol || '').trim().toLowerCase()).filter(Boolean)
+    )
+    const missingUniversalUnits =
+      !unitSymbols.has(UNIVERSAL_UNITS.KG) || !unitSymbols.has(UNIVERSAL_UNITS.QUINTAL)
 
-    const units = await prisma.unit.findMany({
-      where: { companyId },
-      orderBy: [{ isUniversal: 'desc' }, { name: 'asc' }]
-    })
+    if (missingUniversalUnits) {
+      await ensureUniversalUnits(companyId)
+      units = await listUnits(companyId)
+    }
 
     return NextResponse.json(
       {

@@ -142,14 +142,83 @@ type DashboardData = {
   stockLedger: StockLedgerItem[]
 }
 
-const emptyData: DashboardData = {
+type DashboardSummary = {
+  purchase: {
+    total: number
+    paid: number
+    pending: number
+    count: number
+  }
+  sales: {
+    total: number
+    received: number
+    pending: number
+    count: number
+  }
+  cashflow: {
+    inAmount: number
+    outAmount: number
+    net: number
+    count: number
+  }
+  masterRecords: {
+    products: number
+    parties: number
+    units: number
+  }
+  inventory: {
+    stockEntries: number
+    lowStock: number
+    lowStockItems: Array<{ name: string; balance: number }>
+  }
+  notifications: {
+    pendingBills: number
+  }
+}
+
+type CompanyPerformanceRow = {
+  id: string
+  name: string
+  purchaseTotal: number
+  salesTotal: number
+  paymentIn: number
+  paymentOut: number
+  purchaseBills: number
+  salesBills: number
+  cashflow: number
+}
+
+type TrendRow = {
+  day: string
+  purchase: number
+  sales: number
+  payment: number
+}
+
+type DashboardPayload = DashboardData & {
+  summary: DashboardSummary
+  companyPerformance: CompanyPerformanceRow[]
+  trendData: TrendRow[]
+}
+
+const emptyDashboardPayload: DashboardPayload = {
   purchaseBills: [],
   salesBills: [],
   payments: [],
   products: [],
   parties: [],
   units: [],
-  stockLedger: []
+  stockLedger: [],
+  summary: {
+    purchase: { total: 0, paid: 0, pending: 0, count: 0 },
+    sales: { total: 0, received: 0, pending: 0, count: 0 },
+    cashflow: { inAmount: 0, outAmount: 0, net: 0, count: 0 },
+    masterRecords: { products: 0, parties: 0, units: 0 },
+    inventory: { stockEntries: 0, lowStock: 0, lowStockItems: [] },
+    notifications: { pendingBills: 0 }
+  },
+  companyPerformance: [],
+  trendData: []
 }
 
 const clampNonNegative = (value: number): number => {
@@ -164,7 +233,7 @@ export default function MainDashboardPage() {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState<ActiveTab>('purchase')
   const [loading, setLoading] = useState(true)
-  const [data, setData] = useState<DashboardData>(emptyData)
+  const [data, setData] = useState<DashboardPayload>(emptyDashboardPayload)
   const [companies, setCompanies] = useState<CompanyOption[]>([])
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([])
   const [primaryCompanyId, setPrimaryCompanyId] = useState<string>('')
@@ -271,11 +340,13 @@ export default function MainDashboardPage() {
 
   const fetchDashboardData = useCallback(async (companyIds: string[]) => {
     if (companyIds.length === 0) {
-      setData(emptyData)
+      setData(emptyDashboardPayload)
       setFetchFailures([])
       return
     }
     const params = new URLSearchParams()
+    params.append('include', 'purchaseBills')
+    params.append('include', 'salesBills')
     if (companyIds.length === 1) {
       params.set('companyId', companyIds[0])
     } else {
@@ -284,28 +355,87 @@ export default function MainDashboardPage() {
 
     try {
       const response = await fetch(`/api/main-dashboard/overview?${params.toString()}`, { cache: 'no-store' })
-      const payload = await parseApiJson<Partial<DashboardData> & { error?: string }>(response, {})
+      const payload = await parseApiJson<Partial<DashboardPayload> & { error?: string }>(response, {})
       if (!response.ok) {
         setFetchFailures([payload.error || 'dashboard overview'])
-        setData(emptyData)
+        setData(emptyDashboardPayload)
         return
       }
 
-      const nextData: DashboardData = {
+      const nextData: DashboardPayload = {
         purchaseBills: Array.isArray(payload.purchaseBills) ? payload.purchaseBills : [],
         salesBills: Array.isArray(payload.salesBills) ? payload.salesBills : [],
         payments: Array.isArray(payload.payments) ? payload.payments : [],
         products: Array.isArray(payload.products) ? payload.products : [],
         parties: Array.isArray(payload.parties) ? payload.parties : [],
         units: Array.isArray(payload.units) ? payload.units : [],
-        stockLedger: Array.isArray(payload.stockLedger) ? payload.stockLedger : []
+        stockLedger: Array.isArray(payload.stockLedger) ? payload.stockLedger : [],
+        summary: {
+          purchase: {
+            total: clampNonNegative(payload.summary?.purchase?.total ?? 0),
+            paid: clampNonNegative(payload.summary?.purchase?.paid ?? 0),
+            pending: clampNonNegative(payload.summary?.purchase?.pending ?? 0),
+            count: clampNonNegative(payload.summary?.purchase?.count ?? 0)
+          },
+          sales: {
+            total: clampNonNegative(payload.summary?.sales?.total ?? 0),
+            received: clampNonNegative(payload.summary?.sales?.received ?? 0),
+            pending: clampNonNegative(payload.summary?.sales?.pending ?? 0),
+            count: clampNonNegative(payload.summary?.sales?.count ?? 0)
+          },
+          cashflow: {
+            inAmount: clampNonNegative(payload.summary?.cashflow?.inAmount ?? 0),
+            outAmount: clampNonNegative(payload.summary?.cashflow?.outAmount ?? 0),
+            net: clampNonNegative(payload.summary?.cashflow?.net ?? 0),
+            count: clampNonNegative(payload.summary?.cashflow?.count ?? 0)
+          },
+          masterRecords: {
+            products: clampNonNegative(payload.summary?.masterRecords?.products ?? 0),
+            parties: clampNonNegative(payload.summary?.masterRecords?.parties ?? 0),
+            units: clampNonNegative(payload.summary?.masterRecords?.units ?? 0)
+          },
+          inventory: {
+            stockEntries: clampNonNegative(payload.summary?.inventory?.stockEntries ?? 0),
+            lowStock: clampNonNegative(payload.summary?.inventory?.lowStock ?? 0),
+            lowStockItems: Array.isArray(payload.summary?.inventory?.lowStockItems)
+              ? payload.summary.inventory.lowStockItems.map((item) => ({
+                  name: String(item?.name || 'Unknown Product'),
+                  balance: Number(item?.balance || 0)
+                }))
+              : []
+          },
+          notifications: {
+            pendingBills: clampNonNegative(payload.summary?.notifications?.pendingBills ?? 0)
+          }
+        },
+        companyPerformance: Array.isArray(payload.companyPerformance)
+          ? payload.companyPerformance.map((row) => ({
+              id: String(row.id || ''),
+              name: String(row.name || 'Unknown Company'),
+              purchaseTotal: clampNonNegative(row.purchaseTotal || 0),
+              salesTotal: clampNonNegative(row.salesTotal || 0),
+              paymentIn: clampNonNegative(row.paymentIn || 0),
+              paymentOut: clampNonNegative(row.paymentOut || 0),
+              purchaseBills: clampNonNegative(row.purchaseBills || 0),
+              salesBills: clampNonNegative(row.salesBills || 0),
+              cashflow: clampNonNegative(row.cashflow || 0)
+            }))
+          : [],
+        trendData: Array.isArray(payload.trendData)
+          ? payload.trendData.map((row) => ({
+              day: String(row.day || ''),
+              purchase: clampNonNegative(row.purchase || 0),
+              sales: clampNonNegative(row.sales || 0),
+              payment: clampNonNegative(row.payment || 0)
+            }))
+          : []
       }
 
       setData(nextData)
       setFetchFailures([])
       setClientCache(`main-dashboard:${companyIds.slice().sort().join(',')}`, nextData)
     } catch {
-      setData(emptyData)
+      setData(emptyDashboardPayload)
       setFetchFailures(['dashboard overview'])
     }
   }, [])
@@ -414,7 +544,7 @@ export default function MainDashboardPage() {
 
     const normalizedIds = selectedCompanyIds.slice().sort()
     const cacheKey = `main-dashboard:${normalizedIds.join(',')}`
-    const cached = getClientCache<DashboardData>(cacheKey, DASHBOARD_CACHE_AGE_MS)
+    const cached = getClientCache<DashboardPayload>(cacheKey, DASHBOARD_CACHE_AGE_MS)
     if (cached) {
       setData(cached)
       setLoading(false)
@@ -424,7 +554,9 @@ export default function MainDashboardPage() {
 
     let cancelled = false
     ;(async () => {
-      setLoading(true)
+      if (!cached) {
+        setLoading(true)
+      }
       try {
         await fetchDashboardData(selectedCompanyIds)
       } finally {
@@ -436,7 +568,7 @@ export default function MainDashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [companies, fetchDashboardData, primaryCompanyId, selectedCompanyIds])
+  }, [fetchDashboardData, primaryCompanyId, selectedCompanyIds])
 
   useEffect(() => {
     if (!primaryCompanyId) return
@@ -475,33 +607,11 @@ export default function MainDashboardPage() {
     router.push(path)
   }
 
-  const purchaseStats = useMemo(() => {
-    const total = data.purchaseBills.reduce((sum, bill) => sum + clampNonNegative(Number(bill.totalAmount || 0)), 0)
-    const paid = data.purchaseBills.reduce((sum, bill) => sum + clampNonNegative(Number(bill.paidAmount || 0)), 0)
-    const pending = data.purchaseBills.reduce((sum, bill) => sum + clampNonNegative(Number(bill.balanceAmount || 0)), 0)
-    return { total, paid, pending, count: data.purchaseBills.length }
-  }, [data.purchaseBills])
-
-  const salesStats = useMemo(() => {
-    const total = data.salesBills.reduce((sum, bill) => sum + clampNonNegative(Number(bill.totalAmount || 0)), 0)
-    const received = data.salesBills.reduce((sum, bill) => sum + clampNonNegative(Number(bill.receivedAmount || 0)), 0)
-    const pending = data.salesBills.reduce((sum, bill) => sum + clampNonNegative(Number(bill.balanceAmount || 0)), 0)
-    return { total, received, pending, count: data.salesBills.length }
-  }, [data.salesBills])
-
-  const cashflow = useMemo(() => {
-    const inAmount = data.payments
-      .filter((item) => item.billType === 'sales')
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0)
-    const outAmount = data.payments
-      .filter((item) => item.billType === 'purchase')
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0)
-    return {
-      inAmount: clampNonNegative(inAmount),
-      outAmount: clampNonNegative(outAmount),
-      net: clampNonNegative(inAmount - outAmount)
-    }
-  }, [data.payments])
+  const purchaseStats = data.summary.purchase
+  const salesStats = data.summary.sales
+  const cashflow = data.summary.cashflow
+  const masterRecords = data.summary.masterRecords
+  const inventorySummary = data.summary.inventory
 
   const health = useMemo(() => {
     const salesCollectionRate = salesStats.total > 0 ? (salesStats.received / salesStats.total) * 100 : 0
@@ -539,117 +649,10 @@ export default function MainDashboardPage() {
       .slice(0, 8)
   }, [companies, data.purchaseBills, data.salesBills])
 
-  const companyPerformance = useMemo(() => {
-    const map = new Map<string, {
-      id: string
-      name: string
-      purchaseTotal: number
-      salesTotal: number
-      paymentIn: number
-      paymentOut: number
-      purchaseBills: number
-      salesBills: number
-    }>()
-
-    companies.forEach((company) => {
-      if (!selectedCompanyIds.includes(company.id)) return
-      map.set(company.id, {
-        id: company.id,
-        name: company.name,
-        purchaseTotal: 0,
-        salesTotal: 0,
-        paymentIn: 0,
-        paymentOut: 0,
-        purchaseBills: 0,
-        salesBills: 0
-      })
-    })
-
-    data.purchaseBills.forEach((bill) => {
-      const id = bill.companyId || ''
-      const row = map.get(id)
-      if (!row) return
-      row.purchaseTotal += Number(bill.totalAmount || 0)
-      row.purchaseBills += 1
-    })
-
-    data.salesBills.forEach((bill) => {
-      const id = bill.companyId || ''
-      const row = map.get(id)
-      if (!row) return
-      row.salesTotal += Number(bill.totalAmount || 0)
-      row.salesBills += 1
-    })
-
-    data.payments.forEach((payment) => {
-      const id = payment.companyId || ''
-      const row = map.get(id)
-      if (!row) return
-      if (payment.billType === 'sales') row.paymentIn += clampNonNegative(Number(payment.amount || 0))
-      if (payment.billType === 'purchase') row.paymentOut += clampNonNegative(Number(payment.amount || 0))
-    })
-
-    return Array.from(map.values())
-      .map((row) => ({
-        ...row,
-        purchaseTotal: clampNonNegative(row.purchaseTotal),
-        salesTotal: clampNonNegative(row.salesTotal),
-        paymentIn: clampNonNegative(row.paymentIn),
-        paymentOut: clampNonNegative(row.paymentOut),
-        cashflow: clampNonNegative(row.paymentIn - row.paymentOut)
-      }))
-      .sort((a, b) => b.salesTotal - a.salesTotal)
-  }, [companies, data.payments, data.purchaseBills, data.salesBills, selectedCompanyIds])
+  const companyPerformance = data.companyPerformance
   const topCompany = companyPerformance[0]
   const topGrowthCompany = [...companyPerformance].sort((a, b) => b.cashflow - a.cashflow)[0]
-
-  const trendData = useMemo(() => {
-    const days: string[] = []
-    const purchaseByDay = new Map<string, number>()
-    const salesByDay = new Map<string, number>()
-    const paymentByDay = new Map<string, number>()
-    const now = new Date()
-
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date(now)
-      date.setDate(now.getDate() - i)
-      const key = date.toISOString().slice(0, 10)
-      days.push(key)
-      purchaseByDay.set(key, 0)
-      salesByDay.set(key, 0)
-      paymentByDay.set(key, 0)
-    }
-
-    data.purchaseBills.forEach((bill) => {
-      const key = new Date(bill.billDate).toISOString().slice(0, 10)
-      if (purchaseByDay.has(key)) {
-        purchaseByDay.set(key, (purchaseByDay.get(key) || 0) + Number(bill.totalAmount || 0))
-      }
-    })
-
-    data.salesBills.forEach((bill) => {
-      const key = new Date(bill.billDate).toISOString().slice(0, 10)
-      if (salesByDay.has(key)) {
-        salesByDay.set(key, (salesByDay.get(key) || 0) + Number(bill.totalAmount || 0))
-      }
-    })
-
-    data.payments.forEach((payment) => {
-      const key = new Date(payment.payDate || payment.billDate || new Date()).toISOString().slice(0, 10)
-      if (paymentByDay.has(key)) {
-        paymentByDay.set(key, (paymentByDay.get(key) || 0) + Number(payment.amount || 0))
-      }
-    })
-
-    const rows = days.map((day) => ({
-      day,
-      purchase: purchaseByDay.get(day) || 0,
-      sales: salesByDay.get(day) || 0,
-      payment: paymentByDay.get(day) || 0
-    }))
-
-    return rows
-  }, [data.payments, data.purchaseBills, data.salesBills])
+  const trendData = data.trendData
 
   const chartMax = useMemo(() => {
     return Math.max(
@@ -658,29 +661,14 @@ export default function MainDashboardPage() {
     )
   }, [trendData])
 
-  const stockNotifications = useMemo(() => {
-    const productBalances: Record<string, { name: string; balance: number }> = {}
-    data.stockLedger.forEach((entry) => {
-      const key = entry.product?.id || 'unknown'
-      const name = entry.product?.name || 'Unknown Product'
-      if (!productBalances[key]) {
-        productBalances[key] = { name, balance: 0 }
-      }
-      productBalances[key].balance += Number(entry.qtyIn || 0) - Number(entry.qtyOut || 0)
-    })
-    return Object.values(productBalances).filter((item) => item.balance <= 0)
-  }, [data.stockLedger])
-
   const notifications = useMemo(() => {
-    const pendingBills = data.purchaseBills.filter((b) => Number(b.balanceAmount || 0) > 0).length +
-      data.salesBills.filter((b) => Number(b.balanceAmount || 0) > 0).length
     return {
-      lowStock: stockNotifications.length,
-      pendingBills,
+      lowStock: inventorySummary.lowStock,
+      pendingBills: data.summary.notifications.pendingBills,
       failedEntries: fetchFailures.length,
-      lowStockItems: stockNotifications.slice(0, 5)
+      lowStockItems: inventorySummary.lowStockItems
     }
-  }, [data.purchaseBills, data.salesBills, fetchFailures.length, stockNotifications])
+  }, [data.summary.notifications.pendingBills, fetchFailures.length, inventorySummary.lowStock, inventorySummary.lowStockItems])
   const notificationCount = notifications.lowStock + notifications.pendingBills + notifications.failedEntries
 
   const topKpis = useMemo(() => {
@@ -707,9 +695,9 @@ export default function MainDashboardPage() {
       },
       {
         label: 'Master Records',
-        value: `${data.products.length + data.parties.length + data.units.length}`,
-        hint: `${data.products.length} products, ${data.parties.length} parties`,
-        trend: `${data.units.length} units configured`,
+        value: `${masterRecords.products + masterRecords.parties + masterRecords.units}`,
+        hint: `${masterRecords.products} products, ${masterRecords.parties} parties`,
+        trend: `${masterRecords.units} units configured`,
         icon: Boxes,
         className: 'border-slate-200 bg-white',
         iconTone: 'bg-slate-100 text-slate-700',
@@ -717,7 +705,7 @@ export default function MainDashboardPage() {
       },
       {
         label: 'Stock Entries',
-        value: `${data.stockLedger.length}`,
+        value: `${inventorySummary.stockEntries}`,
         hint: 'Ledger records',
         trend: notifications.lowStock > 0 ? `${notifications.lowStock} low stock alerts` : 'Stock position stable',
         icon: Scale,
@@ -726,7 +714,7 @@ export default function MainDashboardPage() {
         trendTone: 'text-slate-500'
       }
     ]
-  }, [cashflow.inAmount, cashflow.net, cashflow.outAmount, data.parties.length, data.products.length, data.stockLedger.length, data.units.length, notifications.lowStock, purchaseStats.count, purchaseStats.total, salesStats.count, salesStats.total])
+  }, [cashflow.inAmount, cashflow.net, cashflow.outAmount, inventorySummary.stockEntries, masterRecords.parties, masterRecords.products, masterRecords.units, notifications.lowStock, purchaseStats.count, purchaseStats.total, salesStats.count, salesStats.total])
 
   const downloadTextFile = (name: string, content: string, mimeType: string) => {
     const blob = new Blob([content], { type: mimeType })
@@ -758,9 +746,9 @@ export default function MainDashboardPage() {
       ['Total Purchase', purchaseStats.total.toFixed(2)],
       ['Total Sales', salesStats.total.toFixed(2)],
       ['Net Cashflow', clampNonNegative(cashflow.net).toFixed(2)],
-      ['Products', data.products.length],
-      ['Parties', data.parties.length],
-      ['Units', data.units.length],
+      ['Products', masterRecords.products],
+      ['Parties', masterRecords.parties],
+      ['Units', masterRecords.units],
       ['Low Stock Alerts', notifications.lowStock],
       ['Pending Bills', notifications.pendingBills],
       ['Failed Data Sources', notifications.failedEntries]
@@ -1687,76 +1675,12 @@ export default function MainDashboardPage() {
 
           {/* Stock Tab */}
           {activeTab === 'stock' && (
-            <StockManagementTab
-              companyId={primaryCompanyId}
-              initialProducts={data.products.map((product) => ({
-                id: product.id,
-                name: product.name || 'Unknown Product',
-                unit: product.unit?.symbol || ''
-              }))}
-              initialStockLedger={data.stockLedger.map((entry) => ({
-                id: entry.id,
-                entryDate: entry.entryDate || '',
-                product: {
-                  id: entry.product?.id || '',
-                  name: entry.product?.name || 'Unknown Product',
-                  unit: entry.product?.unit || ''
-                },
-                type: entry.type || 'adjustment',
-                qtyIn: Number(entry.qtyIn || 0),
-                qtyOut: Number(entry.qtyOut || 0),
-                refTable: '',
-                refId: ''
-              }))}
-            />
+            <StockManagementTab companyId={primaryCompanyId} />
           )}
 
           {/* Payment Tab */}
           {activeTab === 'payment' && (
-            <PaymentTab
-              companyId={primaryCompanyId}
-              initialPurchaseBills={data.purchaseBills.map((bill) => ({
-                id: bill.id,
-                billNo: bill.billNo,
-                billDate: bill.billDate,
-                totalAmount: Number(bill.totalAmount || 0),
-                paidAmount: Number(bill.paidAmount || 0),
-                balanceAmount: Number(bill.balanceAmount || 0),
-                status: bill.status,
-                farmer: bill.farmer
-              }))}
-              initialSalesBills={data.salesBills.map((bill) => ({
-                id: bill.id,
-                billNo: bill.billNo,
-                billDate: bill.billDate,
-                totalAmount: Number(bill.totalAmount || 0),
-                receivedAmount: Number(bill.receivedAmount || 0),
-                balanceAmount: Number(bill.balanceAmount || 0),
-                status: bill.status,
-                party: bill.party || { name: '' }
-              }))}
-              initialPayments={data.payments.map((payment) => ({
-                id: payment.id,
-                billType: payment.billType,
-                billId: payment.billId || '',
-                billNo:
-                  payment.billType === 'purchase'
-                    ? data.purchaseBills.find((bill) => bill.id === payment.billId)?.billNo || ''
-                    : data.salesBills.find((bill) => bill.id === payment.billId)?.billNo || '',
-                partyName:
-                  payment.party?.name ||
-                  payment.farmer?.name ||
-                  (payment.billType === 'purchase'
-                    ? data.purchaseBills.find((bill) => bill.id === payment.billId)?.farmer?.name || ''
-                    : data.salesBills.find((bill) => bill.id === payment.billId)?.party?.name || ''),
-                payDate: payment.payDate || '',
-                amount: Number(payment.amount || 0),
-                mode: (payment.mode as 'cash' | 'online' | 'bank') || 'cash',
-                txnRef: payment.txnRef || '',
-                note: payment.note || '',
-                createdAt: payment.billDate || payment.payDate || ''
-              }))}
-            />
+            <PaymentTab companyId={primaryCompanyId} />
           )}
 
           {/* Reports Tab */}

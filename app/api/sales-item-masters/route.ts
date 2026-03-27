@@ -63,9 +63,29 @@ export async function GET(request: NextRequest) {
 
     const salesItemMasters = await prisma.salesItemMaster.findMany({
       where: { companyId },
-      include: {
+      select: {
+        id: true,
+        productId: true,
+        salesItemName: true,
+        hsnCode: true,
+        gstRate: true,
+        sellingPrice: true,
+        description: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
         product: {
-          include: { unit: true }
+          select: {
+            id: true,
+            name: true,
+            unit: {
+              select: {
+                id: true,
+                name: true,
+                symbol: true
+              }
+            }
+          }
         }
       },
       orderBy: { salesItemName: 'asc' }

@@ -9,6 +9,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Edit, Trash2, Ruler } from 'lucide-react'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { isAbortError } from '@/lib/http'
 
 interface Unit {
   id: string
@@ -20,6 +22,17 @@ interface Unit {
   createdAt: string
   updatedAt: string
 }
+
+type UnitResponsePayload = {
+  units?: Unit[]
+  companyId?: string
+  error?: string
+  timedOut?: boolean
+  aborted?: boolean
+}
+
+const UNIT_MASTER_CACHE_KEY = 'master-units:active'
+const UNIT_MASTER_CACHE_AGE_MS = 60_000
 
 export default function UnitMasterPage() {
   const [companyId, setCompanyId] = useState('')
@@ -36,28 +49,96 @@ export default function UnitMasterPage() {
     kgEquivalent: '1',
     description: ''
   })
+
+  const applyUnits = useCallback((rows: Unit[], resolvedCompanyId: string) => {
+    setUnits(rows)
+    if (resolvedCompanyId) {
+      setCompanyId((prev) => prev || resolvedCompanyId)
+    }
+    setClientCache(UNIT_MASTER_CACHE_KEY, {
+      companyId: resolvedCompanyId,
+      units: rows
+    })
+  }, [])
+
   const fetchUnits = useCallback(async () => {
+    const cached = getClientCache<{ companyId?: string; units?: Unit[] }>(UNIT_MASTER_CACHE_KEY, UNIT_MASTER_CACHE_AGE_MS)
+    if (cached && Array.isArray(cached.units) && cached.units.length > 0) {
+      applyUnits(cached.units, typeof cached.companyId === 'string' ? cached.companyId : '')
+      setLoading(false)
+    }
+
     try {
-      const response = await fetch('/api/units')
-      
-      if (response.ok) {
-        const data = await response.json().catch(() => ({}))
-        const rows = Array.isArray(data?.units) ? data.units : Array.isArray(data) ? data : []
-        const resolvedCompanyId = typeof data?.companyId === 'string' ? data.companyId : ''
-        setUnits(rows)
-        if (resolvedCompanyId) {
-          setCompanyId((prev) => prev || resolvedCompanyId)
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await fetch('/api/units', { cache: 'no-store' })
+          const payload = (await response.json().catch(() => ({}))) as UnitResponsePayload | Unit[]
+          const rows = (Array.isArray((payload as UnitResponsePayload)?.units)
+            ? (payload as UnitResponsePayload).units
+            : Array.isArray(payload)
+              ? payload
+              : []) as Unit[]
+          const resolvedCompanyId =
+            typeof (payload as UnitResponsePayload)?.companyId === 'string'
+              ? (payload as UnitResponsePayload).companyId || ''
+              : ''
+
+          if (response.ok) {
+            applyUnits(rows, resolvedCompanyId)
+            return
+          }
+
+          const body = Array.isArray(payload) ? {} : payload
+          const timedOut =
+            response.status === 499 ||
+            response.status === 504 ||
+            body.timedOut === true ||
+            body.aborted === true
+
+          if (timedOut && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+
+          setErrorMessage(
+            cached?.units?.length
+              ? 'Unit list is taking longer than expected. Showing the last loaded data.'
+              : 'Unable to load units right now. Please refresh and try again.'
+          )
+          if (!cached?.units?.length) {
+            setUnits([])
+          }
+          return
+        } catch (error) {
+          if (isAbortError(error) && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+          if (isAbortError(error)) {
+            setErrorMessage(
+              cached?.units?.length
+                ? 'Unit list is taking longer than expected. Showing the last loaded data.'
+                : 'Unit list took too long to load. Please refresh once.'
+            )
+            if (!cached?.units?.length) {
+              setUnits([])
+            }
+            return
+          }
+          throw error
         }
-      } else {
-        setUnits([])
       }
     } catch (error) {
+      if (isAbortError(error)) return
       console.error('Error fetching units:', error)
-      setUnits([])
+      setErrorMessage('Unable to load units right now. Please refresh and try again.')
+      if (!cached?.units?.length) {
+        setUnits([])
+      }
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [applyUnits])
 
   useEffect(() => {
     void fetchUnits()

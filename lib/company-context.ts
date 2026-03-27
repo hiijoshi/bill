@@ -85,7 +85,11 @@ export async function resolveCompanyId(search: string): Promise<string> {
       return cachedAuthCompanyId
     }
 
-    const timeoutMs = Math.max(5000, Math.min(60000, Number(process.env.NEXT_PUBLIC_API_TIMEOUT_MS || 12000)))
+    const defaultApiTimeoutMs = process.env.NODE_ENV === 'development' ? 20000 : 15000
+    const timeoutMs = Math.max(
+      8000,
+      Math.min(60000, Number(process.env.NEXT_PUBLIC_API_TIMEOUT_MS || defaultApiTimeoutMs))
+    )
     const activeCompanyResponse = await fetchWithTimeout('/api/auth/company', { cache: 'no-store' }, timeoutMs)
     if (activeCompanyResponse.ok) {
       const activeData = await activeCompanyResponse.json().catch(() => null)

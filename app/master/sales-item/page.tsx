@@ -10,6 +10,8 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Edit, Trash2, Package } from 'lucide-react'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { isAbortError } from '@/lib/http'
 
 interface SalesItem {
   id: string
@@ -41,6 +43,26 @@ interface ProductOption {
   }
 }
 
+type ProductResponsePayload = {
+  products?: ProductOption[]
+  data?: ProductOption[]
+  error?: string
+  timedOut?: boolean
+  aborted?: boolean
+}
+
+type SalesItemResponsePayload = SalesItem[] | {
+  data?: SalesItem[]
+  error?: string
+  timedOut?: boolean
+  aborted?: boolean
+}
+
+const PRODUCT_MASTER_CACHE_KEY = 'master-products:active'
+const PRODUCT_MASTER_CACHE_AGE_MS = 30_000
+const SALES_ITEM_MASTER_CACHE_KEY = 'master-sales-items:active'
+const SALES_ITEM_MASTER_CACHE_AGE_MS = 30_000
+
 export default function SalesItemMasterPage() {
   const [salesItems, setSalesItems] = useState<SalesItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -61,38 +83,166 @@ export default function SalesItemMasterPage() {
 
   const [products, setProducts] = useState<ProductOption[]>([])
   const gstRates = ['5', '12', '18', '28']
+
+  const applyProducts = useCallback((rows: ProductOption[]) => {
+    setProducts(rows)
+    setClientCache(PRODUCT_MASTER_CACHE_KEY, { products: rows })
+  }, [])
+
   const fetchProducts = useCallback(async () => {
+    const cached = getClientCache<{ products?: ProductOption[] }>(PRODUCT_MASTER_CACHE_KEY, PRODUCT_MASTER_CACHE_AGE_MS)
+    if (cached && Array.isArray(cached.products) && cached.products.length > 0) {
+      applyProducts(cached.products)
+    }
+
     try {
-      const response = await fetch('/api/products')
-      if (response.ok) {
-        const data = await response.json().catch(() => ({}))
-        const rows = Array.isArray(data?.products) ? data.products : Array.isArray(data) ? data : []
-        setProducts(rows)
-      } else {
-        setProducts([])
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await fetch('/api/products', { cache: 'no-store' })
+          const payload = (await response.json().catch(() => ({}))) as ProductResponsePayload | ProductOption[]
+          const rows = (Array.isArray((payload as ProductResponsePayload)?.products)
+            ? (payload as ProductResponsePayload).products
+            : Array.isArray((payload as ProductResponsePayload)?.data)
+              ? (payload as ProductResponsePayload).data || []
+              : Array.isArray(payload)
+                ? payload
+                : []) as ProductOption[]
+
+          if (response.ok) {
+            applyProducts(rows)
+            return
+          }
+
+          const body = Array.isArray(payload) ? {} : payload
+          const timedOut =
+            response.status === 499 ||
+            response.status === 504 ||
+            body.timedOut === true ||
+            body.aborted === true
+
+          if (timedOut && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+
+          if (!cached?.products?.length) {
+            setProducts([])
+          }
+          setErrorMessage(
+            cached?.products?.length
+              ? 'Product list is taking longer than expected. Showing the last loaded data.'
+              : 'Unable to load products right now. Please refresh and try again.'
+          )
+          return
+        } catch (error) {
+          if (isAbortError(error) && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+          if (isAbortError(error)) {
+            if (!cached?.products?.length) {
+              setProducts([])
+            }
+            setErrorMessage(
+              cached?.products?.length
+                ? 'Product list is taking longer than expected. Showing the last loaded data.'
+                : 'Product list took too long to load. Please refresh once.'
+            )
+            return
+          }
+          throw error
+        }
       }
     } catch (error) {
+      if (isAbortError(error)) return
       console.error('Error fetching products:', error)
-      setProducts([])
+      setErrorMessage('Unable to load products right now. Please refresh and try again.')
+      if (!cached?.products?.length) {
+        setProducts([])
+      }
     }
+  }, [applyProducts])
+
+  const applySalesItems = useCallback((rows: SalesItem[]) => {
+    setSalesItems(rows)
+    setClientCache(SALES_ITEM_MASTER_CACHE_KEY, { data: rows })
+    setErrorMessage('')
   }, [])
 
   const fetchSalesItems = useCallback(async () => {
+    const cached = getClientCache<{ data?: SalesItem[] }>(SALES_ITEM_MASTER_CACHE_KEY, SALES_ITEM_MASTER_CACHE_AGE_MS)
+    if (cached && Array.isArray(cached.data) && cached.data.length > 0) {
+      applySalesItems(cached.data)
+      setLoading(false)
+    }
+
     try {
-      const response = await fetch('/api/sales-item-masters')
-      if (response.ok) {
-        const data = await response.json()
-        setSalesItems(data)
-      } else {
-        setSalesItems([])
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await fetch('/api/sales-item-masters', { cache: 'no-store' })
+          const payload = (await response.json().catch(() => ({}))) as SalesItemResponsePayload
+          const rows = Array.isArray(payload)
+            ? payload
+            : Array.isArray(payload?.data)
+              ? payload.data
+              : []
+
+          if (response.ok) {
+            applySalesItems(rows)
+            return
+          }
+
+          const body = Array.isArray(payload) ? {} : payload
+          const timedOut =
+            response.status === 499 ||
+            response.status === 504 ||
+            body.timedOut === true ||
+            body.aborted === true
+
+          if (timedOut && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+
+          if (!cached?.data?.length) {
+            setSalesItems([])
+          }
+          setErrorMessage(
+            cached?.data?.length
+              ? 'Sales item list is taking longer than expected. Showing the last loaded data.'
+              : 'Unable to load sales items right now. Please refresh and try again.'
+          )
+          return
+        } catch (error) {
+          if (isAbortError(error) && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+          if (isAbortError(error)) {
+            if (!cached?.data?.length) {
+              setSalesItems([])
+            }
+            setErrorMessage(
+              cached?.data?.length
+                ? 'Sales item list is taking longer than expected. Showing the last loaded data.'
+                : 'Sales item list took too long to load. Please refresh once.'
+            )
+            return
+          }
+          throw error
+        }
       }
     } catch (error) {
+      if (isAbortError(error)) return
       console.error('Error fetching sales items:', error)
-      setSalesItems([])
+      setErrorMessage('Unable to load sales items right now. Please refresh and try again.')
+      if (!cached?.data?.length) {
+        setSalesItems([])
+      }
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [applySalesItems])
 
   useEffect(() => {
     void Promise.all([fetchSalesItems(), fetchProducts()])

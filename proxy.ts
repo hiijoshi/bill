@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import { verifyToken } from '@/lib/auth'
+import { verifyTokenWithMetadata } from '@/lib/auth'
 import { env } from '@/lib/config'
 import { AUTH_CONTEXT_HEADER, encodeRequestAuthContext, normalizeAppRole, type RequestAuthContext } from '@/lib/api-security'
-import { prisma } from '@/lib/prisma'
+import { hasSessionStateDrift, loadAuthGuardState } from '@/lib/auth-guard-state'
 import { getCompanyCookieNameCandidates, getSessionCookieNameCandidates } from '@/lib/session-cookies'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { getSupabaseClaimsFromRequest, hasSupabaseAppContext } from '@/lib/supabase/auth-bridge'
@@ -14,10 +14,17 @@ const ENABLE_RATE_LIMIT = process.env.DISABLE_RATE_LIMIT !== 'true'
 const alwaysPublicApiRoutes = new Set([
   '/api/auth',
   '/api/auth/login',
+  '/api/auth/logout',
   '/api/auth/refresh',
   '/api/login',
   '/api/super-admin/auth',
+  '/api/super-admin/logout',
   '/api/super-admin/refresh'
+])
+
+const rateLimitBypassApiRoutes = new Set([
+  '/api/auth/logout',
+  '/api/super-admin/logout'
 ])
 
 const lockBypassApiRoutes = new Set([
@@ -32,14 +39,6 @@ const lockBypassApiPatterns = [
 
 type RateLimitEntry = { count: number; resetAt: number }
 const rateLimitStore = new Map<string, RateLimitEntry>()
-type AuthGuardState = {
-  missing: boolean
-  userLocked: boolean
-  userDeleted: boolean
-  traderLocked: boolean
-  traderDeleted: boolean
-}
-const authGuardCache = new Map<string, { state: AuthGuardState; expiresAt: number }>()
 
 const businessAppRoutePrefixes = [
   '/main', '/master', '/purchase', '/sales',
@@ -141,73 +140,6 @@ type MiddlewareAuthResolution = {
   applyCookies?: <T>(response: NextResponse<T>) => NextResponse<T>
 }
 
-function getAuthGuardCacheKey(auth: RequestAuthContext) {
-  return `${auth.userDbId || ''}:${auth.traderId}:${auth.userId}`
-}
-
-async function loadAuthGuardState(auth: RequestAuthContext): Promise<AuthGuardState> {
-  const cacheKey = getAuthGuardCacheKey(auth)
-  const cached = authGuardCache.get(cacheKey)
-  const now = Date.now()
-  if (cached && cached.expiresAt > now) {
-    return cached.state
-  }
-
-  const user = auth.userDbId
-    ? await prisma.user.findFirst({
-        where: { id: auth.userDbId },
-        select: {
-          locked: true,
-          deletedAt: true,
-          trader: {
-            select: {
-              locked: true,
-              deletedAt: true
-            }
-          }
-        }
-      })
-    : await prisma.user.findFirst({
-        where: {
-          traderId: auth.traderId,
-          userId: auth.userId
-        },
-        select: {
-          locked: true,
-          deletedAt: true,
-          trader: {
-            select: {
-              locked: true,
-              deletedAt: true
-            }
-          }
-        }
-      })
-
-  const state: AuthGuardState = user
-    ? {
-        missing: false,
-        userLocked: user.locked,
-        userDeleted: Boolean(user.deletedAt),
-        traderLocked: Boolean(user.trader?.locked),
-        traderDeleted: Boolean(user.trader?.deletedAt)
-      }
-    : {
-        missing: true,
-        userLocked: false,
-        userDeleted: false,
-        traderLocked: false,
-        traderDeleted: false
-      }
-
-  authGuardCache.set(cacheKey, {
-    state,
-    expiresAt: now + 15_000
-  })
-
-  return state
-}
-
 async function resolveSupabaseAuthContext(request: NextRequest): Promise<MiddlewareAuthResolution | null> {
   if (!isSupabaseConfigured()) {
     return null
@@ -231,7 +163,8 @@ async function resolveSupabaseAuthContext(request: NextRequest): Promise<Middlew
     traderId: supabaseContext.claims.trader_id,
     role: normalizeAppRole(supabaseContext.claims.app_role),
     companyId: getCookieCompanyId(request, scopeSource) || defaultCompanyId,
-    userDbId: supabaseContext.claims.user_db_id
+    userDbId: supabaseContext.claims.user_db_id,
+    sessionIssuedAt: typeof supabaseContext.claims.iat === 'number' ? supabaseContext.claims.iat : null
   }
 
   return {
@@ -256,7 +189,7 @@ function resolveLegacyAuthContext(
     return null
   }
 
-  const payload = verifyToken(token)
+  const payload = verifyTokenWithMetadata(token)
   if (!payload) {
     return null
   }
@@ -267,10 +200,9 @@ function resolveLegacyAuthContext(
       traderId: payload.traderId,
       role: normalizeAppRole(String(payload.role || '')),
       companyId: getCookieCompanyId(request, scopeSource) || (payload as { companyId?: string }).companyId || null,
-      userDbId:
-  (payload as { userDbId?: string }).userDbId ||
-  (payload as { user_db_id?: string }).user_db_id ||
-  null}
+      userDbId: payload.userDbId || null,
+      sessionIssuedAt: payload.iat || null
+    }
   }
 }
 
@@ -327,8 +259,9 @@ export async function proxy(request: NextRequest) {
       ? null
       : await resolveRequestAuthContext(request, isSuperAdminApiRoute ? 'super_admin' : 'app')
     const isSuperAdminRequest = authResolution?.auth.role === 'super_admin'
+    const isRateLimitBypassed = rateLimitBypassApiRoutes.has(pathname)
 
-    if (ENABLE_RATE_LIMIT && !isSuperAdminRequest) {
+    if (ENABLE_RATE_LIMIT && !isSuperAdminRequest && !isRateLimitBypassed) {
       const ip = getRequestIp(request)
       const globalLimit = consumeRateLimit(`g:${ip}`, 120, 60_000)
       if (!globalLimit.allowed) {
@@ -351,10 +284,11 @@ export async function proxy(request: NextRequest) {
     }
 
     const authGuard = await loadAuthGuardState(authResolution.auth)
-    if (authGuard.missing || authGuard.userLocked || authGuard.userDeleted || authGuard.traderLocked || authGuard.traderDeleted) {
+    const sessionDrift = hasSessionStateDrift(authResolution.auth, authGuard)
+    if (authGuard.missing || authGuard.userLocked || authGuard.userDeleted || authGuard.traderLocked || authGuard.traderDeleted || sessionDrift) {
       return NextResponse.json(
-        { error: 'Account is locked or inactive. Please contact administrator.' },
-        { status: 403 }
+        { error: sessionDrift ? 'Session expired due to account changes. Please sign in again.' : 'Account is locked or inactive. Please contact administrator.' },
+        { status: sessionDrift ? 401 : 403 }
       )
     }
 
@@ -393,11 +327,22 @@ export async function proxy(request: NextRequest) {
       // This avoids a DB round-trip in middleware for every request
     }
 
+    const effectiveCompanyId =
+      (urlCompanyId && urlCompanyId.trim()) ||
+      lockedCompanyId ||
+      authResolution.auth.companyId ||
+      null
+
     const h = new Headers(request.headers)
+    if (effectiveCompanyId) {
+      h.set('x-company-id', effectiveCompanyId)
+      h.set('x-auth-company-id', effectiveCompanyId)
+    }
     h.set(
       AUTH_CONTEXT_HEADER,
       encodeRequestAuthContext({
         ...authResolution.auth,
+        companyId: effectiveCompanyId,
         requestId
       })
     )
@@ -416,7 +361,7 @@ export async function proxy(request: NextRequest) {
     const authResolution = await resolveRequestAuthContext(request, 'app')
     if (!authResolution) return NextResponse.redirect(new URL('/login', request.url))
     const authGuard = await loadAuthGuardState(authResolution.auth)
-    if (authGuard.missing || authGuard.userLocked || authGuard.userDeleted || authGuard.traderLocked || authGuard.traderDeleted) {
+    if (authGuard.missing || authGuard.userLocked || authGuard.userDeleted || authGuard.traderLocked || authGuard.traderDeleted || hasSessionStateDrift(authResolution.auth, authGuard)) {
       return NextResponse.redirect(new URL('/login', request.url))
     }
     if (authResolution.auth.role === 'super_admin') {
@@ -436,7 +381,7 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(new URL('/super-admin/login', request.url))
     }
     const authGuard = await loadAuthGuardState(authResolution.auth)
-    if (authGuard.missing || authGuard.userLocked || authGuard.userDeleted || authGuard.traderLocked || authGuard.traderDeleted) {
+    if (authGuard.missing || authGuard.userLocked || authGuard.userDeleted || authGuard.traderLocked || authGuard.traderDeleted || hasSessionStateDrift(authResolution.auth, authGuard)) {
       return NextResponse.redirect(new URL('/super-admin/login', request.url))
     }
     let response = NextResponse.next()

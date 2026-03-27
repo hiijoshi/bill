@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { z } from 'zod'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
+import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 
 const stockLedgerCreateSchema = z.object({
   companyId: z.string().min(1),
@@ -16,6 +17,97 @@ const stockLedgerCreateSchema = z.object({
   message: 'Either qtyIn or qtyOut must be greater than 0',
   path: ['qtyIn']
 })
+
+const MAX_OVERVIEW_RECENT_ENTRIES = 200
+const DEFAULT_OVERVIEW_RECENT_ENTRIES = 80
+
+type StockOverviewSummaryQueryRow = {
+  productId: string
+  productName: string
+  productUnit: string | null
+  totalIn: number | string | null
+  totalOut: number | string | null
+  closingStock: number | string | null
+  movementCount: number | bigint | null
+  adjustmentEntries: number | bigint | null
+  lastMovementDate: Date | string | null
+}
+
+function parsePositiveLimit(rawValue: string | null, fallback: number, max: number): number {
+  if (!rawValue) return fallback
+  const parsed = Number.parseInt(rawValue, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.min(parsed, max)
+}
+
+function parseBooleanFlag(rawValue: string | null, fallback: boolean): boolean {
+  if (rawValue === null) return fallback
+  const normalized = rawValue.trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  return fallback
+}
+
+function parseLedgerType(value: string | null): 'purchase' | 'sales' | 'adjustment' | null {
+  if (value === 'purchase' || value === 'sales' || value === 'adjustment') {
+    return value
+  }
+  return null
+}
+
+function toNumber(value: number | bigint | string | null | undefined): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0
+  }
+  if (typeof value === 'bigint') {
+    return Number(value)
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
+}
+
+function toDateOrNull(value: Date | string | null | undefined): Date | null {
+  if (!value) return null
+  const parsed = value instanceof Date ? value : new Date(value)
+  return Number.isFinite(parsed.getTime()) ? parsed : null
+}
+
+function normalizeLedgerEntry(entry: {
+  id: string
+  entryDate: Date
+  type: string
+  qtyIn: number
+  qtyOut: number
+  refTable: string
+  refId: string
+  createdAt: Date
+  product: {
+    id: string
+    name: string
+    unit: {
+      symbol: string
+    } | null
+  }
+}) {
+  return {
+    id: entry.id,
+    entryDate: entry.entryDate,
+    type: entry.type,
+    qtyIn: Number(entry.qtyIn || 0),
+    qtyOut: Number(entry.qtyOut || 0),
+    refTable: entry.refTable,
+    refId: entry.refId,
+    createdAt: entry.createdAt,
+    product: {
+      id: entry.product.id,
+      name: entry.product.name,
+      unit: entry.product.unit?.symbol || ''
+    }
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -96,6 +188,19 @@ export async function GET(request: NextRequest) {
     const productId = searchParams.get('productId')
     const dateFrom = searchParams.get('dateFrom')
     const dateTo = searchParams.get('dateTo')
+    const type = parseLedgerType(searchParams.get('type'))
+    const mode = searchParams.get('mode')
+    const recentLimit = parsePositiveLimit(
+      searchParams.get('recentLimit'),
+      DEFAULT_OVERVIEW_RECENT_ENTRIES,
+      MAX_OVERVIEW_RECENT_ENTRIES
+    )
+    const includeMeta = parseBooleanFlag(searchParams.get('includeMeta'), true)
+    const includeRecent = parseBooleanFlag(searchParams.get('includeRecent'), true)
+    const pagination = parsePaginationParams(searchParams, {
+      defaultPageSize: 50,
+      maxPageSize: 200
+    })
 
     if (!companyId) {
       return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
@@ -110,9 +215,13 @@ export async function GET(request: NextRequest) {
         gte?: Date
         lte?: Date
       }
+      type?: 'purchase' | 'sales' | 'adjustment'
     } = { companyId }
     if (productId) {
       whereClause.productId = productId
+    }
+    if (type) {
+      whereClause.type = type
     }
     if (dateFrom || dateTo) {
       const entryDate: { gte?: Date; lte?: Date } = {}
@@ -133,21 +242,140 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const stockLedger = await prisma.stockLedger.findMany({
-      where: whereClause,
-      include: {
-        product: {
-          select: {
-            id: true,
-            name: true,
-            unit: true
-          }
-        }
-      },
-      orderBy: { entryDate: 'desc' }
-    })
+    if (mode === 'overview') {
+      const [overviewRows, totalEntries, recentEntries] = await Promise.all([
+        prisma.$queryRaw<StockOverviewSummaryQueryRow[]>`
+          SELECT
+            p."id" AS "productId",
+            p."name" AS "productName",
+            u."symbol" AS "productUnit",
+            COALESCE(SUM(sl."qtyIn"), 0) AS "totalIn",
+            COALESCE(SUM(sl."qtyOut"), 0) AS "totalOut",
+            COALESCE(SUM(sl."qtyIn"), 0) - COALESCE(SUM(sl."qtyOut"), 0) AS "closingStock",
+            COUNT(sl."id") AS "movementCount",
+            COALESCE(SUM(CASE WHEN sl."type" = 'adjustment' THEN 1 ELSE 0 END), 0) AS "adjustmentEntries",
+            MAX(sl."entryDate") AS "lastMovementDate"
+          FROM "Product" p
+          LEFT JOIN "Unit" u
+            ON u."id" = p."unitId"
+          LEFT JOIN "StockLedger" sl
+            ON sl."productId" = p."id"
+           AND sl."companyId" = p."companyId"
+          WHERE p."companyId" = ${companyId}
+          GROUP BY p."id", p."name", u."symbol"
+          ORDER BY p."name" ASC
+        `,
+        includeMeta
+          ? prisma.stockLedger.count({
+              where: { companyId }
+            })
+          : Promise.resolve(0),
+        includeRecent
+          ? prisma.stockLedger.findMany({
+              where: whereClause,
+              select: {
+                id: true,
+                entryDate: true,
+                type: true,
+                qtyIn: true,
+                qtyOut: true,
+                refTable: true,
+                refId: true,
+                createdAt: true,
+                product: {
+                  select: {
+                    id: true,
+                    name: true,
+                    unit: {
+                      select: {
+                        symbol: true
+                      }
+                    }
+                  }
+                }
+              },
+              orderBy: [{ entryDate: 'desc' }, { createdAt: 'desc' }],
+              take: recentLimit
+            })
+          : Promise.resolve([])
+      ])
 
-    return NextResponse.json(stockLedger)
+      const summary = overviewRows.map((row) => ({
+        productId: row.productId,
+        productName: row.productName,
+        productUnit: row.productUnit || '',
+        totalIn: toNumber(row.totalIn),
+        totalOut: toNumber(row.totalOut),
+        closingStock: toNumber(row.closingStock),
+        movementCount: toNumber(row.movementCount),
+        adjustmentEntries: toNumber(row.adjustmentEntries),
+        lastMovementDate: toDateOrNull(row.lastMovementDate)
+      }))
+
+      return NextResponse.json({
+        companyId,
+        products: summary.map((row) => ({
+          id: row.productId,
+          name: row.productName,
+          unit: row.productUnit,
+          currentStock: row.closingStock
+        })),
+        summary,
+        recentEntries: recentEntries.map(normalizeLedgerEntry),
+        ...(includeMeta
+          ? {
+              meta: {
+                companyId,
+                totalEntries,
+                returnedEntries: recentEntries.length,
+                recentLimit
+              }
+            }
+          : {})
+      })
+    }
+
+    const [stockLedger, total] = await Promise.all([
+      prisma.stockLedger.findMany({
+        where: whereClause,
+        select: {
+          id: true,
+          entryDate: true,
+          type: true,
+          qtyIn: true,
+          qtyOut: true,
+          refTable: true,
+          refId: true,
+          createdAt: true,
+          product: {
+            select: {
+              id: true,
+              name: true,
+              unit: {
+                select: {
+                  symbol: true
+                }
+              }
+            }
+          }
+        },
+        orderBy: [{ entryDate: 'desc' }, { createdAt: 'desc' }],
+        ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
+      }),
+      pagination.enabled ? prisma.stockLedger.count({ where: whereClause }) : Promise.resolve(0)
+    ])
+
+    const rows = stockLedger.map(normalizeLedgerEntry)
+
+    if (pagination.enabled) {
+      return NextResponse.json({
+        data: rows,
+        companyId,
+        meta: buildPaginationMeta(total, pagination)
+      })
+    }
+
+    return NextResponse.json(rows)
   } catch (error) {
     void error
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

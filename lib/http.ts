@@ -1,9 +1,19 @@
 export function isAbortError(error: unknown): boolean {
   if (!error) return false
 
+  const matchesAbortToken = (value: string): boolean => {
+    const message = value.toLowerCase()
+    return (
+      message.includes('aborted') ||
+      message.includes('aborterror') ||
+      message.includes('requesttimeout') ||
+      message.includes('timeouterror') ||
+      message.includes('request timed out')
+    )
+  }
+
   if (typeof error === 'string') {
-    const message = error.toLowerCase()
-    return message.includes('aborted') || message.includes('aborterror')
+    return matchesAbortToken(error)
   }
 
   if (error instanceof DOMException && error.name === 'AbortError') {
@@ -12,8 +22,7 @@ export function isAbortError(error: unknown): boolean {
 
   if (error instanceof Error) {
     if (error.name === 'AbortError') return true
-    const message = error.message.toLowerCase()
-    if (message.includes('aborted') || message.includes('aborterror')) {
+    if (matchesAbortToken(error.message)) {
       return true
     }
   }
@@ -24,15 +33,14 @@ export function isAbortError(error: unknown): boolean {
   }
 
   if (typeof candidate?.message === 'string') {
-    const message = candidate.message.toLowerCase()
-    if (message.includes('aborted') || message.includes('aborterror')) {
+    if (matchesAbortToken(candidate.message)) {
       return true
     }
   }
 
   if (typeof (error as { toString?: () => string }).toString === 'function') {
-    const text = String((error as { toString: () => string }).toString()).toLowerCase()
-    if (text.includes('aborted') || text.includes('aborterror')) {
+    const text = String((error as { toString: () => string }).toString())
+    if (matchesAbortToken(text)) {
       return true
     }
   }

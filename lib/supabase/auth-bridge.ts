@@ -3,6 +3,8 @@ import { createSupabaseRouteClient } from '@/lib/supabase/route'
 
 export type SupabaseAppClaims = {
   sub?: string
+  iat?: number
+  exp?: number
   app_role?: string
   trader_id?: string
   user_db_id?: string
@@ -68,33 +70,27 @@ export async function getSupabaseClaimsFromRequest(request: NextRequest): Promis
           : undefined
   }
 
-  const needsJwtFallback =
-    !metadataClaims.app_role ||
-    !metadataClaims.trader_id ||
-    !metadataClaims.user_db_id ||
-    !metadataClaims.default_company_id
-
   let jwtClaims: SupabaseAppClaims = {}
-  if (needsJwtFallback) {
-    const { data: sessionData } = await supabase.auth.getSession()
-    const session = sessionData?.session
+  const { data: sessionData } = await supabase.auth.getSession()
+  const session = sessionData?.session
 
-    if (session?.access_token) {
-      try {
-        const parts = session.access_token.split('.')
-        if (parts.length === 3) {
-          const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'))
-          jwtClaims = payload as SupabaseAppClaims
-        }
-      } catch {
-        // ignore parse errors and fall back to user/app metadata
+  if (session?.access_token) {
+    try {
+      const parts = session.access_token.split('.')
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'))
+        jwtClaims = payload as SupabaseAppClaims
       }
+    } catch {
+      // ignore parse errors and fall back to user/app metadata
     }
   }
 
   const claims: SupabaseAppClaims = {
     sub: userData.user.id,
     ...jwtClaims,
+    iat: typeof jwtClaims.iat === 'number' ? jwtClaims.iat : undefined,
+    exp: typeof jwtClaims.exp === 'number' ? jwtClaims.exp : undefined,
     app_role: jwtClaims.app_role || metadataClaims.app_role,
     trader_id: jwtClaims.trader_id || metadataClaims.trader_id,
     user_db_id: jwtClaims.user_db_id || metadataClaims.user_db_id,

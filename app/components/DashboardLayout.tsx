@@ -2,9 +2,10 @@
 
 import { Suspense, useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { LogOut, User } from 'lucide-react'
+import { LogOut, Menu, User } from 'lucide-react'
 import Sidebar from './Sidebar'
 import HeaderAccountPanel from '@/components/account/HeaderAccountPanel'
+import { Button } from '@/components/ui/button'
 import { isAbortError } from '@/lib/http'
 import { clearClientCache, getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { APP_COMPANY_CHANGED_EVENT } from '@/lib/company-context'
@@ -38,9 +39,11 @@ const AUTH_CACHE_KEY = 'shell:auth-me'
 const COMPANIES_CACHE_KEY = 'shell:companies'
 const AUTH_CACHE_AGE_MS = 30_000
 const COMPANIES_CACHE_AGE_MS = 60_000
+const APP_SHELL_AUTH_LOADED_EVENT = 'app-shell-auth-loaded'
 
 export default function DashboardLayout({ children, companyId, headerActions }: DashboardLayoutProps) {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
   const [currentUser, setCurrentUser] = useState<string | null>(null)
   const [currentUserName, setCurrentUserName] = useState<string | null>(null)
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null)
@@ -102,6 +105,9 @@ export default function DashboardLayout({ children, companyId, headerActions }: 
       setCurrentUser(authPayload.user?.userId || null)
       setCurrentUserName(authPayload.user?.name || null)
       setCurrentUserRole(authPayload.user?.role || null)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event(APP_SHELL_AUTH_LOADED_EVENT))
+      }
 
       const fallbackCompanyId = String(authPayload.company?.id || authPayload.user?.companyId || '').trim()
       const targetCompanyId = companyId?.trim() || fallbackCompanyId
@@ -171,6 +177,10 @@ export default function DashboardLayout({ children, companyId, headerActions }: 
     setIsSidebarCollapsed(!isSidebarCollapsed)
   }
 
+  const closeMobileSidebar = () => {
+    setIsMobileSidebarOpen(false)
+  }
+
   const handleLogout = async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' })
@@ -186,19 +196,30 @@ export default function DashboardLayout({ children, companyId, headerActions }: 
   }
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className="flex min-h-dvh bg-gray-50">
       <Suspense fallback={<div className="w-20 border-r bg-white" />}>
         <Sidebar
           companyId={resolvedCompanyId}
           isCollapsed={isSidebarCollapsed}
+          isMobileOpen={isMobileSidebarOpen}
           onToggleCollapse={toggleSidebar}
+          onCloseMobile={closeMobileSidebar}
         />
       </Suspense>
-      <div className="flex-1 flex flex-col overflow-y-auto">
+      <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
         {/* Top Navigation Bar */}
-        <div className="bg-white shadow-sm border-b px-6 py-3">
-          <div className="max-w-7xl mx-auto flex justify-between items-center gap-4">
-            <div className="flex flex-wrap items-center gap-3">
+        <div className="border-b bg-white px-4 py-3 shadow-sm md:px-6">
+          <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 md:gap-4">
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsMobileSidebarOpen(true)}
+                className="inline-flex h-9 w-9 rounded-lg border border-slate-200 p-0 text-slate-600 md:hidden"
+                aria-label="Open navigation"
+              >
+                <Menu className="h-4 w-4" />
+              </Button>
               <h1 className="text-xl font-semibold text-gray-900">Dashboard</h1>
               <span className="text-sm text-gray-500">User Mode</span>
               {currentUser ? (
@@ -212,7 +233,7 @@ export default function DashboardLayout({ children, companyId, headerActions }: 
                 </span>
               ) : null}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 self-start md:self-auto">
               {headerActions}
               {currentUser && (
                 <HeaderAccountPanel

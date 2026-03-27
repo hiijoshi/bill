@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { printHtmlDocument } from '@/lib/report-print'
 
 type ReportView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'bank-ledger'
@@ -184,6 +185,7 @@ interface OperationsReportWorkspaceProps {
 }
 
 const surfaceCardClass = 'rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]'
+const OPERATIONS_REPORT_CACHE_AGE_MS = 20_000
 const operationsViewOptions: Array<{ value: ReportView; label: string }> = [
   { value: 'outstanding', label: 'Outstanding' },
   { value: 'ledger', label: 'Party Ledger' },
@@ -605,9 +607,36 @@ export default function OperationsReportWorkspace({
 
     setLoading(true)
     try {
+      const cacheKey = [
+        'operations-report',
+        activeView,
+        scope,
+        selectedCompanyIds.join(','),
+        dateFrom,
+        dateTo,
+        activeView === 'ledger' ? selectedPartyId : ''
+      ].join(':')
+      const cachedPayload = getClientCache<OperationsReportPayload>(cacheKey, OPERATIONS_REPORT_CACHE_AGE_MS)
+      if (cachedPayload) {
+        if (Array.isArray(cachedPayload.companies) && cachedPayload.companies.length > 0) {
+          setCompanies(cachedPayload.companies)
+        }
+        setReportData(cachedPayload)
+        setSelectedPartyId((previous) => cachedPayload.partyLedger?.selectedPartyId || previous)
+        setLastGeneratedAt(
+          cachedPayload.meta?.generatedAt
+            ? new Date(cachedPayload.meta.generatedAt).toLocaleString('en-IN')
+            : new Date().toLocaleString('en-IN')
+        )
+        setErrorMessage('')
+        setLoading(false)
+        return
+      }
+
       const params = new URLSearchParams({
         dateFrom,
-        dateTo
+        dateTo,
+        view: activeView
       })
 
       if (scope === 'company' && selectedCompanyIds.length === 1) {
@@ -618,7 +647,7 @@ export default function OperationsReportWorkspace({
         params.set('companyIds', selectedCompanyIds.join(','))
       }
 
-      if (selectedPartyId) {
+      if (activeView === 'ledger' && selectedPartyId) {
         params.set('partyId', selectedPartyId)
       }
 
@@ -633,6 +662,7 @@ export default function OperationsReportWorkspace({
         setCompanies(payload.companies)
       }
       setReportData(payload)
+      setClientCache(cacheKey, payload)
       setSelectedPartyId((previous) => payload.partyLedger?.selectedPartyId || previous)
       setLastGeneratedAt(
         payload.meta?.generatedAt ? new Date(payload.meta.generatedAt).toLocaleString('en-IN') : new Date().toLocaleString('en-IN')
@@ -644,7 +674,7 @@ export default function OperationsReportWorkspace({
     } finally {
       setLoading(false)
     }
-  }, [dateFrom, dateTo, scope, selectedCompanyIds, selectedPartyId])
+  }, [activeView, dateFrom, dateTo, scope, selectedCompanyIds, selectedPartyId])
 
   useEffect(() => {
     if (loadingCompanies) return

@@ -10,6 +10,8 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Edit, Trash2, Package } from 'lucide-react'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { isAbortError } from '@/lib/http'
 
 interface Product {
   id: string
@@ -27,6 +29,28 @@ interface Unit {
   description?: string
 }
 
+type ProductResponsePayload = {
+  products?: Product[]
+  data?: Product[]
+  companyId?: string
+  error?: string
+  timedOut?: boolean
+  aborted?: boolean
+}
+
+type UnitResponsePayload = {
+  units?: Unit[]
+  companyId?: string
+  error?: string
+  timedOut?: boolean
+  aborted?: boolean
+}
+
+const PRODUCT_MASTER_CACHE_KEY = 'master-products:active'
+const PRODUCT_MASTER_CACHE_AGE_MS = 30_000
+const UNIT_MASTER_CACHE_KEY = 'master-units:active'
+const UNIT_MASTER_CACHE_AGE_MS = 60_000
+
 export default function PurchaseItemMasterPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [units, setUnits] = useState<Unit[]>([])
@@ -40,39 +64,166 @@ export default function PurchaseItemMasterPage() {
     name: '',
     unit: ''
   })
+
+  const applyUnits = useCallback((rows: Unit[]) => {
+    setUnits(rows)
+    setClientCache(UNIT_MASTER_CACHE_KEY, { units: rows })
+  }, [])
+
   const fetchUnits = useCallback(async () => {
+    const cached = getClientCache<{ units?: Unit[] }>(UNIT_MASTER_CACHE_KEY, UNIT_MASTER_CACHE_AGE_MS)
+    if (cached && Array.isArray(cached.units) && cached.units.length > 0) {
+      applyUnits(cached.units)
+    }
+
     try {
-      const response = await fetch('/api/units')
-      if (response.ok) {
-        const data = await response.json().catch(() => ({}))
-        const rows = Array.isArray(data?.units) ? data.units : Array.isArray(data) ? data : []
-        setUnits(rows)
-      } else {
-        setUnits([])
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await fetch('/api/units', { cache: 'no-store' })
+          const payload = (await response.json().catch(() => ({}))) as UnitResponsePayload | Unit[]
+          const rows = (Array.isArray((payload as UnitResponsePayload)?.units)
+            ? (payload as UnitResponsePayload).units
+            : Array.isArray(payload)
+              ? payload
+              : []) as Unit[]
+
+          if (response.ok) {
+            applyUnits(rows)
+            return
+          }
+
+          const body = Array.isArray(payload) ? {} : payload
+          const timedOut =
+            response.status === 499 ||
+            response.status === 504 ||
+            body.timedOut === true ||
+            body.aborted === true
+
+          if (timedOut && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+
+          setErrorMessage(
+            cached?.units?.length
+              ? 'Unit list is taking longer than expected. Showing the last loaded data.'
+              : 'Unable to load units right now. Please refresh and try again.'
+          )
+          if (!cached?.units?.length) {
+            setUnits([])
+          }
+          return
+        } catch (error) {
+          if (isAbortError(error) && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+          if (isAbortError(error)) {
+            setErrorMessage(
+              cached?.units?.length
+                ? 'Unit list is taking longer than expected. Showing the last loaded data.'
+                : 'Unit list took too long to load. Please refresh once.'
+            )
+            if (!cached?.units?.length) {
+              setUnits([])
+            }
+            return
+          }
+          throw error
+        }
       }
     } catch (error) {
+      if (isAbortError(error)) return
       console.error('Error fetching units:', error)
-      setUnits([])
+      setErrorMessage('Unable to load units right now. Please refresh and try again.')
+      if (!cached?.units?.length) {
+        setUnits([])
+      }
     }
+  }, [applyUnits])
+
+  const applyProducts = useCallback((rows: Product[]) => {
+    setProducts(rows)
+    setClientCache(PRODUCT_MASTER_CACHE_KEY, { products: rows })
+    setErrorMessage('')
   }, [])
 
   const fetchProducts = useCallback(async () => {
+    const cached = getClientCache<{ products?: Product[] }>(PRODUCT_MASTER_CACHE_KEY, PRODUCT_MASTER_CACHE_AGE_MS)
+    if (cached && Array.isArray(cached.products) && cached.products.length > 0) {
+      applyProducts(cached.products)
+      setLoading(false)
+    }
+
     try {
-      const response = await fetch('/api/products')
-      if (response.ok) {
-        const data = await response.json().catch(() => ({}))
-        const rows = Array.isArray(data?.products) ? data.products : Array.isArray(data) ? data : []
-        setProducts(rows)
-      } else {
-        setProducts([])
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await fetch('/api/products', { cache: 'no-store' })
+          const payload = (await response.json().catch(() => ({}))) as ProductResponsePayload | Product[]
+          const rows = (Array.isArray((payload as ProductResponsePayload)?.products)
+            ? (payload as ProductResponsePayload).products
+            : Array.isArray((payload as ProductResponsePayload)?.data)
+              ? (payload as ProductResponsePayload).data || []
+              : Array.isArray(payload)
+                ? payload
+                : []) as Product[]
+
+          if (response.ok) {
+            applyProducts(rows)
+            return
+          }
+
+          const body = Array.isArray(payload) ? {} : payload
+          const timedOut =
+            response.status === 499 ||
+            response.status === 504 ||
+            body.timedOut === true ||
+            body.aborted === true
+
+          if (timedOut && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+
+          setErrorMessage(
+            cached?.products?.length
+              ? 'Product list is taking longer than expected. Showing the last loaded data.'
+              : 'Unable to load products right now. Please refresh and try again.'
+          )
+          if (!cached?.products?.length) {
+            setProducts([])
+          }
+          return
+        } catch (error) {
+          if (isAbortError(error) && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+          if (isAbortError(error)) {
+            setErrorMessage(
+              cached?.products?.length
+                ? 'Product list is taking longer than expected. Showing the last loaded data.'
+                : 'Product list took too long to load. Please refresh once.'
+            )
+            if (!cached?.products?.length) {
+              setProducts([])
+            }
+            return
+          }
+          throw error
+        }
       }
     } catch (error) {
+      if (isAbortError(error)) return
       console.error('Error fetching products:', error)
-      setProducts([])
+      setErrorMessage('Unable to load products right now. Please refresh and try again.')
+      if (!cached?.products?.length) {
+        setProducts([])
+      }
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [applyProducts])
 
   useEffect(() => {
     void Promise.all([fetchProducts(), fetchUnits()])

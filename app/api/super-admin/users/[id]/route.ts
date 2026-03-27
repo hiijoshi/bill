@@ -3,6 +3,7 @@ import { z } from 'zod'
 import bcrypt from 'bcryptjs'
 import { prisma } from '@/lib/prisma'
 import { normalizeOptionalString, parseBooleanParam, requireRoles, normalizeAppRole } from '@/lib/api-security'
+import { invalidateAuthGuardStateForUser } from '@/lib/auth-guard-state'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
@@ -327,6 +328,17 @@ export async function PUT(
       }
     }
 
+    invalidateAuthGuardStateForUser({
+      id: existingUser.id,
+      traderId: existingUser.traderId,
+      userId: existingUser.userId
+    })
+    invalidateAuthGuardStateForUser({
+      id: user.id,
+      traderId: user.traderId,
+      userId: user.userId
+    })
+
     return NextResponse.json({
       ...userWithoutPassword,
       active: !userWithoutPassword.locked,
@@ -407,6 +419,12 @@ export async function DELETE(
         password: undefined
       },
       requestMeta: getAuditRequestMeta(request)
+    })
+
+    invalidateAuthGuardStateForUser({
+      id: deletedUser.id,
+      traderId: deletedUser.traderId,
+      userId: deletedUser.userId
     })
 
     return NextResponse.json({ success: true })

@@ -10,6 +10,9 @@ const PRIMARY_ALLOWED_ORIGIN = ALLOWED_ORIGINS_LIST[0] || 'http://localhost:3000
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ['127.0.0.1:51445'],
+  turbopack: {
+    root: process.cwd()
+  },
   experimental: {
     optimizePackageImports: ['lucide-react'],
     serverActions: {

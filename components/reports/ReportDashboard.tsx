@@ -394,6 +394,22 @@ const statusToFlag = (status: string): string => {
   return 'U'
 }
 
+const buildReportEmptyStateMessage = (reportType: ReportType, companyName: string, hasSourceRecords: boolean): string => {
+  const targetName = companyName || 'the selected company'
+
+  if (!hasSourceRecords) {
+    if (reportType === 'purchase') {
+      return `No purchase bills or supplier purchase entries exist for ${targetName} yet. Create a purchase entry, then refresh the report.`
+    }
+    if (reportType === 'sales') {
+      return `No sales bills exist for ${targetName} yet. Create a sales entry, then refresh the report.`
+    }
+    return `No purchase, sales, or payment entries exist for ${targetName} yet. Create transactions first, then refresh the report.`
+  }
+
+  return 'No report rows fall inside the selected date range right now. Adjust the dates or clear optional filters.'
+}
+
 const passesDateRange = (value: string | undefined, from: Date | null, to: Date | null): boolean => {
   if (!from || !to) return true
   const date = parseDate(value)
@@ -442,6 +458,7 @@ export default function ReportDashboard({
   const [loading, setLoading] = useState(false)
   const [loadingCompanies, setLoadingCompanies] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
+  const [noticeMessage, setNoticeMessage] = useState('')
   const [lastGeneratedAt, setLastGeneratedAt] = useState('')
   const selectedCompanyName = useMemo(
     () => companies.find((company) => company.id === selectedCompanyId)?.name || selectedCompanyId || 'Selected company',
@@ -536,6 +553,7 @@ export default function ReportDashboard({
 
   const generateReport = useCallback(async () => {
     if (!dateFrom || !dateTo) {
+      setNoticeMessage('')
       setErrorMessage('Please select date range before generating the report.')
       return
     }
@@ -543,6 +561,7 @@ export default function ReportDashboard({
     const fromDate = parseDate(`${dateFrom}T00:00:00`)
     const toDate = parseDate(`${dateTo}T23:59:59`)
     if (!fromDate || !toDate || fromDate > toDate) {
+      setNoticeMessage('')
       setErrorMessage('Invalid date range selected.')
       return
     }
@@ -550,28 +569,29 @@ export default function ReportDashboard({
     const targetCompanyIds = selectedCompanyId ? [selectedCompanyId] : []
 
     if (targetCompanyIds.length === 0) {
+      setNoticeMessage('')
       setErrorMessage('No company available for the selected report scope.')
       return
     }
 
     setLoading(true)
+    setErrorMessage('')
+    setNoticeMessage('')
 
     try {
       const companyNameMap = new Map(companies.map((company) => [company.id, company.name]))
-      const queryFrom = encodeURIComponent(dateFrom)
-      const queryTo = encodeURIComponent(dateTo)
 
       const datasets = await Promise.all(
         targetCompanyIds.map(async (companyId) => {
           const purchaseRequest =
             reportType === 'sales'
               ? Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-              : fetch(`/api/purchase-bills?companyId=${encodeURIComponent(companyId)}&dateFrom=${queryFrom}&dateTo=${queryTo}`)
+              : fetch(`/api/purchase-bills?companyId=${encodeURIComponent(companyId)}`)
 
           const specialPurchaseRequest =
             reportType === 'sales'
               ? Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-              : fetch(`/api/special-purchase-bills?companyId=${encodeURIComponent(companyId)}&dateFrom=${queryFrom}&dateTo=${queryTo}`)
+              : fetch(`/api/special-purchase-bills?companyId=${encodeURIComponent(companyId)}`)
 
           const salesRequest =
             reportType === 'purchase'
@@ -993,18 +1013,34 @@ export default function ReportDashboard({
         return String(a.Seller_Name).localeCompare(String(b.Seller_Name))
       })
 
+      const purchaseRecordCount = datasets.reduce(
+        (sum, dataset) => sum + dataset.purchaseBills.length + dataset.specialPurchaseBills.length,
+        0
+      )
+      const salesRecordCount = datasets.reduce((sum, dataset) => sum + dataset.salesBills.length, 0)
+      const paymentRecordCount = datasets.reduce((sum, dataset) => sum + dataset.payments.length, 0)
+      const hasSourceRecords =
+        reportType === 'purchase'
+          ? purchaseRecordCount > 0
+          : reportType === 'sales'
+            ? salesRecordCount > 0
+            : purchaseRecordCount + salesRecordCount + paymentRecordCount > 0
+
       setGeneratedRows(reportRows)
       setAnalysisSnapshot(analysisAccumulator)
       setAvailableBanks(Array.from(collectedBanks).sort((a, b) => a.localeCompare(b)))
       setLastGeneratedAt(new Date().toLocaleString('en-IN'))
 
       if (reportRows.length === 0) {
-        setErrorMessage('No records found for selected filters.')
+        setNoticeMessage(buildReportEmptyStateMessage(reportType, selectedCompanyName, hasSourceRecords))
+        setErrorMessage('')
       } else {
+        setNoticeMessage('')
         setErrorMessage('')
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Report generation failed.'
+      setNoticeMessage('')
       setErrorMessage(message)
       setGeneratedRows([])
       setAnalysisSnapshot(EMPTY_ANALYSIS_SNAPSHOT)
@@ -1012,7 +1048,7 @@ export default function ReportDashboard({
     } finally {
       setLoading(false)
     }
-  }, [dateFrom, dateTo, selectedCompanyId, companies, reportType])
+  }, [dateFrom, dateTo, selectedCompanyId, companies, reportType, selectedCompanyName])
 
   useEffect(() => {
     if (loadingCompanies) return
@@ -1053,6 +1089,14 @@ export default function ReportDashboard({
       )
     })
   }, [generatedRows, statusFilter, paymentModeFilter, bankFilter, searchTerm])
+
+  const tableEmptyMessage = useMemo(() => {
+    if (loading) return 'Generating report...'
+    if (generatedRows.length === 0) {
+      return noticeMessage || 'No report data available yet.'
+    }
+    return 'No rows match the current search and filter settings.'
+  }, [generatedRows.length, loading, noticeMessage])
 
   const summary = useMemo(() => {
     const totals = filteredRows.reduce(
@@ -1350,6 +1394,12 @@ export default function ReportDashboard({
         </div>
       </section>
 
+      {noticeMessage && (
+        <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          {noticeMessage}
+        </div>
+      )}
+
       {errorMessage && (
         <div className="rounded-[1.25rem] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {errorMessage}
@@ -1624,7 +1674,7 @@ export default function ReportDashboard({
                 {filteredRows.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={Math.max(2, visibleHeaders.length + 1)} className="text-center text-slate-500">
-                      {loading ? 'Generating report...' : 'No rows found. Update filters and click Generate Report.'}
+                      {tableEmptyMessage}
                     </TableCell>
                   </TableRow>
                 )}

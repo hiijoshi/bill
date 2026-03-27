@@ -17,9 +17,17 @@ type DecodedAuthPayload = jwt.JwtPayload & {
   traderId?: string
   name?: string
   role?: string
+  userDbId?: string
+  user_db_id?: string
 }
 
-function parseDecodedPayload(decoded: string | jwt.JwtPayload): Omit<AuthUser, 'id'> | null {
+export type VerifiedSessionPayload = Omit<AuthUser, 'id'> & {
+  userDbId?: string | null
+  iat?: number
+  exp?: number
+}
+
+function parseDecodedPayload(decoded: string | jwt.JwtPayload): VerifiedSessionPayload | null {
   if (typeof decoded !== 'object' || decoded === null) {
     return null
   }
@@ -32,7 +40,24 @@ function parseDecodedPayload(decoded: string | jwt.JwtPayload): Omit<AuthUser, '
     userId: payload.userId,
     traderId: payload.traderId,
     name: typeof payload.name === 'string' ? payload.name : undefined,
-    role: normalizeRole(typeof payload.role === 'string' ? payload.role : undefined)
+    role: normalizeRole(typeof payload.role === 'string' ? payload.role : undefined),
+    userDbId:
+      typeof payload.userDbId === 'string'
+        ? payload.userDbId
+        : typeof payload.user_db_id === 'string'
+          ? payload.user_db_id
+          : null,
+    iat: typeof payload.iat === 'number' ? payload.iat : undefined,
+    exp: typeof payload.exp === 'number' ? payload.exp : undefined
+  }
+}
+
+function stripPayloadMetadata(payload: VerifiedSessionPayload): Omit<AuthUser, 'id'> {
+  return {
+    userId: payload.userId,
+    traderId: payload.traderId,
+    name: payload.name,
+    role: payload.role
   }
 }
 
@@ -81,28 +106,43 @@ export function normalizeRole(role?: string | null): string | undefined {
 }
 
 export function generateToken(
-  payload: Omit<AuthUser, 'id'>,
+  payload: Omit<AuthUser, 'id'> & { userDbId?: string | null },
   expiresIn: jwt.SignOptions['expiresIn'] = JWT_EXPIRES_IN
 ): string {
-  const normalized: Omit<AuthUser, 'id'> = {
-    ...payload,
+  const normalized: Omit<AuthUser, 'id'> & { userDbId?: string } = {
+    userId: payload.userId,
+    traderId: payload.traderId,
+    name: payload.name,
     role: normalizeRole(payload.role)
+  }
+  if (payload.userDbId) {
+    normalized.userDbId = payload.userDbId
   }
   return jwt.sign(normalized, JWT_SECRET!, { expiresIn } as jwt.SignOptions)
 }
 
 export function generateRefreshToken(
-  payload: Omit<AuthUser, 'id'>,
+  payload: Omit<AuthUser, 'id'> & { userDbId?: string | null },
   expiresIn: jwt.SignOptions['expiresIn'] = REFRESH_EXPIRES_IN
 ): string {
-  const normalized: Omit<AuthUser, 'id'> = {
-    ...payload,
+  const normalized: Omit<AuthUser, 'id'> & { userDbId?: string } = {
+    userId: payload.userId,
+    traderId: payload.traderId,
+    name: payload.name,
     role: normalizeRole(payload.role)
+  }
+  if (payload.userDbId) {
+    normalized.userDbId = payload.userDbId
   }
   return jwt.sign(normalized, REFRESH_SECRET!, { expiresIn } as jwt.SignOptions)
 }
 
 export function verifyRefreshToken(token: string): Omit<AuthUser, 'id'> | null {
+  const payload = verifyRefreshTokenWithMetadata(token)
+  return payload ? stripPayloadMetadata(payload) : null
+}
+
+export function verifyRefreshTokenWithMetadata(token: string): VerifiedSessionPayload | null {
   try {
     const decoded = jwt.verify(token, REFRESH_SECRET!)
     return parseDecodedPayload(decoded)
@@ -115,6 +155,11 @@ export function verifyRefreshToken(token: string): Omit<AuthUser, 'id'> | null {
 }
 
 export function verifyToken(token: string): Omit<AuthUser, 'id'> | null {
+  const payload = verifyTokenWithMetadata(token)
+  return payload ? stripPayloadMetadata(payload) : null
+}
+
+export function verifyTokenWithMetadata(token: string): VerifiedSessionPayload | null {
   try {
     const decoded = jwt.verify(token, JWT_SECRET!)
     return parseDecodedPayload(decoded)
@@ -285,14 +330,16 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       userId: user.userId,
       traderId: user.traderId,
       name: user.name || undefined,
-      role: user.role || undefined
+      role: user.role || undefined,
+      userDbId: user.id
     })
     
     const refreshToken = generateRefreshToken({
       userId: user.userId,
       traderId: user.traderId,
       name: user.name || undefined,
-      role: user.role || undefined
+      role: user.role || undefined,
+      userDbId: user.id
     })
 
     return {

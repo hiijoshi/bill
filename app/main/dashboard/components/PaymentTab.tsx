@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Plus, Eye } from 'lucide-react'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 
 interface PurchaseBill {
   id: string
@@ -61,6 +62,14 @@ interface PaymentTabProps {
   initialPayments?: Payment[]
 }
 
+type PaymentCachePayload = {
+  purchaseBills: PurchaseBill[]
+  salesBills: SalesBill[]
+  payments: Payment[]
+}
+
+const PAYMENT_CACHE_AGE_MS = 30_000
+
 const clampNonNegative = (value: number): number => {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return 0
@@ -78,12 +87,14 @@ export default function PaymentTab({
     Array.isArray(initialPurchaseBills) &&
     Array.isArray(initialSalesBills) &&
     Array.isArray(initialPayments)
-  const [loading, setLoading] = useState(!hasInitialData)
+  const paymentCacheKey = `dashboard-payment:${companyId}`
+  const cachedPaymentData = hasInitialData ? null : getClientCache<PaymentCachePayload>(paymentCacheKey, PAYMENT_CACHE_AGE_MS)
+  const [loading, setLoading] = useState(!hasInitialData && !cachedPaymentData)
 
   const [activeTab, setActiveTab] = useState<'purchase' | 'sales'>('purchase')
-  const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>([])
-  const [salesBills, setSalesBills] = useState<SalesBill[]>([])
-  const [payments, setPayments] = useState<Payment[]>([])
+  const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>(cachedPaymentData?.purchaseBills || [])
+  const [salesBills, setSalesBills] = useState<SalesBill[]>(cachedPaymentData?.salesBills || [])
+  const [payments, setPayments] = useState<Payment[]>(cachedPaymentData?.payments || [])
 
   // Filter states
   const [filterBillType, setFilterBillType] = useState('all')
@@ -93,8 +104,16 @@ export default function PaymentTab({
   const fetchPaymentData = useCallback(async () => {
     try {
       setLoading(true)
-      
-      // Fetch all data
+
+      const cached = getClientCache<PaymentCachePayload>(paymentCacheKey, PAYMENT_CACHE_AGE_MS)
+      if (cached) {
+        setPurchaseBills(cached.purchaseBills)
+        setSalesBills(cached.salesBills)
+        setPayments(cached.payments)
+        setLoading(false)
+        return
+      }
+
       const [purchaseRes, salesRes, paymentsRes] = await Promise.all([
         fetch(`/api/purchase-bills?companyId=${companyId}`),
         fetch(`/api/sales-bills?companyId=${companyId}`),
@@ -131,13 +150,18 @@ export default function PaymentTab({
       setPurchaseBills(safePurchaseBills)
       setSalesBills(safeSalesBills)
       setPayments(safePayments)
+      setClientCache(paymentCacheKey, {
+        purchaseBills: safePurchaseBills,
+        salesBills: safeSalesBills,
+        payments: safePayments
+      })
       
       setLoading(false)
     } catch (error) {
       console.error('Error fetching payment data:', error)
       setLoading(false)
     }
-  }, [companyId])
+  }, [companyId, paymentCacheKey])
 
   useEffect(() => {
     if (hasInitialData) return undefined
@@ -150,35 +174,48 @@ export default function PaymentTab({
     return undefined
   }, [companyId, fetchPaymentData, hasInitialData])
 
-  const purchaseBillsData = hasInitialData ? initialPurchaseBills || [] : purchaseBills
-  const salesBillsData = hasInitialData ? initialSalesBills || [] : salesBills
-  const paymentsData = hasInitialData ? initialPayments || [] : payments
+  const purchaseBillsData = useMemo(
+    () => (hasInitialData ? initialPurchaseBills || [] : purchaseBills),
+    [hasInitialData, initialPurchaseBills, purchaseBills]
+  )
+  const salesBillsData = useMemo(
+    () => (hasInitialData ? initialSalesBills || [] : salesBills),
+    [hasInitialData, initialSalesBills, salesBills]
+  )
+  const paymentsData = useMemo(
+    () => (hasInitialData ? initialPayments || [] : payments),
+    [hasInitialData, initialPayments, payments]
+  )
   const isLoading = hasInitialData ? false : loading
 
-  const getFilteredPayments = () => {
+  const filteredPayments = useMemo(() => {
     let filtered = paymentsData
 
     if (filterBillType && filterBillType !== 'all') {
-      filtered = filtered.filter(payment => payment.billType === filterBillType)
+      filtered = filtered.filter((payment) => payment.billType === filterBillType)
     }
 
     if (dateFrom) {
-      filtered = filtered.filter(payment => new Date(payment.payDate) >= new Date(dateFrom))
+      filtered = filtered.filter((payment) => new Date(payment.payDate) >= new Date(dateFrom))
     }
 
     if (dateTo) {
-      filtered = filtered.filter(payment => new Date(payment.payDate) <= new Date(dateTo))
+      filtered = filtered.filter((payment) => new Date(payment.payDate) <= new Date(dateTo))
     }
 
     return filtered.sort((a, b) => new Date(b.payDate).getTime() - new Date(a.payDate).getTime())
-  }
+  }, [dateFrom, dateTo, filterBillType, paymentsData])
 
-  const getPaymentStats = () => ({
+  const paymentStats = useMemo(() => ({
     totalPayments: paymentsData.reduce((sum, payment) => sum + clampNonNegative(payment.amount), 0),
-    purchasePayments: paymentsData.filter(p => p.billType === 'purchase').reduce((sum, p) => sum + clampNonNegative(p.amount), 0),
-    salesReceipts: paymentsData.filter(p => p.billType === 'sales').reduce((sum, p) => sum + clampNonNegative(p.amount), 0),
+    purchasePayments: paymentsData
+      .filter((payment) => payment.billType === 'purchase')
+      .reduce((sum, payment) => sum + clampNonNegative(payment.amount), 0),
+    salesReceipts: paymentsData
+      .filter((payment) => payment.billType === 'sales')
+      .reduce((sum, payment) => sum + clampNonNegative(payment.amount), 0),
     count: paymentsData.length
-  })
+  }), [paymentsData])
 
   const handleMakePayment = (billId: string, billType: 'purchase' | 'sales') => {
     const route = billType === 'purchase' ? '/payment/purchase/entry' : '/payment/sales/entry'
@@ -224,7 +261,7 @@ export default function PaymentTab({
           <CardContent className="pt-6">
             <div className="text-center">
               <p className="text-sm text-gray-600">Total Payments</p>
-              <p className="text-2xl font-bold text-blue-600">₹{getPaymentStats().totalPayments.toFixed(2)}</p>
+              <p className="text-2xl font-bold text-blue-600">₹{paymentStats.totalPayments.toFixed(2)}</p>
             </div>
           </CardContent>
         </Card>
@@ -232,7 +269,7 @@ export default function PaymentTab({
           <CardContent className="pt-6">
             <div className="text-center">
               <p className="text-sm text-gray-600">Purchase Payments</p>
-              <p className="text-2xl font-bold text-red-600">₹{getPaymentStats().purchasePayments.toFixed(2)}</p>
+              <p className="text-2xl font-bold text-red-600">₹{paymentStats.purchasePayments.toFixed(2)}</p>
             </div>
           </CardContent>
         </Card>
@@ -240,7 +277,7 @@ export default function PaymentTab({
           <CardContent className="pt-6">
             <div className="text-center">
               <p className="text-sm text-gray-600">Sales Receipts</p>
-              <p className="text-2xl font-bold text-green-600">₹{getPaymentStats().salesReceipts.toFixed(2)}</p>
+              <p className="text-2xl font-bold text-green-600">₹{paymentStats.salesReceipts.toFixed(2)}</p>
             </div>
           </CardContent>
         </Card>
@@ -248,7 +285,7 @@ export default function PaymentTab({
           <CardContent className="pt-6">
             <div className="text-center">
               <p className="text-sm text-gray-600">Transactions</p>
-              <p className="text-2xl font-bold text-purple-600">{getPaymentStats().count}</p>
+              <p className="text-2xl font-bold text-purple-600">{paymentStats.count}</p>
             </div>
           </CardContent>
         </Card>
@@ -410,7 +447,7 @@ export default function PaymentTab({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {getFilteredPayments().map((payment) => (
+                {filteredPayments.map((payment) => (
                   <TableRow key={payment.id}>
                     <TableCell>{new Date(payment.payDate).toLocaleDateString()}</TableCell>
                     <TableCell>

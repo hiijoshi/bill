@@ -11,6 +11,7 @@ export type RequestAuthContext = {
   role: AppRole
   companyId: string | null
   userDbId: string | null
+  sessionIssuedAt?: number | null
   requestId?: string
 }
 
@@ -59,6 +60,7 @@ export function decodeRequestAuthContext(value: string | null | undefined): Requ
       role: normalizeAppRole(parsed.role),
       companyId: normalizeNullableHeaderValue(parsed.companyId),
       userDbId: normalizeNullableHeaderValue(parsed.userDbId),
+      sessionIssuedAt: typeof parsed.sessionIssuedAt === 'number' ? parsed.sessionIssuedAt : null,
       requestId: normalizeNullableHeaderValue(parsed.requestId) || undefined
     }
   } catch {
@@ -88,6 +90,7 @@ export function getRequestAuthContext(request: NextRequest): RequestAuthContext 
     ),
     companyId: normalizeNullableHeaderValue(request.headers.get('x-company-id')),
     userDbId: normalizeNullableHeaderValue(request.headers.get('x-user-db-id')),
+    sessionIssuedAt: null,
     requestId: request.headers.get('x-request-id') || undefined
   }
 }
@@ -185,7 +188,7 @@ async function hasModulePermission(
   action: 'read' | 'write',
   module: string
 ): Promise<boolean> {
-  if (isSuperAdmin(auth)) {
+  if (isSuperAdmin(auth) || auth.role === 'trader_admin' || auth.role === 'company_admin') {
     return true
   }
 
@@ -224,7 +227,12 @@ export async function filterCompanyIdsByRoutePermission(
   pathname: string,
   method: string
 ): Promise<string[]> {
-  if (companyIds.length === 0 || isSuperAdmin(auth)) {
+  if (
+    companyIds.length === 0 ||
+    isSuperAdmin(auth) ||
+    auth.role === 'trader_admin' ||
+    auth.role === 'company_admin'
+  ) {
     return companyIds
   }
 

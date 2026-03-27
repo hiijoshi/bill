@@ -109,13 +109,31 @@ const menuItems: MenuItem[] = [
   },
 ]
 
+type AuthCachePayload = {
+  user?: {
+    userId?: string | null
+  } | null
+}
+
+const APP_SHELL_AUTH_LOADED_EVENT = 'app-shell-auth-loaded'
+const AUTH_CACHE_KEY = 'shell:auth-me'
+const AUTH_CACHE_AGE_MS = 30_000
+
 interface SidebarProps {
   companyId: string
   isCollapsed?: boolean
+  isMobileOpen?: boolean
   onToggleCollapse?: () => void
+  onCloseMobile?: () => void
 }
 
-export default function Sidebar({ companyId, isCollapsed = false, onToggleCollapse }: SidebarProps) {
+export default function Sidebar({
+  companyId,
+  isCollapsed = false,
+  isMobileOpen = false,
+  onToggleCollapse,
+  onCloseMobile
+}: SidebarProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const [openItems, setOpenItems] = useState<string[]>([])
@@ -151,8 +169,19 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
 
   useEffect(() => {
     let cancelled = false
+    const isAuthPage = pathname === '/login' || pathname === '/super-admin/login'
 
     const fetchPermissions = async (force = false) => {
+      if (cancelled || isAuthPage || !companyId) {
+        return
+      }
+
+      const authCache = getClientCache<AuthCachePayload>(AUTH_CACHE_KEY, AUTH_CACHE_AGE_MS)
+      if (!authCache?.user?.userId) {
+        setAllowedModules(null)
+        return
+      }
+
       try {
         const cached = force ? null : getClientCache<string[]>(permissionsCacheKey, 60_000)
         if (cached) {
@@ -183,8 +212,13 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
       }
     }
 
-    void fetchPermissions(false)
+    if (!isAuthPage && companyId) {
+      void fetchPermissions(false)
+    }
 
+    const onShellAuthLoaded = () => {
+      void fetchPermissions(false)
+    }
     const onSessionRefresh = () => {
       void fetchPermissions(true)
     }
@@ -195,15 +229,17 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
       }
     }
 
+    window.addEventListener(APP_SHELL_AUTH_LOADED_EVENT, onShellAuthLoaded)
     window.addEventListener('sessionRefreshed', onSessionRefresh)
     window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
 
     return () => {
       cancelled = true
+      window.removeEventListener(APP_SHELL_AUTH_LOADED_EVENT, onShellAuthLoaded)
       window.removeEventListener('sessionRefreshed', onSessionRefresh)
       window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
-  }, [companyId, permissionsCacheKey])
+  }, [companyId, pathname, permissionsCacheKey])
 
   const hasChildAccess = useCallback((child: MenuChild) => {
     if (!child.permissionModule) return true
@@ -217,6 +253,11 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
         ? prev.filter(item => item !== title)
         : [...prev, title]
     )
+  }
+
+  const handleNavigate = () => {
+    syncActiveCompany()
+    onCloseMobile?.()
   }
 
   const isActive = (href: string) => {
@@ -243,22 +284,47 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
   }
 
   return (
-    <div className={cn(
-      "bg-white border-r border-slate-200 h-full transition-all duration-300 ease-in-out flex flex-col",
-      isCollapsed ? "w-16" : "w-64"
-    )}>
-      <div className="p-4 flex items-center justify-between flex-shrink-0">
-        {!isCollapsed && <h2 className="text-lg font-semibold text-slate-900">Navigation</h2>}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onToggleCollapse}
-          className="h-8 w-8 rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
-        >
-          {isCollapsed ? <Menu className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-        </Button>
-      </div>
-      <nav className="px-3 pb-4 flex-1 overflow-y-auto">
+    <>
+      <div
+        className={cn(
+          'fixed inset-0 z-40 bg-slate-950/40 transition-opacity duration-200 md:hidden',
+          isMobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0'
+        )}
+        aria-hidden={!isMobileOpen}
+        onClick={onCloseMobile}
+      />
+      <aside
+        className={cn(
+          'z-50 flex h-dvh flex-col border-r border-slate-200 bg-white transition-all duration-300 ease-in-out md:relative md:z-auto md:h-auto',
+          isCollapsed ? 'md:w-16' : 'md:w-64',
+          'fixed inset-y-0 left-0 w-[18rem] max-w-[85vw] shadow-xl md:translate-x-0 md:shadow-none',
+          isMobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+        )}
+      >
+        <div className="flex flex-shrink-0 items-center justify-between p-4">
+          <h2 className={cn('text-lg font-semibold text-slate-900', isCollapsed && 'md:hidden')}>Navigation</h2>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onCloseMobile}
+              className="h-8 w-8 rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-slate-50 hover:text-slate-900 md:hidden"
+              aria-label="Close navigation"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onToggleCollapse}
+              className="hidden h-8 w-8 rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-slate-50 hover:text-slate-900 md:inline-flex"
+              aria-label={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            >
+              {isCollapsed ? <Menu className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+            </Button>
+          </div>
+        </div>
+        <nav className="flex-1 overflow-y-auto px-3 pb-4">
         {menuItems.map((item) => {
           const hasChildren = item.children && item.children.length > 0
           const isOpen = openItems.includes(item.title)
@@ -266,7 +332,7 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
 
           if (!hasChildren) {
             return (
-              <Link key={item.title} href={withCompany(item.href)} onClick={syncActiveCompany}>
+              <Link key={item.title} href={withCompany(item.href)} onClick={handleNavigate}>
                 <Button
                   variant="ghost"
                   className={cn(
@@ -277,8 +343,8 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
                     isCollapsed && 'h-11 justify-center px-0'
                   )}
                 >
-                  {item.icon && <item.icon className={cn("h-4 w-4", isCollapsed ? "" : "mr-3")} />}
-                  {!isCollapsed && item.title}
+                  {item.icon && <item.icon className={cn("h-4 w-4", isCollapsed ? "md:mr-0" : "mr-3")} />}
+                  <span className={cn(isCollapsed && 'md:hidden')}>{item.title}</span>
                 </Button>
               </Link>
             )
@@ -305,10 +371,10 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
                 </Button>
               </CollapsibleTrigger>
               {!isCollapsed && (
-                <CollapsibleContent className="pl-4">
+                <CollapsibleContent className="pl-4 md:block">
                   {item.children.map((child) => (
                     hasChildAccess(child) ? (
-                      <Link key={child.title} href={withCompany(child.href)} onClick={syncActiveCompany}>
+                      <Link key={child.title} href={withCompany(child.href)} onClick={handleNavigate}>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -343,7 +409,8 @@ export default function Sidebar({ companyId, isCollapsed = false, onToggleCollap
             </Collapsible>
           )
         })}
-      </nav>
-    </div>
+        </nav>
+      </aside>
+    </>
   )
 }

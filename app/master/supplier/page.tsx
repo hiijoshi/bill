@@ -8,7 +8,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Edit, Trash2, Truck } from 'lucide-react'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { getCompanyIdFromSearch } from '@/lib/company-context'
+import { isAbortError } from '@/lib/http'
 
 interface Supplier {
   id: string
@@ -22,6 +24,13 @@ interface Supplier {
 type Message = {
   type: 'success' | 'error'
   text: string
+}
+
+type SupplierResponsePayload = Supplier[] | {
+  data?: Supplier[]
+  error?: string
+  timedOut?: boolean
+  aborted?: boolean
 }
 
 export default function SupplierMasterPage() {
@@ -40,6 +49,15 @@ export default function SupplierMasterPage() {
     address: '',
     phone1: ''
   })
+
+  const applySuppliers = useCallback((rows: Supplier[], cacheKey: string) => {
+    const normalizedRows = rows.map((row) => ({
+      ...row,
+      createdAt: row?.createdAt ?? row?.updatedAt ?? null
+    }))
+    setSuppliers(normalizedRows)
+    setClientCache(cacheKey, { data: normalizedRows })
+  }, [])
 
   const fetchSupplierPermissions = useCallback(async (id: string) => {
     const denied = { canRead: false, canWrite: false }
@@ -69,30 +87,84 @@ export default function SupplierMasterPage() {
 
   const fetchSuppliers = useCallback(async (id = companyId) => {
     if (!id) return
+    const cacheKey = `master-suppliers:${id}`
+    const cached = getClientCache<{ data?: Supplier[] }>(cacheKey, 30_000)
+    if (cached && Array.isArray(cached.data) && cached.data.length > 0) {
+      setSuppliers(cached.data)
+      setLoading(false)
+    }
     try {
-      const response = await fetch(`/api/suppliers?companyId=${id}`)
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}))
-        setMessage({ type: 'error', text: error.error || 'Failed to load suppliers' })
-        setSuppliers([])
-        return
-      }
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await fetch(`/api/suppliers?companyId=${id}`, { cache: 'no-store' })
+          const payload = (await response.json().catch(() => ({}))) as SupplierResponsePayload
+          const rows = Array.isArray(payload)
+            ? payload
+            : Array.isArray(payload?.data)
+              ? payload.data
+              : []
 
-      const payload = await response.json().catch(() => [])
-      const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : []
-      const normalizedRows = rows.map((row: Supplier) => ({
-        ...row,
-        createdAt: row?.createdAt ?? row?.updatedAt ?? null
-      }))
-      setSuppliers(normalizedRows)
+          if (response.ok) {
+            applySuppliers(rows, cacheKey)
+            return
+          }
+
+          const body = Array.isArray(payload) ? {} : payload
+          const timedOut =
+            response.status === 499 ||
+            response.status === 504 ||
+            body.timedOut === true ||
+            body.aborted === true
+
+          if (timedOut && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+
+          setMessage({
+            type: 'error',
+            text:
+              typeof body.error === 'string' && body.error.trim()
+                ? body.error
+                : cached?.data?.length
+                  ? 'Supplier list is taking longer than expected. Showing the last loaded data.'
+                  : 'Failed to load suppliers'
+          })
+          if (!cached?.data?.length) {
+            setSuppliers([])
+          }
+          return
+        } catch (error) {
+          if (isAbortError(error) && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+          if (isAbortError(error)) {
+            setMessage({
+              type: 'error',
+              text: cached?.data?.length
+                ? 'Supplier list is taking longer than expected. Showing the last loaded data.'
+                : 'Supplier list took too long to load. Please refresh once.'
+            })
+            if (!cached?.data?.length) {
+              setSuppliers([])
+            }
+            return
+          }
+          throw error
+        }
+      }
     } catch (error) {
+      if (isAbortError(error)) return
       console.error('Error fetching suppliers:', error)
       setMessage({ type: 'error', text: 'Failed to load suppliers' })
-      setSuppliers([])
+      if (!cached?.data?.length) {
+        setSuppliers([])
+      }
     } finally {
       setLoading(false)
     }
-  }, [companyId])
+  }, [applySuppliers, companyId])
 
   useEffect(() => {
     ;(async () => {

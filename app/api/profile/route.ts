@@ -8,8 +8,12 @@ import {
   getRequestAuthContext,
   normalizeAppRole,
 } from '@/lib/api-security'
+import { invalidateAuthGuardStateForUser } from '@/lib/auth-guard-state'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
+import { refreshUserSessionAfterMutation } from '@/lib/session-refresh'
 import { loadSelfUser, toSelfProfile, updateSelfProfile } from '@/lib/self-profile'
+import { isSupabaseConfigured } from '@/lib/supabase/client'
+import { syncSupabaseForLegacyUserMutationWithTimeout } from '@/lib/supabase/legacy-user-sync'
 
 const profileUpdateSchema = z
   .object({
@@ -140,8 +144,42 @@ export async function PATCH(request: NextRequest) {
     notes: parsed.data.newPassword ? 'Self-service password change' : 'Self profile update'
   })
 
-  return NextResponse.json({
-    success: true,
-    user: updated.after
+  invalidateAuthGuardStateForUser({
+    id: updated.after.id,
+    traderId: updated.after.traderId,
+    userId: updated.after.userId
   })
+
+  let cloudSyncWarning: string | null = null
+  if (isSupabaseConfigured()) {
+    const syncResult = await syncSupabaseForLegacyUserMutationWithTimeout({
+      legacyUserId: updated.after.id,
+      password: parsed.data.newPassword || null
+    })
+    if (!syncResult.synced && syncResult.reason) {
+      cloudSyncWarning = syncResult.reason
+    }
+  }
+
+  let response: NextResponse = NextResponse.json({
+    success: true,
+    user: updated.after,
+    ...(cloudSyncWarning ? { cloudSyncWarning } : {})
+  })
+  const refreshedSession = await refreshUserSessionAfterMutation({
+    request,
+    response,
+    namespace: 'app',
+    user: {
+      id: updated.after.id,
+      userId: updated.after.userId,
+      traderId: updated.after.traderId,
+      name: updated.after.name,
+      role: updated.after.role
+    },
+    password: parsed.data.newPassword || null
+  })
+  response = refreshedSession.response
+
+  return response
 }

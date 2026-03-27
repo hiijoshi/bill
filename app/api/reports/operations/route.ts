@@ -9,52 +9,7 @@ import {
 } from '@/lib/api-security'
 import { createBankEntryProvider, SUPPORTED_BANK_SYNC_PROVIDERS } from '@/lib/bank-integration'
 import { normalizeNonNegative, roundCurrency } from '@/lib/billing-calculations'
-
-type CacheEntry<T> = {
-  data: T
-  expiresAt: number
-}
-
-const serverCache = new Map<string, CacheEntry<unknown>>()
-const pendingLoads = new Map<string, Promise<unknown>>()
-
-function makeServerCacheKey(prefix: string, parts: unknown[]): string {
-  return `${prefix}:${JSON.stringify(parts)}`
-}
-
-async function getOrSetServerCache<T>(
-  key: string,
-  maxAgeMs: number,
-  loader: () => Promise<T>
-): Promise<T> {
-  const now = Date.now()
-  const cached = serverCache.get(key)
-  if (cached && cached.expiresAt > now) {
-    return cached.data as T
-  }
-
-  const pending = pendingLoads.get(key)
-  if (pending) {
-    return pending as Promise<T>
-  }
-
-  const nextLoad = loader()
-    .then((data) => {
-      serverCache.set(key, {
-        data,
-        expiresAt: Date.now() + maxAgeMs
-      })
-      pendingLoads.delete(key)
-      return data
-    })
-    .catch((error) => {
-      pendingLoads.delete(key)
-      throw error
-    })
-
-  pendingLoads.set(key, nextLoad)
-  return nextLoad
-}
+import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
 
 type CompanyOption = {
   id: string
@@ -88,6 +43,21 @@ type OutstandingAccumulator = {
   balanceAmount: number
   invoiceCount: number
   lastBillDate: string
+}
+
+type OperationsReportView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'bank-ledger'
+
+function normalizeReportView(value: string | null): OperationsReportView {
+  if (
+    value === 'outstanding' ||
+    value === 'ledger' ||
+    value === 'daily-transaction' ||
+    value === 'daily-consolidated' ||
+    value === 'bank-ledger'
+  ) {
+    return value
+  }
+  return 'outstanding'
 }
 
 const OPERATIONS_REPORT_CACHE_TTL_MS = 20_000
@@ -192,6 +162,7 @@ export async function GET(request: NextRequest) {
     )
     const requestedCompanyId = normalizeId(searchParams.get('companyId'))
     const requestedPartyId = normalizeId(searchParams.get('partyId'))
+    const requestedView = normalizeReportView(searchParams.get('view'))
     const dateFrom = parseDateAtBoundary(searchParams.get('dateFrom'))
     const dateTo = parseDateAtBoundary(searchParams.get('dateTo'), true)
 
@@ -284,8 +255,9 @@ export async function GET(request: NextRequest) {
     }
 
     const cacheKey = makeServerCacheKey('operations-report', [
+      requestedView,
       targetCompanyIds,
-      requestedPartyId || '',
+      requestedView === 'ledger' ? requestedPartyId || '' : '',
       dateFrom?.toISOString() || '',
       dateTo?.toISOString() || '',
       permittedCompanies.map((company) => company.id),
@@ -387,7 +359,17 @@ export async function GET(request: NextRequest) {
         : {})
     }
 
+      const needsLedgerView = requestedView === 'ledger'
+      const needsDailyView = requestedView === 'daily-transaction' || requestedView === 'daily-consolidated'
+      const needsBankLedgerView = requestedView === 'bank-ledger'
+      const needsDetailedPayments = needsDailyView || needsBankLedgerView
+
       const [
+      salesTotalAggregate,
+      purchaseTotalAggregate,
+      specialPurchaseTotalAggregate,
+      paymentTotalsByType,
+      stockAdjustmentAggregate,
       salesBills,
       purchaseBills,
       specialPurchaseBills,
@@ -400,7 +382,40 @@ export async function GET(request: NextRequest) {
       specialPurchaseBillsAsOf,
       paymentsAsOf
       ] = await Promise.all([
-      prisma.salesBill.findMany({
+      prisma.salesBill.aggregate({
+        where: salesWhere,
+        _sum: {
+          totalAmount: true
+        }
+      }),
+      prisma.purchaseBill.aggregate({
+        where: purchaseWhere,
+        _sum: {
+          totalAmount: true
+        }
+      }),
+      prisma.specialPurchaseBill.aggregate({
+        where: purchaseWhere,
+        _sum: {
+          totalAmount: true
+        }
+      }),
+      prisma.payment.groupBy({
+        by: ['billType'],
+        where: paymentWhere,
+        _sum: {
+          amount: true
+        }
+      }),
+      prisma.stockLedger.aggregate({
+        where: stockAdjustmentWhere,
+        _sum: {
+          qtyIn: true,
+          qtyOut: true
+        }
+      }),
+      needsDailyView
+        ? prisma.salesBill.findMany({
         where: salesWhere,
         select: {
           id: true,
@@ -431,8 +446,10 @@ export async function GET(request: NextRequest) {
           }
         },
         orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }]
-      }),
-      prisma.purchaseBill.findMany({
+      })
+        : Promise.resolve([]),
+      needsDailyView
+        ? prisma.purchaseBill.findMany({
         where: purchaseWhere,
         select: {
           id: true,
@@ -467,8 +484,10 @@ export async function GET(request: NextRequest) {
           }
         },
         orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }]
-      }),
-      prisma.specialPurchaseBill.findMany({
+      })
+        : Promise.resolve([]),
+      needsDailyView
+        ? prisma.specialPurchaseBill.findMany({
         where: purchaseWhere,
         select: {
           id: true,
@@ -498,8 +517,10 @@ export async function GET(request: NextRequest) {
           }
         },
         orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }]
-      }),
-      prisma.payment.findMany({
+      })
+        : Promise.resolve([]),
+      needsDetailedPayments
+        ? prisma.payment.findMany({
         where: paymentWhere,
         select: {
           id: true,
@@ -537,8 +558,10 @@ export async function GET(request: NextRequest) {
           }
         },
         orderBy: [{ payDate: 'desc' }, { createdAt: 'desc' }]
-      }),
-      prisma.stockLedger.findMany({
+      })
+        : Promise.resolve([]),
+      needsDailyView
+        ? prisma.stockLedger.findMany({
         where: stockAdjustmentWhere,
         select: {
           id: true,
@@ -555,8 +578,10 @@ export async function GET(request: NextRequest) {
           }
         },
         orderBy: [{ entryDate: 'desc' }, { createdAt: 'desc' }]
-      }),
-      prisma.party.findMany({
+      })
+        : Promise.resolve([]),
+      needsLedgerView
+        ? prisma.party.findMany({
         where: {
           companyId: { in: targetCompanyIds },
           OR: [
@@ -584,18 +609,20 @@ export async function GET(request: NextRequest) {
           phone1: true
         },
         orderBy: [{ name: 'asc' }]
-      }),
-      Promise.all(
-        SUPPORTED_BANK_SYNC_PROVIDERS.map((provider) =>
-          createBankEntryProvider(provider).getStatus({ companyId: targetCompanyIds[0] || '' })
-        )
-      ),
+      })
+        : Promise.resolve([]),
+      needsBankLedgerView
+        ? Promise.all(
+            SUPPORTED_BANK_SYNC_PROVIDERS.map((provider) =>
+              createBankEntryProvider(provider).getStatus({ companyId: targetCompanyIds[0] || '' })
+            )
+          )
+        : Promise.resolve([]),
       prisma.salesBill.findMany({
         where: salesOutstandingWhere,
         select: {
           id: true,
           companyId: true,
-          billNo: true,
           billDate: true,
           totalAmount: true,
           partyId: true,
@@ -747,12 +774,14 @@ export async function GET(request: NextRequest) {
           phone1: String(party.phone1 || ''),
           balanceAmount: roundCurrency(outstandingRow?.balanceAmount || 0)
         }
-      })
+      }).sort((a, b) => b.balanceAmount - a.balanceAmount || a.name.localeCompare(b.name))
 
       const selectedPartyId =
-      requestedPartyId && partiesWithContext.some((party) => party.id === requestedPartyId)
+      needsLedgerView && requestedPartyId && partiesWithContext.some((party) => party.id === requestedPartyId)
         ? requestedPartyId
-        : outstandingRows[0]?.partyId || partiesWithContext[0]?.id || ''
+        : needsLedgerView
+          ? partiesWithContext[0]?.id || ''
+          : ''
 
       const selectedParty = partiesWithContext.find((party) => party.id === selectedPartyId) || null
 
@@ -921,37 +950,43 @@ export async function GET(request: NextRequest) {
     })
 
       let runningBalance = openingBalance
-      const ledgerRows = [
-      ...(dateFrom || openingBalance !== 0
-        ? [
-            {
-              id: 'opening-balance',
-              date: searchParams.get('dateFrom') || '',
-              type: 'opening' as PartyLedgerEntryType,
-              refNo: '-',
-              description: 'Opening Balance',
-              companyId: selectedParty?.companyId || '',
-              companyName: selectedParty?.companyName || '',
-              paymentMode: '-',
-              debit: 0,
-              credit: 0,
-              note: '',
+      const ledgerRows = needsLedgerView
+      ? [
+          ...(dateFrom || openingBalance !== 0
+            ? [
+                {
+                  id: 'opening-balance',
+                  date: searchParams.get('dateFrom') || '',
+                  type: 'opening' as PartyLedgerEntryType,
+                  refNo: '-',
+                  description: 'Opening Balance',
+                  companyId: selectedParty?.companyId || '',
+                  companyName: selectedParty?.companyName || '',
+                  paymentMode: '-',
+                  debit: 0,
+                  credit: 0,
+                  note: '',
+                  runningBalance
+                }
+              ]
+            : []),
+          ...ledgerBaseRows.map((row) => {
+            runningBalance = roundCurrency(runningBalance + row.debit - row.credit)
+            return {
+              ...row,
+              date: dateKey(row.date),
               runningBalance
             }
-          ]
-        : []),
-      ...ledgerBaseRows.map((row) => {
-        runningBalance = roundCurrency(runningBalance + row.debit - row.credit)
-        return {
-          ...row,
-          date: dateKey(row.date),
-          runningBalance
-        }
-      })
-    ]
+          })
+        ]
+      : []
 
-      const totalLedgerSales = roundCurrency(ledgerBaseRows.reduce((sum, row) => sum + row.debit, 0))
-      const totalLedgerReceipts = roundCurrency(ledgerBaseRows.reduce((sum, row) => sum + row.credit, 0))
+      const totalLedgerSales = needsLedgerView
+      ? roundCurrency(ledgerBaseRows.reduce((sum, row) => sum + row.debit, 0))
+      : 0
+      const totalLedgerReceipts = needsLedgerView
+      ? roundCurrency(ledgerBaseRows.reduce((sum, row) => sum + row.credit, 0))
+      : 0
 
       const dailySummaryMap = new Map<string, DailySummaryAccumulator>()
       const dailyTransactionRows: Array<{
@@ -972,6 +1007,7 @@ export async function GET(request: NextRequest) {
       note: string
     }> = []
 
+      if (needsDailyView) {
       for (const bill of purchaseBills) {
       const key = dateKey(bill.billDate)
       const amount = roundCurrency(normalizeNonNegative(bill.totalAmount))
@@ -1131,6 +1167,7 @@ export async function GET(request: NextRequest) {
         note: 'Stock adjustment'
       })
     }
+      }
 
       const dailySummaryRows = Array.from(dailySummaryMap.values())
       .map((row) => ({
@@ -1146,53 +1183,48 @@ export async function GET(request: NextRequest) {
       }))
       .sort((a, b) => b.date.localeCompare(a.date))
 
-      const bankLedgerRows = payments
-      .filter((payment) => isBankLikePayment(payment))
-      .map((payment) => {
-        const isSalesReceipt = payment.billType === 'sales'
-        const amount = roundCurrency(normalizeNonNegative(payment.amount))
-        const billNo = isSalesReceipt
-          ? String(salesBillNoMap.get(payment.billId) || '')
-          : String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || '')
-        return {
-          id: payment.id,
-          date: dateKey(payment.payDate),
-          companyId: payment.companyId,
-          companyName: companyNameMap.get(payment.companyId) || payment.companyId,
-          direction: isSalesReceipt ? 'IN' : 'OUT',
-          billType: payment.billType === 'sales' ? 'Sales' : 'Purchase',
-          billNo,
-          refNo: billNo || String(payment.txnRef || ''),
-          partyName: String(payment.party?.name || payment.farmer?.name || ''),
-          bankName: String(payment.bankNameSnapshot || '').trim() || 'Bank / Online',
-          mode: formatPaymentMode(payment.mode),
-          amountIn: roundCurrency(isSalesReceipt ? amount : 0),
-          amountOut: roundCurrency(!isSalesReceipt ? amount : 0),
-          txnRef: String(payment.txnRef || ''),
-          ifscCode: String(payment.ifscCode || ''),
-          accountNo: String(payment.beneficiaryBankAccount || ''),
-          note: String(payment.note || payment.bankBranchSnapshot || '')
-        }
-      })
-      .sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName))
+      const bankLedgerRows = needsBankLedgerView
+      ? payments
+          .filter((payment) => isBankLikePayment(payment))
+          .map((payment) => {
+            const isSalesReceipt = payment.billType === 'sales'
+            const amount = roundCurrency(normalizeNonNegative(payment.amount))
+            const billNo = isSalesReceipt
+              ? String(salesBillNoMap.get(payment.billId) || '')
+              : String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || '')
+            return {
+              id: payment.id,
+              date: dateKey(payment.payDate),
+              companyId: payment.companyId,
+              companyName: companyNameMap.get(payment.companyId) || payment.companyId,
+              direction: isSalesReceipt ? 'IN' : 'OUT',
+              billType: payment.billType === 'sales' ? 'Sales' : 'Purchase',
+              billNo,
+              refNo: billNo || String(payment.txnRef || ''),
+              partyName: String(payment.party?.name || payment.farmer?.name || ''),
+              bankName: String(payment.bankNameSnapshot || '').trim() || 'Bank / Online',
+              mode: formatPaymentMode(payment.mode),
+              amountIn: roundCurrency(isSalesReceipt ? amount : 0),
+              amountOut: roundCurrency(!isSalesReceipt ? amount : 0),
+              txnRef: String(payment.txnRef || ''),
+              ifscCode: String(payment.ifscCode || ''),
+              accountNo: String(payment.beneficiaryBankAccount || ''),
+              note: String(payment.note || payment.bankBranchSnapshot || '')
+            }
+          })
+          .sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName))
+      : []
 
-      const totalSaleAmount = roundCurrency(
-      salesBills.reduce((sum, bill) => sum + normalizeNonNegative(bill.totalAmount), 0)
+      const paymentTotalsMap = new Map(
+      paymentTotalsByType.map((row) => [row.billType, normalizeNonNegative(row._sum.amount)])
       )
+      const totalSaleAmount = roundCurrency(normalizeNonNegative(salesTotalAggregate._sum.totalAmount))
       const totalPurchaseAmount = roundCurrency(
-      purchaseBills.reduce((sum, bill) => sum + normalizeNonNegative(bill.totalAmount), 0) +
-        specialPurchaseBills.reduce((sum, bill) => sum + normalizeNonNegative(bill.totalAmount), 0)
+      normalizeNonNegative(purchaseTotalAggregate._sum.totalAmount) +
+        normalizeNonNegative(specialPurchaseTotalAggregate._sum.totalAmount)
       )
-      const totalPaidAmount = roundCurrency(
-      payments
-        .filter((payment) => payment.billType === 'purchase')
-        .reduce((sum, payment) => sum + normalizeNonNegative(payment.amount), 0)
-      )
-      const totalReceivedAmount = roundCurrency(
-      payments
-        .filter((payment) => payment.billType === 'sales')
-        .reduce((sum, payment) => sum + normalizeNonNegative(payment.amount), 0)
-      )
+      const totalPaidAmount = roundCurrency(paymentTotalsMap.get('purchase') || 0)
+      const totalReceivedAmount = roundCurrency(paymentTotalsMap.get('sales') || 0)
       const purchaseBalanceTotal = roundCurrency(
       purchaseBillsAsOf.reduce(
         (sum, bill) => sum + Math.max(0, normalizeNonNegative(bill.totalAmount) - (purchasePaidByBillId.get(bill.id) || 0)),
@@ -1212,7 +1244,7 @@ export async function GET(request: NextRequest) {
       const totalBalance = roundCurrency(purchaseBalanceTotal + salesBalanceTotal)
       const netOutstanding = roundCurrency(salesBalanceTotal - purchaseBalanceTotal)
       const totalStockAdjustmentQty = roundCurrency(
-      stockAdjustments.reduce((sum, entry) => sum + normalizeNonNegative(entry.qtyIn) + normalizeNonNegative(entry.qtyOut), 0)
+      normalizeNonNegative(stockAdjustmentAggregate._sum.qtyIn) + normalizeNonNegative(stockAdjustmentAggregate._sum.qtyOut)
       )
 
       return {
@@ -1228,26 +1260,30 @@ export async function GET(request: NextRequest) {
         purchaseBalanceTotal,
         totalStockAdjustmentQty
       },
-      outstanding: outstandingRows,
-      parties: partiesWithContext,
-      partyLedger: {
-        selectedPartyId,
-        selectedPartyName: selectedParty?.name || '',
-        selectedPartyCompanyName: selectedParty?.companyName || '',
-        openingBalance,
-        totalSales: totalLedgerSales,
-        totalReceipts: totalLedgerReceipts,
-        closingBalance: ledgerRows.length > 0 ? ledgerRows[ledgerRows.length - 1].runningBalance : openingBalance,
-        rows: ledgerRows
-      },
-      dailyTransactions: dailyTransactionRows.sort(
-        (a, b) => b.date.localeCompare(a.date) || a.type.localeCompare(b.type)
-      ),
-      dailyTransactionSummary: dailySummaryRows,
-      dailyConsolidated: dailySummaryRows,
-      bankLedger: bankLedgerRows,
+      outstanding: requestedView === 'outstanding' ? outstandingRows : [],
+      parties: needsLedgerView ? partiesWithContext : [],
+      partyLedger: needsLedgerView
+        ? {
+            selectedPartyId,
+            selectedPartyName: selectedParty?.name || '',
+            selectedPartyCompanyName: selectedParty?.companyName || '',
+            openingBalance,
+            totalSales: totalLedgerSales,
+            totalReceipts: totalLedgerReceipts,
+            closingBalance: ledgerRows.length > 0 ? ledgerRows[ledgerRows.length - 1].runningBalance : openingBalance,
+            rows: ledgerRows
+          }
+        : undefined,
+      dailyTransactions: needsDailyView
+        ? dailyTransactionRows.sort((a, b) => b.date.localeCompare(a.date) || a.type.localeCompare(b.type))
+        : [],
+      dailyTransactionSummary: needsDailyView ? dailySummaryRows : [],
+      dailyConsolidated: requestedView === 'daily-consolidated' ? dailySummaryRows : [],
+      bankLedger: needsBankLedgerView ? bankLedgerRows : [],
       filterOptions: {
-        banks: Array.from(new Set(bankLedgerRows.map((row) => row.bankName).filter(Boolean))).sort((a, b) => a.localeCompare(b))
+        banks: needsBankLedgerView
+          ? Array.from(new Set(bankLedgerRows.map((row) => row.bankName).filter(Boolean))).sort((a, b) => a.localeCompare(b))
+          : []
       },
       meta: {
         scope: 'company',

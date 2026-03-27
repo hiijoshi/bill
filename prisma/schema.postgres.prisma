@@ -403,6 +403,8 @@ model StockLedger {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  @@index([companyId, entryDate], map: "idx_stock_ledger_company_date")
+  @@index([companyId, productId, entryDate], map: "idx_stock_ledger_company_product_date")
   @@index([productId, entryDate], map: "idx_stock_ledger_product_date")
 
   @@schema("public")

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess, parseJsonWithSchema, requireAuthContext, requireRoles } from '@/lib/api-security'
@@ -8,6 +9,42 @@ function clean(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const v = value.trim()
   return v.length > 0 ? v : null
+}
+
+type ProductQueryRow = {
+  id: string
+  name: string
+  unit: string | null
+  hsnCode: string | null
+  gstRate: number | string | null
+  sellingPrice: number | string | null
+  description: string | null
+  isActive: boolean | number | bigint | string | null
+  currentStock: number | string | null
+  createdAt: Date | string
+  updatedAt: Date | string
+}
+
+function toNumber(value: number | string | null | undefined): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
+}
+
+function toBoolean(value: boolean | number | bigint | string | null | undefined): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'bigint') return String(value) !== '0'
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    return normalized === 'true' || normalized === '1'
+  }
+  return false
 }
 
 function readCompanyIdFromAuth(request: NextRequest): string | null {
@@ -137,62 +174,72 @@ export async function GET(request: NextRequest) {
         : {})
     }
 
+    const searchPattern = pagination.search ? `%${pagination.search}%` : null
+    const searchClause = searchPattern
+      ? Prisma.sql`
+          AND (
+            p."name" LIKE ${searchPattern}
+            OR p."hsnCode" LIKE ${searchPattern}
+            OR p."description" LIKE ${searchPattern}
+          )
+        `
+      : Prisma.empty
+    const paginationClause = pagination.enabled
+      ? Prisma.sql`LIMIT ${pagination.pageSize} OFFSET ${pagination.skip}`
+      : Prisma.empty
+
     const [products, total] = await Promise.all([
-      prisma.product.findMany({
-        where,
-        include: {
-          unit: true
-        },
-        orderBy: { name: 'asc' },
-        ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
-      }),
+      prisma.$queryRaw<ProductQueryRow[]>`
+        SELECT
+          p."id" AS "id",
+          p."name" AS "name",
+          u."symbol" AS "unit",
+          p."hsnCode" AS "hsnCode",
+          p."gstRate" AS "gstRate",
+          p."sellingPrice" AS "sellingPrice",
+          p."description" AS "description",
+          p."isActive" AS "isActive",
+          p."createdAt" AS "createdAt",
+          p."updatedAt" AS "updatedAt",
+          COALESCE(SUM(sl."qtyIn"), 0) - COALESCE(SUM(sl."qtyOut"), 0) AS "currentStock"
+        FROM "Product" p
+        INNER JOIN "Unit" u
+          ON u."id" = p."unitId"
+        LEFT JOIN "StockLedger" sl
+          ON sl."productId" = p."id"
+         AND sl."companyId" = p."companyId"
+        WHERE p."companyId" = ${companyId}
+        ${searchClause}
+        GROUP BY
+          p."id",
+          p."name",
+          u."symbol",
+          p."hsnCode",
+          p."gstRate",
+          p."sellingPrice",
+          p."description",
+          p."isActive",
+          p."createdAt",
+          p."updatedAt"
+        ORDER BY p."name" ASC
+        ${paginationClause}
+      `,
       pagination.enabled ? prisma.product.count({ where }) : Promise.resolve(0)
     ])
 
-    const productIds = products.map((product) => product.id)
-
-    const stockSummary =
-      productIds.length > 0
-        ? await prisma.stockLedger.groupBy({
-            by: ['productId'],
-            where: {
-              companyId,
-              productId: { in: productIds }
-            },
-            _sum: {
-              qtyIn: true,
-              qtyOut: true
-            }
-          })
-        : []
-
-    const stockSummaryMap = new Map(
-      stockSummary.map((row) => [
-        row.productId,
-        {
-          qtyIn: Number(row._sum.qtyIn || 0),
-          qtyOut: Number(row._sum.qtyOut || 0)
-        }
-      ])
-    )
-
-    const rows = products.map((product) => {
-      const totals = stockSummaryMap.get(product.id) || { qtyIn: 0, qtyOut: 0 }
-
-      return {
-        id: product.id,
-        name: product.name,
-        unit: product.unit.symbol,
-        hsnCode: product.hsnCode,
-        gstRate: product.gstRate,
-        sellingPrice: product.sellingPrice,
-        description: product.description,
-        isActive: product.isActive,
-        currentStock: totals.qtyIn - totals.qtyOut,
-        createdAt: product.createdAt,
-        updatedAt: product.updatedAt
-      }
-    })
+    const rows = products.map((product) => ({
+      id: product.id,
+      name: product.name,
+      unit: product.unit || '',
+      hsnCode: product.hsnCode,
+      gstRate: product.gstRate === null ? null : toNumber(product.gstRate),
+      sellingPrice: product.sellingPrice === null ? null : toNumber(product.sellingPrice),
+      description: product.description,
+      isActive: toBoolean(product.isActive),
+      currentStock: toNumber(product.currentStock),
+      createdAt: product.createdAt,
+      updatedAt: product.updatedAt
+    }))
 
     if (pagination.enabled) {
       // Backward compatibility:

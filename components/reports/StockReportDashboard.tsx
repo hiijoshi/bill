@@ -60,6 +60,7 @@ interface StockReportDashboardProps {
 
 const COMPANIES_CACHE_KEY = 'shell:companies'
 const COMPANIES_CACHE_AGE_MS = 60_000
+const STOCK_REPORT_CACHE_AGE_MS = 20_000
 
 const numberFormatter = new Intl.NumberFormat('en-IN', {
   minimumFractionDigits: 2,
@@ -204,6 +205,16 @@ export default function StockReportDashboard({
     setLoading(true)
 
     try {
+      const cacheKey = ['stock-report', selectedCompanyId, dateFrom, dateTo, entryTypeFilter].join(':')
+      const cached = getClientCache<{ rows: StockRow[]; generatedAt: string }>(cacheKey, STOCK_REPORT_CACHE_AGE_MS)
+      if (cached) {
+        setGeneratedRows(cached.rows)
+        setLastGeneratedAt(cached.generatedAt)
+        setErrorMessage(cached.rows.length === 0 ? 'No stock records found for selected filters.' : '')
+        setLoading(false)
+        return
+      }
+
       const companyNameMap = new Map(companies.map((company) => [company.id, company.name]))
 
       const datasets = await Promise.all(
@@ -257,7 +268,12 @@ export default function StockReportDashboard({
       nextRows.sort((a, b) => b._sortTs - a._sortTs)
 
       setGeneratedRows(nextRows)
-      setLastGeneratedAt(new Date().toLocaleString('en-IN'))
+      const generatedAt = new Date().toLocaleString('en-IN')
+      setLastGeneratedAt(generatedAt)
+      setClientCache(cacheKey, {
+        rows: nextRows,
+        generatedAt
+      })
 
       if (nextRows.length === 0) {
         setErrorMessage('No stock records found for selected filters.')

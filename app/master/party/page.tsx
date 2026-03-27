@@ -11,6 +11,8 @@ import DashboardLayout from '@/app/components/DashboardLayout'
 import { Plus, Edit, Trash2, Users } from 'lucide-react'
 import { getCompanyIdFromSearch } from '@/lib/company-context'
 import { useRouter } from 'next/navigation'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { isAbortError } from '@/lib/http'
 
 interface Party {
   id: string
@@ -26,6 +28,13 @@ interface Party {
   accountNo?: string
   createdAt: string
   updatedAt: string
+}
+
+type PartyResponsePayload = Party[] | {
+  data?: Party[]
+  error?: string
+  timedOut?: boolean
+  aborted?: boolean
 }
 
 export default function PartyMasterPage() {
@@ -53,6 +62,11 @@ export default function PartyMasterPage() {
     accountNo: ''
   })
 
+  const applyParties = useCallback((rows: Party[], cacheKey: string) => {
+    setParties(rows)
+    setClientCache(cacheKey, { data: rows })
+  }, [])
+
   useEffect(() => {
     const term = searchTerm.trim().toLowerCase()
     if (!term) {
@@ -71,26 +85,87 @@ export default function PartyMasterPage() {
 
   const fetchParties = useCallback(async (id = companyId) => {
     if (!id) return
+    const cacheKey = `master-parties:${id}`
+    const cached = getClientCache<{ data?: Party[] }>(cacheKey, 30_000)
+    if (cached && Array.isArray(cached.data) && cached.data.length > 0) {
+      const buyerParties = cached.data.filter((party) => party?.type === 'buyer')
+      applyParties(buyerParties, cacheKey)
+      setLoading(false)
+    }
 
     try {
-      const response = await fetch(`/api/parties?companyId=${id}`)
-      if (response.ok) {
-        const data = await response.json()
-        const buyerParties = Array.isArray(data)
-          ? data.filter((party: Party) => party?.type === 'buyer')
-          : []
-        setParties(buyerParties)
-      } else {
-        const error = await response.json()
-        setMessage({ type: 'error', text: error.error || 'Failed to load parties' })
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await fetch(`/api/parties?companyId=${id}`, { cache: 'no-store' })
+          const payload = (await response.json().catch(() => ({}))) as PartyResponsePayload
+          const rows = Array.isArray(payload)
+            ? payload
+            : Array.isArray(payload?.data)
+              ? payload.data
+              : []
+
+          if (response.ok) {
+            const buyerParties = rows.filter((party) => party?.type === 'buyer')
+            applyParties(buyerParties, cacheKey)
+            return
+          }
+
+          const body = Array.isArray(payload) ? {} : payload
+          const timedOut =
+            response.status === 499 ||
+            response.status === 504 ||
+            body.timedOut === true ||
+            body.aborted === true
+
+          if (timedOut && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+
+          setMessage({
+            type: 'error',
+            text:
+              typeof body.error === 'string' && body.error.trim()
+                ? body.error
+                : cached?.data?.length
+                  ? 'Party list is taking longer than expected. Showing the last loaded data.'
+                  : 'Failed to load parties'
+          })
+          if (!cached?.data?.length) {
+            setParties([])
+          }
+          return
+        } catch (error) {
+          if (isAbortError(error) && attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            continue
+          }
+          if (isAbortError(error)) {
+            setMessage({
+              type: 'error',
+              text: cached?.data?.length
+                ? 'Party list is taking longer than expected. Showing the last loaded data.'
+                : 'Party list took too long to load. Please refresh once.'
+            })
+            if (!cached?.data?.length) {
+              setParties([])
+            }
+            return
+          }
+          throw error
+        }
       }
     } catch (error) {
+      if (isAbortError(error)) return
       console.error('Error fetching parties:', error)
       setMessage({ type: 'error', text: 'Failed to load parties' })
+      if (!cached?.data?.length) {
+        setParties([])
+      }
     } finally {
       setLoading(false)
     }
-  }, [companyId])
+  }, [applyParties, companyId])
 
   useEffect(() => {
     ;(async () => {

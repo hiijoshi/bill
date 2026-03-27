@@ -12,7 +12,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { deleteClientCacheByPrefix, getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { isAbortError } from '@/lib/http'
 
 interface Product {
   id: string
@@ -47,7 +49,31 @@ interface ProductMetrics {
   lastMovementDate: string | null
 }
 
+type StockOverviewSummaryRow = {
+  productId: string
+  productName: string
+  productUnit: string
+  totalIn: number
+  totalOut: number
+  closingStock: number
+  adjustmentEntries?: number
+  movementCount?: number
+  lastMovementDate?: string | null
+}
+
+type StockOverviewPayload = {
+  products?: Product[]
+  summary?: StockOverviewSummaryRow[]
+  recentEntries?: StockLedgerEntry[]
+}
+
+type StockLedgerListPayload = {
+  data?: StockLedgerEntry[]
+}
+
 type AdjustmentType = 'in' | 'out'
+
+const STOCK_ADJUSTMENT_RECENT_LIMIT = 40
 
 function normalizeProducts(payload: unknown): Product[] {
   const rows = Array.isArray(payload)
@@ -87,6 +113,24 @@ function normalizeLedger(payload: unknown): StockLedgerEntry[] {
     .filter((entry) => entry.id && entry.product.id)
 }
 
+function normalizeSummary(payload: unknown): ProductMetrics[] {
+  const rows = Array.isArray(payload) ? payload : []
+
+  return rows
+    .map((row) => ({
+      productId: String(row?.productId || ''),
+      productName: String(row?.productName || ''),
+      unit: String(row?.productUnit || ''),
+      currentStock: Number(row?.closingStock || 0),
+      totalIn: Number(row?.totalIn || 0),
+      totalOut: Number(row?.totalOut || 0),
+      adjustmentEntries: Number(row?.adjustmentEntries || 0),
+      movementCount: Number(row?.movementCount || 0),
+      lastMovementDate: typeof row?.lastMovementDate === 'string' ? row.lastMovementDate : null
+    }))
+    .filter((row) => row.productId && row.productName)
+}
+
 function toNonNegative(value: string): string {
   if (value === '') return ''
   const parsed = Number(value)
@@ -115,6 +159,7 @@ export default function StockAdjustmentPage() {
   const [pageLoading, setPageLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [products, setProducts] = useState<Product[]>([])
+  const [stockSummary, setStockSummary] = useState<ProductMetrics[]>([])
   const [stockLedger, setStockLedger] = useState<StockLedgerEntry[]>([])
 
   const [selectedProduct, setSelectedProduct] = useState('')
@@ -123,46 +168,116 @@ export default function StockAdjustmentPage() {
   const [quantity, setQuantity] = useState('')
   const [remark, setRemark] = useState('')
 
-  const fetchStockContext = useCallback(async (targetCompanyId: string, isCancelled: () => boolean = () => false) => {
+  const fetchRecentLedger = useCallback(async (targetCompanyId: string, isCancelled: () => boolean = () => false) => {
     try {
-      const [productsResponse, ledgerResponse] = await Promise.all([
-        fetch(`/api/products?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' }),
-        fetch(`/api/stock-ledger?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' })
-      ])
-
-      if (!productsResponse.ok || !ledgerResponse.ok) {
-        throw new Error('Failed to load stock data')
+      const params = new URLSearchParams({
+        companyId: targetCompanyId,
+        page: '1',
+        pageSize: String(STOCK_ADJUSTMENT_RECENT_LIMIT),
+        withMeta: 'true'
+      })
+      const response = await fetch(`/api/stock-ledger?${params.toString()}`, { cache: 'no-store' })
+      const payload = (await response.json().catch(() => ({}))) as StockLedgerListPayload & {
+        error?: string
+        timedOut?: boolean
+        aborted?: boolean
       }
 
-      const [productsPayload, ledgerPayload] = await Promise.all([
-        productsResponse.json().catch(() => []),
-        ledgerResponse.json().catch(() => [])
-      ])
-
-      if (isCancelled()) return
-
-      const nextProducts = normalizeProducts(productsPayload)
-      const nextLedger = normalizeLedger(ledgerPayload)
-
-      setProducts(nextProducts)
-      setStockLedger(nextLedger)
-      setSelectedProduct((current) => {
-        if (current && nextProducts.some((product) => product.id === current)) {
-          return current
+      if (!response.ok) {
+        if (response.status === 499 || response.status === 504 || payload.timedOut || payload.aborted) {
+          if (!isCancelled()) {
+            setStockLedger([])
+          }
+          return
         }
-        return nextProducts.find((product) => product.currentStock > 0)?.id || nextProducts[0]?.id || ''
-      })
-    } catch (error) {
+        throw new Error(typeof payload.error === 'string' ? payload.error : 'Failed to load stock movements')
+      }
+
       if (isCancelled()) return
+      setStockLedger(normalizeLedger(payload.data || []))
+    } catch (error) {
+      if (isCancelled() || isAbortError(error)) return
+      console.error('Error fetching stock movements:', error)
+      setStockLedger([])
+    }
+  }, [])
+
+  const applyProductsAndSummary = useCallback((nextProducts: Product[], nextSummary: ProductMetrics[]) => {
+    setProducts(nextProducts)
+    setStockSummary(nextSummary)
+    setSelectedProduct((current) => {
+      if (current && nextProducts.some((product) => product.id === current)) {
+        return current
+      }
+      return nextProducts.find((product) => product.currentStock > 0)?.id || nextProducts[0]?.id || ''
+    })
+  }, [])
+
+  const fetchStockContext = useCallback(async (targetCompanyId: string, isCancelled: () => boolean = () => false) => {
+    try {
+      const cacheKey = `stock-overview:${targetCompanyId}`
+      const cached = getClientCache<StockOverviewPayload>(cacheKey, 30_000)
+      if (cached) {
+        if (isCancelled()) return
+
+        const nextProducts = normalizeProducts(cached.products || [])
+        const nextSummary = normalizeSummary(cached.summary || [])
+        const nextLedger = normalizeLedger(cached.recentEntries || [])
+
+        applyProductsAndSummary(nextProducts, nextSummary)
+        setStockLedger(nextLedger)
+        void fetchRecentLedger(targetCompanyId, isCancelled)
+        return
+      }
+
+      const params = new URLSearchParams({
+        companyId: targetCompanyId,
+        mode: 'overview',
+        includeMeta: 'false',
+        includeRecent: 'false'
+      })
+      const response = await fetch(`/api/stock-ledger?${params.toString()}`, { cache: 'no-store' })
+      const payload = (await response.json().catch(() => ({}))) as StockOverviewPayload & {
+        error?: string
+        timedOut?: boolean
+        aborted?: boolean
+      }
+
+      if (!response.ok) {
+        if (response.status === 499 || response.status === 504 || payload.timedOut || payload.aborted) {
+          setProducts([])
+          setStockSummary([])
+          setStockLedger([])
+          return
+        }
+        throw new Error(typeof payload.error === 'string' ? payload.error : 'Failed to load stock data')
+      }
+
+      if (isCancelled()) return
+
+      const nextProducts = normalizeProducts(payload.products || [])
+      const nextSummary = normalizeSummary(payload.summary || [])
+
+      applyProductsAndSummary(nextProducts, nextSummary)
+      setStockLedger([])
+      setClientCache(cacheKey, {
+        products: nextProducts,
+        summary: nextSummary,
+        recentEntries: []
+      })
+      void fetchRecentLedger(targetCompanyId, isCancelled)
+    } catch (error) {
+      if (isCancelled() || isAbortError(error)) return
       console.error('Error fetching stock data:', error)
       setProducts([])
+      setStockSummary([])
       setStockLedger([])
     } finally {
       if (!isCancelled()) {
         setPageLoading(false)
       }
     }
-  }, [])
+  }, [applyProductsAndSummary, fetchRecentLedger])
 
   useEffect(() => {
     let cancelled = false
@@ -189,39 +304,8 @@ export default function StockAdjustmentPage() {
   }, [fetchStockContext, router])
 
   const productMetrics = useMemo(() => {
-    const summary = new Map<string, ProductMetrics>()
-
-    products.forEach((product) => {
-      summary.set(product.id, {
-        productId: product.id,
-        productName: product.name,
-        unit: product.unit,
-        currentStock: Number(product.currentStock || 0),
-        totalIn: 0,
-        totalOut: 0,
-        adjustmentEntries: 0,
-        movementCount: 0,
-        lastMovementDate: null
-      })
-    })
-
-    stockLedger.forEach((entry) => {
-      const metric = summary.get(entry.product.id)
-      if (!metric) return
-
-      metric.totalIn += Number(entry.qtyIn || 0)
-      metric.totalOut += Number(entry.qtyOut || 0)
-      metric.movementCount += 1
-      if (entry.type === 'adjustment') {
-        metric.adjustmentEntries += 1
-      }
-      if (!metric.lastMovementDate || new Date(entry.entryDate).getTime() > new Date(metric.lastMovementDate).getTime()) {
-        metric.lastMovementDate = entry.entryDate
-      }
-    })
-
-    return summary
-  }, [products, stockLedger])
+    return new Map(stockSummary.map((metric) => [metric.productId, metric]))
+  }, [stockSummary])
 
   const selectedProductData = products.find((product) => product.id === selectedProduct) || null
   const selectedProductMetrics = selectedProduct ? productMetrics.get(selectedProduct) || null : null
@@ -259,7 +343,7 @@ export default function StockAdjustmentPage() {
   const canRecordOut = !selectedProductMetrics || adjustmentQuantity <= selectedProductMetrics.currentStock
   const lowStockCount = Array.from(productMetrics.values()).filter((product) => product.currentStock <= 0).length
   const totalStock = Array.from(productMetrics.values()).reduce((sum, product) => sum + product.currentStock, 0)
-  const totalAdjustmentEntries = stockLedger.filter((entry) => entry.type === 'adjustment').length
+  const totalAdjustmentEntries = stockSummary.reduce((sum, product) => sum + Number(product.adjustmentEntries || 0), 0)
 
   const resetForm = () => {
     setAdjustmentType('in')
@@ -319,6 +403,7 @@ export default function StockAdjustmentPage() {
         throw new Error(payload.error || 'Failed to record stock adjustment')
       }
 
+      deleteClientCacheByPrefix(`stock-overview:${companyId}`)
       await fetchStockContext(companyId)
       setQuantity('')
       setRemark('')

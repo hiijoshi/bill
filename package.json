@@ -13,6 +13,7 @@
     "supabase:export-local": "tsx scripts/export-local-data-for-supabase.ts",
     "test:security": "tsx --test tests/security-upgrade.test.ts",
     "migrate:master-store": "tsx scripts/migrate-master-store-to-db.ts",
+    "turso:setup-test-data": "tsx scripts/setup-turso-test-data.ts",
     "prisma:generate:postgres": "prisma generate --schema prisma/schema.postgres.prisma",
     "prisma:dbpush:postgres": "prisma db push --schema prisma/schema.postgres.prisma",
     "prisma:migrate:deploy:postgres": "prisma migrate deploy --schema prisma/schema.postgres.prisma"
@@ -21,6 +22,8 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@libsql/client": "^0.8.0",
+    "@prisma/adapter-libsql": "^5.22.0",
     "@prisma/client": "^5.22.0",
     "@radix-ui/react-collapsible": "^1.1.12",
     "@radix-ui/react-dialog": "^1.1.15",
