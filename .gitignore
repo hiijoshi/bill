@@ -23,6 +23,14 @@
 # misc
 .DS_Store
 *.pem
+*.key
+*.pub
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
 cookies.txt
 migration-data/
 
@@ -37,6 +45,7 @@ yarn-error.log*
 .env.local
 .env.development.local
 .env.production.local
+.envrc
 
 # vercel
 .vercel
