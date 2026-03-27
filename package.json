@@ -7,7 +7,7 @@
     "dev:turbo": "NEXT_DEV_ENGINE=turbopack node scripts/dev-safe.mjs",
     "dev:clean": "node scripts/dev-clean.mjs",
     "dev:stable": "next dev --webpack",
-    "build": "prisma generate && next build",
+    "build": "node scripts/build.mjs",
     "start": "next start",
     "lint": "eslint",
     "supabase:export-local": "tsx scripts/export-local-data-for-supabase.ts",

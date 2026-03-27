@@ -15,7 +15,9 @@ if (typeof window === 'undefined' && typeof process !== 'undefined') {
 // Define the schema for required environment variables. This will throw immediately if any
 // of the values are missing or invalid, which helps catch configuration errors early.
 const envSchema = z.object({
-  DATABASE_URL: z.string().min(1, { message: 'DATABASE_URL is required' }),
+  DATABASE_URL: z.string().optional(),
+  TURSO_DATABASE_URL: z.string().optional(),
+  TURSO_AUTH_TOKEN: z.string().optional(),
   DIRECT_URL: z.string().optional(),
   JWT_SECRET: z.string().min(32, { message: 'JWT_SECRET must be at least 32 characters' }),
   REFRESH_SECRET: z.string().min(32).optional(),
@@ -37,6 +39,26 @@ const envSchema = z.object({
   LOG_SERVICE_URL: z.string().optional(),
   LOG_SERVICE_TOKEN: z.string().optional(),
   SUPER_ADMIN_REMOTE_ACCESS: z.string().optional()
+}).superRefine((value, ctx) => {
+  const databaseUrl = String(value.DATABASE_URL || '').trim()
+  const tursoUrl = String(value.TURSO_DATABASE_URL || '').trim()
+  const tursoAuthToken = String(value.TURSO_AUTH_TOKEN || '').trim()
+
+  if (!databaseUrl && !tursoUrl) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['DATABASE_URL'],
+      message: 'DATABASE_URL or TURSO_DATABASE_URL is required'
+    })
+  }
+
+  if (tursoUrl && !tursoAuthToken) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['TURSO_AUTH_TOKEN'],
+      message: 'TURSO_AUTH_TOKEN is required when TURSO_DATABASE_URL is set'
+    })
+  }
 })
 
 // Parse the current process.env according to the schema. An error will be thrown if the
