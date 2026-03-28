@@ -1,0 +1,97 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+import { ensureCompanyAccess } from '@/lib/api-security'
+import { cleanString } from '@/lib/field-validation'
+import { getCsvValue, parseCsvBoolean, parseCsvObjects } from '@/lib/master-csv'
+import { resolveCompanyIdFromRequest } from '@/lib/request-company'
+
+const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/
+
+export async function POST(request: NextRequest) {
+  try {
+    const companyId = resolveCompanyIdFromRequest(request)
+    if (!companyId) {
+      return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
+    }
+
+    const denied = await ensureCompanyAccess(request, companyId)
+    if (denied) return denied
+
+    const formData = await request.formData()
+    const file = formData.get('file')
+    if (!(file instanceof File)) {
+      return NextResponse.json({ error: 'CSV file is required' }, { status: 400 })
+    }
+
+    const rows = parseCsvObjects(await file.text())
+    if (rows.length === 0) {
+      return NextResponse.json({ error: 'Uploaded CSV is empty' }, { status: 400 })
+    }
+
+    const existingBanks = await prisma.bank.findMany({
+      where: { companyId },
+      select: { id: true, ifscCode: true }
+    })
+    const existingMap = new Map(
+      existingBanks.map((bank) => [bank.ifscCode.trim().toUpperCase(), bank.id])
+    )
+
+    let imported = 0
+    let updated = 0
+    let skipped = 0
+    const errorDetails: string[] = []
+
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index]
+      const rowNumber = index + 2
+      const name = getCsvValue(row, ['Name', 'Bank Name'])
+      const ifscCode = getCsvValue(row, ['IFSC', 'IFSCCode', 'IFSC Code']).toUpperCase()
+
+      if (!name || !ifscCode) {
+        skipped += 1
+        continue
+      }
+
+      if (!IFSC_PATTERN.test(ifscCode)) {
+        errorDetails.push(`Row ${rowNumber}: Invalid IFSC code "${ifscCode}" for bank "${name}"`)
+        continue
+      }
+
+      const data = {
+        companyId,
+        name,
+        branch: cleanString(getCsvValue(row, ['Branch'])),
+        ifscCode,
+        accountNumber: cleanString(getCsvValue(row, ['Account', 'AccountNumber', 'Account Number'])),
+        address: cleanString(getCsvValue(row, ['Address'])),
+        phone: cleanString(getCsvValue(row, ['Phone'])),
+        isActive: parseCsvBoolean(getCsvValue(row, ['Active', 'Status']), true)
+      }
+
+      const existingId = existingMap.get(ifscCode)
+      if (existingId) {
+        await prisma.bank.update({
+          where: { id: existingId },
+          data
+        })
+        updated += 1
+      } else {
+        const created = await prisma.bank.create({ data })
+        existingMap.set(ifscCode, created.id)
+        imported += 1
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      imported,
+      updated,
+      skipped,
+      errors: errorDetails.length,
+      errorDetails
+    })
+  } catch (error) {
+    console.error('Error importing banks:', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}

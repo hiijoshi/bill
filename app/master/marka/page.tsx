@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -8,7 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { Plus, Edit, Trash2, Hash } from 'lucide-react'
+import { Plus, Edit, Trash2, Hash, Upload } from 'lucide-react'
+import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
 interface Marka {
   id: string
@@ -20,6 +21,7 @@ interface Marka {
 }
 
 export default function MarkaMasterPage() {
+  const importInputRef = useRef<HTMLInputElement | null>(null)
   const [markas, setMarkas] = useState<Marka[]>([])
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
@@ -153,6 +155,17 @@ export default function MarkaMasterPage() {
     document.body.removeChild(link)
   }
 
+  const handleImportCsv = async (file: File) => {
+    const { ok, result } = await uploadMasterCsv('/api/markas/import', file)
+    if (!ok) {
+      alert(result.error || 'Marka import failed')
+      return
+    }
+
+    alert(formatMasterImportSummary('Marka', result))
+    await fetchMarkas()
+  }
+
   const resetForm = () => {
     setFormData({ markaNumber: '', description: '', isActive: true })
     setEditingMarka(null)
@@ -182,6 +195,22 @@ export default function MarkaMasterPage() {
               <h1 className="text-3xl font-bold">Marka Master</h1>
             </div>
             <div className="flex gap-2">
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={async (event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (!file) return
+                  await handleImportCsv(file)
+                }}
+              />
+              <Button variant="outline" onClick={() => importInputRef.current?.click()}>
+                <Upload className="mr-2 h-4 w-4" />
+                Import CSV
+              </Button>
               <Button variant="outline" onClick={handleExportCsv}>Export CSV</Button>
               <Button variant="destructive" onClick={handleDeleteAll}>Delete All</Button>
               <Button onClick={() => setIsFormOpen(true)} className="flex items-center gap-2">

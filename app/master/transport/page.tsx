@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -8,7 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { Plus, Edit, Trash2, Truck } from 'lucide-react'
+import { Plus, Edit, Trash2, Truck, Upload } from 'lucide-react'
+import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
 interface Transport {
   id: string
@@ -25,6 +26,7 @@ interface Transport {
 }
 
 export default function TransportMasterPage() {
+  const importInputRef = useRef<HTMLInputElement | null>(null)
   const [transports, setTransports] = useState<Transport[]>([])
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
@@ -181,6 +183,17 @@ export default function TransportMasterPage() {
     document.body.removeChild(link)
   }
 
+  const handleImportCsv = async (file: File) => {
+    const { ok, result } = await uploadMasterCsv('/api/transports/import', file)
+    if (!ok) {
+      alert(result.error || 'Transport import failed')
+      return
+    }
+
+    alert(formatMasterImportSummary('Transport', result))
+    await fetchTransports()
+  }
+
   const resetForm = () => {
     setFormData({ 
       vehicleNumber: '', 
@@ -219,6 +232,22 @@ export default function TransportMasterPage() {
               <h1 className="text-3xl font-bold">Transport Master</h1>
             </div>
             <div className="flex gap-2">
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={async (event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (!file) return
+                  await handleImportCsv(file)
+                }}
+              />
+              <Button variant="outline" onClick={() => importInputRef.current?.click()}>
+                <Upload className="mr-2 h-4 w-4" />
+                Import CSV
+              </Button>
               <Button variant="outline" onClick={handleExportCsv}>Export CSV</Button>
               <Button variant="destructive" onClick={handleDeleteAll}>Delete All</Button>
               <Button onClick={() => setIsFormOpen(true)} className="flex items-center gap-2">

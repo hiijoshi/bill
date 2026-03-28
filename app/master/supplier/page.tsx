@@ -1,16 +1,17 @@
 'use client'
 
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { Plus, Edit, Trash2, Truck } from 'lucide-react'
+import { Plus, Edit, Trash2, Truck, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { getCompanyIdFromSearch } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
+import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
 interface Supplier {
   id: string
@@ -34,6 +35,7 @@ type SupplierResponsePayload = Supplier[] | {
 }
 
 export default function SupplierMasterPage() {
+  const importInputRef = useRef<HTMLInputElement | null>(null)
   const [companyId, setCompanyId] = useState('')
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [loading, setLoading] = useState(true)
@@ -358,6 +360,22 @@ export default function SupplierMasterPage() {
     setMessage({ type: 'success', text: 'Supplier data exported successfully' })
   }
 
+  const handleImportCsv = async (file: File) => {
+    if (!canWriteSupplier) {
+      setMessage({ type: 'error', text: 'You do not have write access for supplier master' })
+      return
+    }
+
+    const { ok, result } = await uploadMasterCsv('/api/suppliers/import', file, companyId || undefined)
+    if (!ok) {
+      setMessage({ type: 'error', text: result.error || 'Supplier import failed' })
+      return
+    }
+
+    setMessage({ type: 'success', text: formatMasterImportSummary('Supplier', result) })
+    await fetchSuppliers()
+  }
+
   if (loading) {
     return (
       <DashboardLayout companyId="">
@@ -376,6 +394,24 @@ export default function SupplierMasterPage() {
               <h1 className="text-3xl font-bold">Supplier Master</h1>
             </div>
             <div className="flex gap-2">
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={async (event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (!file) return
+                  await handleImportCsv(file)
+                }}
+              />
+              {canWriteSupplier ? (
+                <Button onClick={() => importInputRef.current?.click()} variant="outline">
+                  <Upload className="mr-2 h-4 w-4" />
+                  Import CSV
+                </Button>
+              ) : null}
               <Button onClick={handleExportCsv} variant="outline">Export CSV</Button>
               {canWriteSupplier ? (
                 <Button onClick={handleDeleteAll} variant="destructive">Delete All</Button>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { Plus, Edit, Trash2, Package } from 'lucide-react'
+import { Plus, Edit, Trash2, Package, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import {
   clearDefaultPurchaseProductId,
@@ -17,6 +17,7 @@ import {
   setDefaultPurchaseProductId
 } from '@/lib/default-product'
 import { isAbortError } from '@/lib/http'
+import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
 interface Product {
   id: string
@@ -62,6 +63,7 @@ const UNIT_MASTER_CACHE_KEY = 'master-units:active'
 const UNIT_MASTER_CACHE_AGE_MS = 60_000
 
 export default function ProductMasterPage() {
+  const importInputRef = useRef<HTMLInputElement | null>(null)
   const [companyId, setCompanyId] = useState('')
   const [products, setProducts] = useState<Product[]>([])
   const [units, setUnits] = useState<Unit[]>([])
@@ -498,6 +500,18 @@ export default function ProductMasterPage() {
     document.body.removeChild(link)
   }
 
+  const handleImportCsv = async (file: File) => {
+    const { ok, result } = await uploadMasterCsv('/api/products/import', file, companyId || undefined)
+
+    if (!ok) {
+      alert(result.error || 'Product import failed')
+      return
+    }
+
+    alert(formatMasterImportSummary('Product', result))
+    await fetchProducts()
+  }
+
   const resetForm = () => {
     setFormData({
       name: '',
@@ -537,6 +551,22 @@ export default function ProductMasterPage() {
               <h1 className="text-3xl font-bold">Product Master</h1>
             </div>
             <div className="flex gap-2">
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={async (event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (!file) return
+                  await handleImportCsv(file)
+                }}
+              />
+              <Button variant="outline" onClick={() => importInputRef.current?.click()}>
+                <Upload className="mr-2 h-4 w-4" />
+                Import CSV
+              </Button>
               <Button variant="outline" onClick={handleExportCsv}>
                 Export CSV
               </Button>

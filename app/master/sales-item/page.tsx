@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -9,9 +9,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { Plus, Edit, Trash2, Package } from 'lucide-react'
+import { Plus, Edit, Trash2, Package, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { isAbortError } from '@/lib/http'
+import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
 interface SalesItem {
   id: string
@@ -64,6 +65,7 @@ const SALES_ITEM_MASTER_CACHE_KEY = 'master-sales-items:active'
 const SALES_ITEM_MASTER_CACHE_AGE_MS = 30_000
 
 export default function SalesItemMasterPage() {
+  const importInputRef = useRef<HTMLInputElement | null>(null)
   const [salesItems, setSalesItems] = useState<SalesItem[]>([])
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
@@ -323,6 +325,48 @@ export default function SalesItemMasterPage() {
     }
   }
 
+  const handleExportCsv = () => {
+    if (salesItems.length === 0) {
+      return alert('No sales item data to export')
+    }
+
+    const headers = ['ProductName', 'SalesItemName', 'HSNCode', 'GSTRate', 'SellingPrice', 'Description', 'Active', 'CreatedAt']
+    const rows = salesItems.map((item) => [
+      item.product.name,
+      item.salesItemName,
+      item.hsnCode || '',
+      item.gstRate ?? '',
+      item.sellingPrice ?? '',
+      item.description || '',
+      item.isActive ? 'Yes' : 'No',
+      item.createdAt
+    ])
+
+    const csv = [
+      headers.join(','),
+      ...rows.map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','))
+    ].join('\n')
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `sales_items_${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  const handleImportCsv = async (file: File) => {
+    const { ok, result } = await uploadMasterCsv('/api/sales-item-masters/import', file)
+    if (!ok) {
+      alert(result.error || 'Sales item import failed')
+      return
+    }
+
+    alert(formatMasterImportSummary('Sales Item', result))
+    await fetchSalesItems()
+  }
+
   const resetForm = () => {
     setFormData({ 
       productId: '', 
@@ -359,10 +403,31 @@ export default function SalesItemMasterPage() {
               <Package className="h-8 w-8 text-teal-600" />
               <h1 className="text-3xl font-bold">Sales Item Master</h1>
             </div>
-            <Button onClick={() => setIsFormOpen(true)} className="flex items-center gap-2">
-              <Plus className="h-4 w-4" />
-              Add Sales Item
-            </Button>
+            <div className="flex gap-2">
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={async (event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (!file) return
+                  await handleImportCsv(file)
+                }}
+              />
+              <Button variant="outline" onClick={() => importInputRef.current?.click()}>
+                <Upload className="mr-2 h-4 w-4" />
+                Import CSV
+              </Button>
+              <Button variant="outline" onClick={handleExportCsv}>
+                Export CSV
+              </Button>
+              <Button onClick={() => setIsFormOpen(true)} className="flex items-center gap-2">
+                <Plus className="h-4 w-4" />
+                Add Sales Item
+              </Button>
+            </div>
           </div>
 
           {/* Form */}
