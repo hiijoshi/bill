@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -39,8 +39,14 @@ import { notifyAppCompanyChanged, stripCompanyParamsFromUrl } from '@/lib/compan
 type ActiveTab = 'purchase' | 'sales' | 'stock' | 'payment' | 'report'
 const DASHBOARD_CACHE_AGE_MS = 15_000
 const COMPANIES_CACHE_AGE_MS = 60_000
+const AUTH_CACHE_AGE_MS = 30_000
+const ACTIVE_COMPANY_CACHE_AGE_MS = 20_000
 const COMPANIES_CACHE_KEY = 'shell:companies'
+const AUTH_CACHE_KEY = 'shell:auth-me'
+const ACTIVE_COMPANY_CACHE_KEY = 'shell:active-company-id'
+const DASHBOARD_CACHE_PREFIX = 'main-dashboard:'
 const currencyFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 })
+const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
 type PurchaseBill = {
   id: string
@@ -119,6 +125,23 @@ function buildFallbackCompanyOption(companyId: string): CompanyOption {
     id: companyId,
     name: companyId
   }
+}
+
+function buildDashboardCacheKey(companyIds: string[]): string {
+  return `${DASHBOARD_CACHE_PREFIX}${companyIds.slice().sort().join(',')}`
+}
+
+function areCompanyOptionsEqual(left: CompanyOption[], right: CompanyOption[]): boolean {
+  if (left.length !== right.length) return false
+  return left.every((item, index) => {
+    const other = right[index]
+    return item?.id === other?.id && item?.name === other?.name && Boolean(item?.locked) === Boolean(other?.locked)
+  })
+}
+
+function areStringArraysEqual(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false
+  return left.every((value, index) => value === right[index])
 }
 
 type AuthCompanyPayload = {
@@ -259,6 +282,94 @@ export default function MainDashboardPage() {
     stripCompanyParamsFromUrl()
   }, [])
 
+  const primeDashboardFromCache = useCallback((companyIds: string[]): boolean => {
+    if (companyIds.length === 0) return false
+
+    const cached = getClientCache<DashboardPayload>(buildDashboardCacheKey(companyIds), DASHBOARD_CACHE_AGE_MS)
+    if (!cached) return false
+
+    setData(cached)
+    setFetchFailures([])
+    return true
+  }, [])
+
+  const getCachedCurrentCompanyOption = useCallback((companyList: CompanyOption[] = []): CompanyOption | null => {
+    const cachedActiveCompanyId = getClientCache<string>(ACTIVE_COMPANY_CACHE_KEY, ACTIVE_COMPANY_CACHE_AGE_MS)
+    const cachedAuthPayload = getClientCache<AuthCompanyPayload>(AUTH_CACHE_KEY, AUTH_CACHE_AGE_MS)
+    const companyId = String(
+      cachedActiveCompanyId ||
+      cachedAuthPayload?.company?.id ||
+      cachedAuthPayload?.user?.companyId ||
+      cachedAuthPayload?.user?.assignedCompanyId ||
+      ''
+    ).trim()
+
+    if (!companyId) return null
+
+    const companyNameFromAuth =
+      String(cachedAuthPayload?.company?.id || '').trim() === companyId
+        ? String(cachedAuthPayload?.company?.name || '').trim()
+        : ''
+
+    return {
+      id: companyId,
+      name: companyNameFromAuth || companyList.find((item) => item.id === companyId)?.name || companyId
+    }
+  }, [])
+
+  const applyCompanySelection = useCallback((input: {
+    list: CompanyOption[]
+    currentCompany: CompanyOption | null
+    queryCompanyId: string
+    queryCompanyIds: string[]
+  }) => {
+    const { list, currentCompany, queryCompanyId, queryCompanyIds } = input
+
+    const activeCompanyId = currentCompany?.id || ''
+    const mergedList = list.length > 0
+      ? list
+      : currentCompany
+        ? [currentCompany]
+        : []
+
+    setCompanies((previous) => (areCompanyOptionsEqual(previous, mergedList) ? previous : mergedList))
+
+    const availableIds = new Set(mergedList.map((item) => item.id))
+    let nextSelected = queryCompanyIds.filter((id) => availableIds.has(id))
+
+    if (nextSelected.length === 0 && queryCompanyId && availableIds.has(queryCompanyId)) {
+      nextSelected = [queryCompanyId]
+    }
+    if (nextSelected.length === 0 && activeCompanyId && availableIds.has(activeCompanyId)) {
+      nextSelected = [activeCompanyId]
+    }
+    if (nextSelected.length === 0 && queryCompanyId && mergedList.length === 0) {
+      nextSelected = [queryCompanyId]
+      const fallbackCompanies = [buildFallbackCompanyOption(queryCompanyId)]
+      setCompanies((previous) => (areCompanyOptionsEqual(previous, fallbackCompanies) ? previous : fallbackCompanies))
+    }
+    if (nextSelected.length === 0) {
+      const defaultCompanyId = mergedList.find((item) => !item.locked)?.id || mergedList[0]?.id || ''
+      nextSelected = defaultCompanyId ? [defaultCompanyId] : []
+    }
+
+    const nextPrimary = availableIds.has(queryCompanyId) && nextSelected.includes(queryCompanyId)
+      ? queryCompanyId
+      : activeCompanyId && nextSelected.includes(activeCompanyId)
+        ? activeCompanyId
+        : (nextSelected[0] || '')
+
+    setSelectedCompanyIds((previous) => (areStringArraysEqual(previous, nextSelected) ? previous : nextSelected))
+    setPrimaryCompanyId((previous) => (previous === nextPrimary ? previous : nextPrimary))
+    setUiError(null)
+    setUiMessage(nextSelected.length === 0 ? 'No company is assigned to this account yet. Ask Super Admin to assign access.' : null)
+
+    return {
+      selectedCompanyIds: nextSelected,
+      primaryCompanyId: nextPrimary
+    }
+  }, [])
+
   const loadCompanies = useCallback(async () => {
     const cached = getClientCache<CompanyOption[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS)
     if (cached) {
@@ -292,17 +403,24 @@ export default function MainDashboardPage() {
           locked: Boolean(row.locked)
         }))
       : []
-    setClientCache(COMPANIES_CACHE_KEY, normalized)
+    setClientCache(COMPANIES_CACHE_KEY, normalized, { persist: true })
     return normalized
   }, [router])
 
   const loadCurrentCompanyOption = useCallback(async (): Promise<CompanyOption | null> => {
+    const cachedCompanies = getClientCache<CompanyOption[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS) || []
+    const cachedCurrentCompany = getCachedCurrentCompanyOption(cachedCompanies)
+    if (cachedCurrentCompany) {
+      return cachedCurrentCompany
+    }
+
     try {
       const activeResponse = await fetch('/api/auth/company', { cache: 'no-store' })
       if (activeResponse.ok) {
         const activePayload = await parseApiJson<AuthCompanyPayload>(activeResponse, {})
         const companyId = String(activePayload.company?.id || '').trim()
         if (companyId) {
+          setClientCache(ACTIVE_COMPANY_CACHE_KEY, companyId, { persist: true })
           return {
             id: companyId,
             name: String(activePayload.company?.name || companyId).trim() || companyId
@@ -322,6 +440,7 @@ export default function MainDashboardPage() {
         return null
       }
       const authPayload = await parseApiJson<AuthCompanyPayload>(authResponse, {})
+      setClientCache(AUTH_CACHE_KEY, authPayload, { persist: true })
       const companyId = String(
         authPayload.company?.id ||
         authPayload.user?.companyId ||
@@ -329,6 +448,7 @@ export default function MainDashboardPage() {
         ''
       ).trim()
       if (!companyId) return null
+      setClientCache(ACTIVE_COMPANY_CACHE_KEY, companyId, { persist: true })
       return {
         id: companyId,
         name: String(authPayload.company?.name || companyId).trim() || companyId
@@ -336,7 +456,33 @@ export default function MainDashboardPage() {
     } catch {
       return null
     }
-  }, [router])
+  }, [getCachedCurrentCompanyOption, router])
+
+  useIsomorphicLayoutEffect(() => {
+    const queryParams = new URLSearchParams(window.location.search)
+    const queryCompanyId = queryParams.get('companyId') || ''
+    const queryCompanyIds = (queryParams.get('companyIds') || '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean)
+    const cachedCompanies = getClientCache<CompanyOption[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS) || []
+    const cachedCurrentCompany = getCachedCurrentCompanyOption(cachedCompanies)
+
+    if (cachedCompanies.length === 0 && !cachedCurrentCompany?.id) {
+      return
+    }
+
+    const cachedSelection = applyCompanySelection({
+      list: cachedCompanies,
+      currentCompany: cachedCurrentCompany,
+      queryCompanyId,
+      queryCompanyIds
+    })
+
+    if (primeDashboardFromCache(cachedSelection.selectedCompanyIds)) {
+      setLoading(false)
+    }
+  }, [applyCompanySelection, getCachedCurrentCompanyOption, primeDashboardFromCache])
 
   const fetchDashboardData = useCallback(async (companyIds: string[]) => {
     if (companyIds.length === 0) {
@@ -433,7 +579,7 @@ export default function MainDashboardPage() {
 
       setData(nextData)
       setFetchFailures([])
-      setClientCache(`main-dashboard:${companyIds.slice().sort().join(',')}`, nextData)
+      setClientCache(buildDashboardCacheKey(companyIds), nextData, { persist: true })
     } catch {
       setData(emptyDashboardPayload)
       setFetchFailures(['dashboard overview'])
@@ -449,60 +595,32 @@ export default function MainDashboardPage() {
         .split(',')
         .map((id) => id.trim())
         .filter(Boolean)
-      let activeCompanyId = ''
-      let activeCompanyOption: CompanyOption | null = null
+      const cachedCompanies = getClientCache<CompanyOption[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS) || []
+      const cachedCurrentCompany = getCachedCurrentCompanyOption(cachedCompanies)
 
       try {
         const [list, currentCompany] = await Promise.all([loadCompanies(), loadCurrentCompanyOption()])
         if (cancelled) return
-        activeCompanyOption = currentCompany
-
-        if (currentCompany?.id) {
-          activeCompanyId = currentCompany.id
+        const selection = applyCompanySelection({
+          list,
+          currentCompany,
+          queryCompanyId,
+          queryCompanyIds
+        })
+        if (selection.selectedCompanyIds.length > 0) {
+          primeDashboardFromCache(selection.selectedCompanyIds)
         }
-
-        const mergedList = list.length > 0
-          ? list
-          : currentCompany
-            ? [currentCompany]
-            : []
-        setCompanies(mergedList)
-
-        const availableIds = new Set(mergedList.map((item) => item.id))
-        let nextSelected = queryCompanyIds.filter((id) => availableIds.has(id))
-        if (nextSelected.length === 0 && queryCompanyId && availableIds.has(queryCompanyId)) {
-          nextSelected = [queryCompanyId]
-        }
-        if (nextSelected.length === 0 && activeCompanyId && availableIds.has(activeCompanyId)) {
-          nextSelected = [activeCompanyId]
-        }
-        if (nextSelected.length === 0 && queryCompanyId && mergedList.length === 0) {
-          nextSelected = [queryCompanyId]
-          setCompanies([buildFallbackCompanyOption(queryCompanyId)])
-        }
-        if (nextSelected.length === 0) {
-          const defaultCompanyId = mergedList.find((item) => !item.locked)?.id || mergedList[0]?.id || ''
-          nextSelected = defaultCompanyId ? [defaultCompanyId] : []
-        }
-        const nextPrimary = availableIds.has(queryCompanyId) && nextSelected.includes(queryCompanyId)
-          ? queryCompanyId
-          : activeCompanyId && nextSelected.includes(activeCompanyId)
-            ? activeCompanyId
-          : (nextSelected[0] || '')
-        setSelectedCompanyIds(nextSelected)
-        setPrimaryCompanyId(nextPrimary)
-        setUiError(null)
-        setUiMessage(nextSelected.length === 0 ? 'No company is assigned to this account yet. Ask Super Admin to assign access.' : null)
       } catch (error) {
         if (cancelled) return
         void error
-        const fallbackCompany = activeCompanyOption || await loadCurrentCompanyOption()
+        const fallbackCompany = cachedCurrentCompany || await loadCurrentCompanyOption()
         if (fallbackCompany?.id) {
           setCompanies([fallbackCompany])
           setSelectedCompanyIds([fallbackCompany.id])
           setPrimaryCompanyId(fallbackCompany.id)
           setUiError(null)
           setUiMessage(null)
+          primeDashboardFromCache([fallbackCompany.id])
           return
         }
         if (queryCompanyId) {
@@ -510,11 +628,7 @@ export default function MainDashboardPage() {
           setSelectedCompanyIds([queryCompanyId])
           setPrimaryCompanyId(queryCompanyId)
           setUiError(null)
-        } else if (activeCompanyId) {
-          setCompanies([buildFallbackCompanyOption(activeCompanyId)])
-          setSelectedCompanyIds([activeCompanyId])
-          setPrimaryCompanyId(activeCompanyId)
-          setUiError(null)
+          primeDashboardFromCache([queryCompanyId])
         } else {
           setUiError('Failed to load company list')
           setUiMessage(null)
@@ -531,7 +645,7 @@ export default function MainDashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [loadCompanies, loadCurrentCompanyOption])
+  }, [applyCompanySelection, getCachedCurrentCompanyOption, loadCompanies, loadCurrentCompanyOption, primeDashboardFromCache])
 
   useEffect(() => {
     if (selectedCompanyIds.length === 0) return
@@ -542,8 +656,7 @@ export default function MainDashboardPage() {
       return
     }
 
-    const normalizedIds = selectedCompanyIds.slice().sort()
-    const cacheKey = `main-dashboard:${normalizedIds.join(',')}`
+    const cacheKey = buildDashboardCacheKey(selectedCompanyIds)
     const cached = getClientCache<DashboardPayload>(cacheKey, DASHBOARD_CACHE_AGE_MS)
     if (cached) {
       setData(cached)
@@ -572,12 +685,17 @@ export default function MainDashboardPage() {
 
   useEffect(() => {
     if (!primaryCompanyId) return
+    const activeCompanyId = getClientCache<string>(ACTIVE_COMPANY_CACHE_KEY, ACTIVE_COMPANY_CACHE_AGE_MS)
+    if (activeCompanyId === primaryCompanyId) {
+      return
+    }
     void fetch('/api/auth/company', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ companyId: primaryCompanyId, force: true })
     }).then((response) => {
       if (response.ok) {
+        setClientCache(ACTIVE_COMPANY_CACHE_KEY, primaryCompanyId, { persist: true })
         notifyAppCompanyChanged(primaryCompanyId)
       }
     }).catch(() => undefined)
@@ -598,6 +716,7 @@ export default function MainDashboardPage() {
         body: JSON.stringify({ companyId: primaryCompanyId, force: true })
       })
       if (response.ok) {
+        setClientCache(ACTIVE_COMPANY_CACHE_KEY, primaryCompanyId, { persist: true })
         notifyAppCompanyChanged(primaryCompanyId)
       }
     } catch (error) {

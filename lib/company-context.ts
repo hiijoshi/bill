@@ -81,7 +81,7 @@ export async function resolveCompanyId(search: string): Promise<string> {
     const cachedAuthMe = getClientCache<AuthMeCachePayload>(AUTH_ME_CACHE_KEY, AUTH_ME_CACHE_AGE_MS)
     const cachedAuthCompanyId = String(cachedAuthMe?.company?.id || cachedAuthMe?.user?.companyId || '').trim()
     if (cachedAuthCompanyId) {
-      setClientCache(ACTIVE_COMPANY_CACHE_KEY, cachedAuthCompanyId)
+      setClientCache(ACTIVE_COMPANY_CACHE_KEY, cachedAuthCompanyId, { persist: true })
       return cachedAuthCompanyId
     }
 
@@ -96,7 +96,7 @@ export async function resolveCompanyId(search: string): Promise<string> {
       const activeCompanyId = activeData?.company?.id
       if (typeof activeCompanyId === 'string' && activeCompanyId.trim()) {
         const normalizedActiveCompanyId = activeCompanyId.trim()
-        setClientCache(ACTIVE_COMPANY_CACHE_KEY, normalizedActiveCompanyId)
+        setClientCache(ACTIVE_COMPANY_CACHE_KEY, normalizedActiveCompanyId, { persist: true })
         return normalizedActiveCompanyId
       }
     }
@@ -105,14 +105,14 @@ export async function resolveCompanyId(search: string): Promise<string> {
     if (!response.ok) return ''
 
     const data = await response.json()
-    setClientCache(AUTH_ME_CACHE_KEY, data)
+    setClientCache(AUTH_ME_CACHE_KEY, data, { persist: true })
     const resolvedCompanyId = (
       data?.user?.companyId ||
       data?.company?.id ||
       ''
     )
     if (typeof resolvedCompanyId === 'string' && resolvedCompanyId.trim()) {
-      setClientCache(ACTIVE_COMPANY_CACHE_KEY, resolvedCompanyId.trim())
+      setClientCache(ACTIVE_COMPANY_CACHE_KEY, resolvedCompanyId.trim(), { persist: true })
     }
     return resolvedCompanyId
   } catch {

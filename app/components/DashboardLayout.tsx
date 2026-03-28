@@ -39,6 +39,7 @@ type CompanySummary = {
 
 const AUTH_CACHE_KEY = 'shell:auth-me'
 const COMPANIES_CACHE_KEY = 'shell:companies'
+const ACTIVE_COMPANY_CACHE_KEY = 'shell:active-company-id'
 const AUTH_CACHE_AGE_MS = 30_000
 const COMPANIES_CACHE_AGE_MS = 60_000
 const APP_SHELL_AUTH_LOADED_EVENT = 'app-shell-auth-loaded'
@@ -76,7 +77,7 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
             const data = (await response.json().catch(() => null)) as AuthMePayload | null
             if (!data) return
             authPayload = data
-            setClientCache(AUTH_CACHE_KEY, data)
+            setClientCache(AUTH_CACHE_KEY, data, { persist: true })
           })
         )
       }
@@ -88,7 +89,7 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
             const data = (await response.json().catch(() => [])) as CompanySummary[]
             if (!Array.isArray(data)) return
             companiesPayload = data
-            setClientCache(COMPANIES_CACHE_KEY, data)
+            setClientCache(COMPANIES_CACHE_KEY, data, { persist: true })
           })
         )
       }
@@ -144,6 +145,7 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
 
       setResolvedCompanyId(targetCompanyId)
       setCurrentCompanyName(companyName)
+      setClientCache(ACTIVE_COMPANY_CACHE_KEY, targetCompanyId, { persist: true })
     } catch (error) {
       if (isAbortError(error)) return
       void error
