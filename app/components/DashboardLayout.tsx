@@ -290,17 +290,6 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
                 <Menu className="h-4 w-4" />
               </Button>
               <h1 className="text-xl font-semibold text-gray-900">Dashboard</h1>
-              <span className="text-sm text-gray-500">User Mode</span>
-              {currentUser ? (
-                <span className="hidden rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 md:inline-flex">
-                  User ID: {currentUser}
-                </span>
-              ) : null}
-              {currentCompanyName && currentCompanyName !== 'Not selected' ? (
-                <span className="hidden rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 md:inline-flex">
-                  Company: {currentCompanyName}
-                </span>
-              ) : null}
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2 self-start md:self-auto">
               {showCompanySwitcher ? (
