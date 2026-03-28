@@ -120,7 +120,8 @@ export async function POST(request: NextRequest) {
     }
 
     const workbook = new ExcelJS.Workbook()
-    await workbook.xlsx.load(Buffer.from(await file.arrayBuffer()))
+    const workbookBuffer = Buffer.from(await file.arrayBuffer()) as unknown as Parameters<typeof workbook.xlsx.load>[0]
+    await workbook.xlsx.load(workbookBuffer)
     const worksheet = workbook.worksheets[0]
 
     if (!worksheet) {
