@@ -671,16 +671,11 @@ export async function GET(request: NextRequest) {
           totalAmount: true
         }
       }),
-      prisma.payment.findMany({
+      prisma.payment.groupBy({
+        by: ['billType', 'billId'],
         where: paymentOutstandingWhere,
-        select: {
-          id: true,
-          companyId: true,
-          billType: true,
-          billId: true,
-          amount: true,
-          partyId: true,
-          farmerId: true
+        _sum: {
+          amount: true
         }
       })
     ])
@@ -732,7 +727,7 @@ export async function GET(request: NextRequest) {
         const targetMap = payment.billType === 'sales' ? salesReceiptByBillId : purchasePaidByBillId
         targetMap.set(
           payment.billId,
-          roundCurrency((targetMap.get(payment.billId) || 0) + normalizeNonNegative(payment.amount))
+          roundCurrency((targetMap.get(payment.billId) || 0) + normalizeNonNegative(payment._sum.amount))
         )
       }
 
@@ -1031,7 +1026,7 @@ export async function GET(request: NextRequest) {
         date: payment.payDate,
         type: 'receipt' as PartyLedgerEntryType,
         refNo: String(ledgerBillMap.get(payment.billId) || payment.txnRef || ''),
-        description: isPartyOpeningBalanceReference(payment.billId) ? 'Opening Balance Receipt' : 'Payment Receipt',
+        description: isPartyOpeningBalanceReference(payment.billId) ? 'Opening Receivable Receipt' : 'Payment Receipt',
         companyId: payment.companyId,
         companyName: companyNameMap.get(payment.companyId) || payment.companyId,
         paymentMode: formatPaymentMode(payment.mode),
@@ -1058,7 +1053,7 @@ export async function GET(request: NextRequest) {
                   date: searchParams.get('dateFrom') || '',
                   type: 'opening' as PartyLedgerEntryType,
                   refNo: '-',
-                  description: 'Opening Balance',
+                  description: 'Opening Receivable',
                   companyId: selectedParty?.companyId || '',
                   companyName: selectedParty?.companyName || '',
                   paymentMode: '-',

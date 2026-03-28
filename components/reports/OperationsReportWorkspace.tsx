@@ -315,6 +315,8 @@ function printLedgerStatement(options: {
   statementPeriod: string
   openingBalance: string
   closingBalance: string
+  openingLabel?: string
+  closingLabel?: string
   extraLabel?: string
   extraValue?: string
   rows: Array<{
@@ -388,7 +390,7 @@ function printLedgerStatement(options: {
         <td>${escapeHtml(options.subjectAddress || '-')}</td>
         <td></td>
         <td></td>
-        <td class="label">Opening Bal</td>
+        <td class="label">${escapeHtml(options.openingLabel || 'Opening Bal')}</td>
         <td class="value">${escapeHtml(options.openingBalance)}</td>
       </tr>
       <tr>
@@ -396,7 +398,7 @@ function printLedgerStatement(options: {
         <td>${escapeHtml(options.extraValue || '')}</td>
         <td></td>
         <td></td>
-        <td class="label">Closing Bal</td>
+        <td class="label">${escapeHtml(options.closingLabel || 'Closing Bal')}</td>
         <td class="value">${escapeHtml(options.closingBalance)}</td>
       </tr>
     </table>
@@ -437,7 +439,7 @@ function formatDateLabel(value: string): string {
 }
 
 function getLedgerPrimaryDescription(row: LedgerRow): string {
-  if (row.type === 'opening') return 'Opening Balance'
+  if (row.type === 'opening') return 'Opening Receivable'
   if (row.type === 'sale') return row.refNo && row.refNo !== '-' ? `Invoice #${row.refNo}` : 'Sales Bill'
   return row.refNo && row.refNo !== '-' ? `Receipt #${row.refNo}` : 'Payment Receipt'
 }
@@ -605,33 +607,33 @@ export default function OperationsReportWorkspace({
       return
     }
 
+    const cacheKey = [
+      'operations-report',
+      activeView,
+      scope,
+      selectedCompanyIds.join(','),
+      dateFrom,
+      dateTo,
+      activeView === 'ledger' ? selectedPartyId : ''
+    ].join(':')
+    const cachedPayload = getClientCache<OperationsReportPayload>(cacheKey, OPERATIONS_REPORT_CACHE_AGE_MS)
+    if (cachedPayload) {
+      if (Array.isArray(cachedPayload.companies) && cachedPayload.companies.length > 0) {
+        setCompanies(cachedPayload.companies)
+      }
+      setReportData(cachedPayload)
+      setSelectedPartyId((previous) => cachedPayload.partyLedger?.selectedPartyId || previous)
+      setLastGeneratedAt(
+        cachedPayload.meta?.generatedAt
+          ? new Date(cachedPayload.meta.generatedAt).toLocaleString('en-IN')
+          : new Date().toLocaleString('en-IN')
+      )
+      setErrorMessage('')
+      return
+    }
+
     setLoading(true)
     try {
-      const cacheKey = [
-        'operations-report',
-        activeView,
-        scope,
-        selectedCompanyIds.join(','),
-        dateFrom,
-        dateTo,
-        activeView === 'ledger' ? selectedPartyId : ''
-      ].join(':')
-      const cachedPayload = getClientCache<OperationsReportPayload>(cacheKey, OPERATIONS_REPORT_CACHE_AGE_MS)
-      if (cachedPayload) {
-        if (Array.isArray(cachedPayload.companies) && cachedPayload.companies.length > 0) {
-          setCompanies(cachedPayload.companies)
-        }
-        setReportData(cachedPayload)
-        setSelectedPartyId((previous) => cachedPayload.partyLedger?.selectedPartyId || previous)
-        setLastGeneratedAt(
-          cachedPayload.meta?.generatedAt
-            ? new Date(cachedPayload.meta.generatedAt).toLocaleString('en-IN')
-            : new Date().toLocaleString('en-IN')
-        )
-        setErrorMessage('')
-        setLoading(false)
-        return
-      }
 
       const params = new URLSearchParams({
         dateFrom,
@@ -948,10 +950,10 @@ export default function OperationsReportWorkspace({
 
     if (activeView === 'ledger') {
       return [
-        { label: 'Opening Balance', value: formatLedgerBalanceSummary(reportData?.partyLedger?.openingBalance || 0), tone: 'text-slate-900' },
+        { label: 'Opening Receivable', value: formatLedgerBalanceSummary(reportData?.partyLedger?.openingBalance || 0), tone: 'text-slate-900' },
         { label: 'Sales Entries', value: currencyText(reportData?.partyLedger?.totalSales || 0), tone: 'text-slate-900' },
         { label: 'Receipt Entries', value: currencyText(reportData?.partyLedger?.totalReceipts || 0), tone: 'text-emerald-700' },
-        { label: 'Closing Balance', value: formatLedgerBalanceSummary(reportData?.partyLedger?.closingBalance || 0), tone: 'text-amber-700' }
+        { label: 'Closing Receivable', value: formatLedgerBalanceSummary(reportData?.partyLedger?.closingBalance || 0), tone: 'text-amber-700' }
       ]
     }
 
@@ -1249,8 +1251,8 @@ export default function OperationsReportWorkspace({
         ['Address', isPartyLedger ? selectedLedgerParty?.address || '-' : '-'],
         [isPartyLedger ? 'Phone' : 'Direction', isPartyLedger ? selectedLedgerParty?.phone1 || '-' : bankDirectionFilter === 'all' ? 'All' : bankDirectionFilter.toUpperCase()],
         ['Statement Period', `${formatDateLabel(dateFrom)} to ${formatDateLabel(dateTo)}`],
-        ['Opening Balance', isPartyLedger ? formatLedgerBalance(reportData?.partyLedger?.openingBalance || 0) : formatLedgerBalance(bankLedgerOpeningBalance)],
-        ['Closing Balance', formatLedgerBalance(finalBalance)],
+        [isPartyLedger ? 'Opening Receivable' : 'Opening Balance', isPartyLedger ? formatLedgerBalance(reportData?.partyLedger?.openingBalance || 0) : formatLedgerBalance(bankLedgerOpeningBalance)],
+        [isPartyLedger ? 'Closing Receivable' : 'Closing Balance', formatLedgerBalance(finalBalance)],
         [],
         activeExport.headers,
         ...activeExport.rows,
@@ -1284,6 +1286,8 @@ export default function OperationsReportWorkspace({
         statementPeriod: `${formatDateLabel(dateFrom)} to ${formatDateLabel(dateTo)}`,
         openingBalance: formatLedgerBalance(reportData?.partyLedger?.openingBalance || 0),
         closingBalance: formatLedgerBalance(reportData?.partyLedger?.closingBalance || 0),
+        openingLabel: 'Opening Receivable',
+        closingLabel: 'Closing Receivable',
         extraLabel: 'Phone',
         extraValue: selectedLedgerParty?.phone1 || '-',
         rows: partyLedgerStatementRows,
@@ -1752,7 +1756,7 @@ export default function OperationsReportWorkspace({
                     </div>
                     <div className="bg-white px-3 py-3" />
                     <div className="bg-white px-3 py-3" />
-                    <div className="bg-white px-3 py-3 text-sm font-semibold text-slate-950">Opening Bal</div>
+                    <div className="bg-white px-3 py-3 text-sm font-semibold text-slate-950">Opening Receivable</div>
                     <div className="bg-white px-3 py-3 text-sm text-slate-700">
                       {formatLedgerBalance(reportData?.partyLedger?.openingBalance || 0)}
                     </div>
@@ -1763,7 +1767,7 @@ export default function OperationsReportWorkspace({
                     </div>
                     <div className="bg-white px-3 py-3" />
                     <div className="bg-white px-3 py-3" />
-                    <div className="bg-white px-3 py-3 text-sm font-semibold text-slate-950">Closing Bal</div>
+                    <div className="bg-white px-3 py-3 text-sm font-semibold text-slate-950">Closing Receivable</div>
                     <div className="bg-white px-3 py-3 text-sm text-slate-700">
                       {formatLedgerBalance(reportData?.partyLedger?.closingBalance || 0)}
                     </div>
