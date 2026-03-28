@@ -263,13 +263,10 @@ async function upsertMasterData(config: SeedConfig, appUserDbId: string) {
   })
 
   await prisma.salesItemMaster.upsert({
-    where: {
-      companyId_productId: {
-        companyId,
-        productId
-      }
-    },
+    where: { id: buildSeedId(companyId, 'sales-item-master') },
     update: {
+      companyId,
+      productId,
       salesItemName: 'Wheat Retail',
       hsnCode: '1001',
       gstRate: 5,
