@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import ExcelJS from 'exceljs'
 import { prisma } from '@/lib/prisma'
-import * as XLSX from 'xlsx'
 import { ensureCompanyAccess } from '@/lib/api-security'
 
 const clampNonNegative = (value: number): number => {
@@ -11,6 +11,7 @@ const clampNonNegative = (value: number): number => {
 const getCellString = (value: unknown): string => {
   if (typeof value === 'string') return value.trim()
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (value instanceof Date) return value.toISOString()
   return ''
 }
 
@@ -25,9 +26,88 @@ const getCellNumber = (value: unknown): number => {
 }
 
 const getCellDateIso = (value: unknown): string => {
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return value.toISOString()
+  }
   const normalized = getCellString(value)
   const parsedDate = normalized ? new Date(normalized) : new Date()
   return Number.isFinite(parsedDate.getTime()) ? parsedDate.toISOString() : new Date().toISOString()
+}
+
+const getWorksheetCellValue = (value: ExcelJS.CellValue | undefined): unknown => {
+  if (value == null) return ''
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value
+  }
+  if (value instanceof Date) {
+    return value
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => getCellString(getWorksheetCellValue(entry)))
+      .filter(Boolean)
+      .join(' ')
+  }
+  if (typeof value === 'object') {
+    if ('result' in value) {
+      return getWorksheetCellValue(value.result as ExcelJS.CellValue | undefined)
+    }
+    if ('text' in value && typeof value.text === 'string') {
+      return value.text
+    }
+    if ('richText' in value && Array.isArray(value.richText)) {
+      return value.richText.map((entry) => entry.text).join('')
+    }
+    if ('hyperlink' in value && typeof value.hyperlink === 'string') {
+      return typeof value.text === 'string' && value.text ? value.text : value.hyperlink
+    }
+    if ('formula' in value && typeof value.formula === 'string') {
+      return value.formula
+    }
+  }
+  return ''
+}
+
+const extractWorksheetRows = (worksheet: ExcelJS.Worksheet): Record<string, unknown>[] => {
+  const headerMap = new Map<number, string>()
+  const headerRow = worksheet.getRow(1)
+
+  headerRow.eachCell((cell, colNumber) => {
+    const header = getCellString(getWorksheetCellValue(cell.value))
+    if (header) {
+      headerMap.set(colNumber, header)
+    }
+  })
+
+  const rows: Record<string, unknown>[] = []
+
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return
+
+    const rowData: Record<string, unknown> = {}
+    let hasValue = false
+
+    headerMap.forEach((header, colNumber) => {
+      const rawValue = getWorksheetCellValue(row.getCell(colNumber).value)
+      const normalized = rawValue instanceof Date ? rawValue : getCellString(rawValue)
+
+      if (
+        normalized instanceof Date
+          ? Number.isFinite(normalized.getTime())
+          : Boolean(normalized)
+      ) {
+        hasValue = true
+      }
+
+      rowData[header] = rawValue
+    })
+
+    if (hasValue) {
+      rows.push(rowData)
+    }
+  })
+
+  return rows
 }
 
 export async function POST(request: NextRequest) {
@@ -39,10 +119,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 })
     }
 
-    const buffer = await file.arrayBuffer()
-    const workbook = XLSX.read(buffer, { type: 'buffer' })
-    const worksheet = workbook.Sheets[workbook.SheetNames[0]]
-    const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet)
+    const workbook = new ExcelJS.Workbook()
+    await workbook.xlsx.load(Buffer.from(await file.arrayBuffer()))
+    const worksheet = workbook.worksheets[0]
+
+    if (!worksheet) {
+      return NextResponse.json({ error: 'Uploaded file is empty' }, { status: 400 })
+    }
+
+    const data = extractWorksheetRows(worksheet)
 
     const { searchParams } = new URL(request.url)
     const companyId = searchParams.get('companyId')

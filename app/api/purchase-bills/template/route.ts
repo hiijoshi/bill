@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import * as XLSX from 'xlsx'
+import ExcelJS from 'exceljs'
 import { ensureCompanyAccess, requireRoles } from '@/lib/api-security'
 
 export async function GET(request: NextRequest) {
@@ -52,16 +52,25 @@ export async function GET(request: NextRequest) {
       }
     ]
 
-    // Create workbook
-    const worksheet = XLSX.utils.json_to_sheet(templateData)
-    const workbook = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Purchase Bills Template')
+    const workbook = new ExcelJS.Workbook()
+    const worksheet = workbook.addWorksheet('Purchase Bills Template')
 
-    // Generate buffer
-    const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })
+    const headers = Object.keys(templateData[0] ?? {})
+    worksheet.columns = headers.map((header) => ({
+      header,
+      key: header,
+      width: Math.max(header.length + 4, 18)
+    }))
+    worksheet.getRow(1).font = { bold: true }
+
+    for (const row of templateData) {
+      worksheet.addRow(row)
+    }
+
+    const excelBuffer = await workbook.xlsx.writeBuffer()
 
     // Return as downloadable file
-    return new NextResponse(excelBuffer, {
+    return new NextResponse(Buffer.from(excelBuffer), {
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'Content-Disposition': 'attachment; filename="purchase-bills-template.xlsx"'

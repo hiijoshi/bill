@@ -306,6 +306,7 @@ export async function GET(request: NextRequest) {
         productId: row.productId,
         productName: row.productName,
         productUnit: row.productUnit || '',
+        productIsActive: row.productIsActive,
         totalIn: toNumber(row.totalIn),
         totalOut: toNumber(row.totalOut),
         closingStock: toNumber(row.closingStock),
