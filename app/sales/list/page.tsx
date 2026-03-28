@@ -194,6 +194,10 @@ function getBillAverageRate(bill: SalesBill): number {
   return weighted / totalWeight
 }
 
+function isZeroRateBill(bill: SalesBill): boolean {
+  return Math.abs(getBillAverageRate(bill)) < 0.000001
+}
+
 function getPrimaryTransport(bill: SalesBill) {
   return bill.transportBills[0] || null
 }
@@ -236,6 +240,7 @@ export default function SalesListPage() {
   const [rate, setRate] = useState('')
   const [partyContact, setPartyContact] = useState('')
   const [payable, setPayable] = useState('')
+  const [filterZeroRateBills, setFilterZeroRateBills] = useState(false)
 
   const fetchSalesBills = useCallback(async () => {
     try {
@@ -335,12 +340,16 @@ export default function SalesListPage() {
       filtered = filtered.filter((bill) => getBillAverageRate(bill).toString().includes(rate))
     }
 
+    if (filterZeroRateBills) {
+      filtered = filtered.filter((bill) => isZeroRateBill(bill))
+    }
+
     if (payable) {
       filtered = filtered.filter(bill => bill.totalAmount.toString().includes(payable))
     }
 
     return filtered
-  }, [salesBills, invoiceNumber, partyName, partyAddress, dateFrom, dateTo, weight, rate, partyContact, payable])
+  }, [salesBills, invoiceNumber, partyName, partyAddress, dateFrom, dateTo, weight, rate, filterZeroRateBills, partyContact, payable])
 
   const paidBills = useMemo(
     () => filteredBills.filter((bill) => bill.status === 'paid'),
@@ -367,6 +376,7 @@ export default function SalesListPage() {
     setDateTo('')
     setWeight('')
     setRate('')
+    setFilterZeroRateBills(false)
     setPayable('')
   }
 
@@ -693,6 +703,17 @@ export default function SalesListPage() {
                   placeholder="Enter receivable amount"
                 />
               </div>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={filterZeroRateBills}
+                  onChange={(event) => setFilterZeroRateBills(event.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+                />
+                Filter zero rate bills
+              </label>
             </div>
             <div className="flex gap-2 mt-4">
               <Button onClick={handleAutoFilters}>Auto</Button>

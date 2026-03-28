@@ -17,11 +17,15 @@ type SeedConfig = {
   traderName: string
   companyId: string
   companyName: string
+  companyAddress: string
+  companyPhone: string
   appUserId: string
   appUserPassword: string
   appUserName: string
   appUserRole: 'company_admin' | 'company_user'
 }
+
+const SEEDED_COMPANY_ADDRESS_PLACEHOLDER = 'Seeded company for Turso testing'
 
 function requireEnv(name: string): string {
   const value = String(process.env[name] || '').trim()
@@ -54,6 +58,8 @@ function buildSeedConfig(): SeedConfig {
     traderName: optionalEnv('SEED_TRADER_NAME', 'Demo Trader'),
     companyId: optionalEnv('SEED_COMPANY_ID', 'demo-company'),
     companyName: optionalEnv('SEED_COMPANY_NAME', 'Demo Company'),
+    companyAddress: optionalEnv('SEED_COMPANY_ADDRESS', 'Main Market, Mumbai'),
+    companyPhone: optionalEnv('SEED_COMPANY_PHONE', '9876543215'),
     appUserId: normalizeLoginId(requireEnv('SEED_APP_USER_ID')),
     appUserPassword: requireEnv('SEED_APP_USER_PASSWORD'),
     appUserName: optionalEnv('SEED_APP_USER_NAME', 'Demo User'),
@@ -437,8 +443,21 @@ async function main() {
 
   const existingCompany = await prisma.company.findUnique({
     where: { id: config.companyId },
-    select: { mandiAccountNumber: true }
+    select: {
+      mandiAccountNumber: true,
+      address: true,
+      phone: true
+    }
   })
+
+  const resolvedCompanyAddress =
+    existingCompany?.address && existingCompany.address.trim() && existingCompany.address.trim() !== SEEDED_COMPANY_ADDRESS_PLACEHOLDER
+      ? existingCompany.address.trim()
+      : config.companyAddress
+  const resolvedCompanyPhone =
+    existingCompany?.phone && existingCompany.phone.trim()
+      ? existingCompany.phone.trim()
+      : config.companyPhone
 
   const company = existingCompany
     ? await prisma.company.update({
@@ -446,8 +465,8 @@ async function main() {
         data: {
           traderId: config.traderId,
           name: config.companyName,
-          address: 'Seeded company for Turso testing',
-          phone: '9876543215',
+          address: resolvedCompanyAddress,
+          phone: resolvedCompanyPhone,
           mandiAccountNumber:
             existingCompany.mandiAccountNumber || (await generateUniqueMandiAccountNumber(prisma)),
           locked: false,
@@ -459,8 +478,8 @@ async function main() {
           id: config.companyId,
           traderId: config.traderId,
           name: config.companyName,
-          address: 'Seeded company for Turso testing',
-          phone: '9876543215',
+          address: resolvedCompanyAddress,
+          phone: resolvedCompanyPhone,
           mandiAccountNumber: await generateUniqueMandiAccountNumber(prisma),
           locked: false
         }

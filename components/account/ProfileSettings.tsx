@@ -55,6 +55,10 @@ type ProfileSettingsProps = {
 
 const sharedInputClassName =
   'h-12 rounded-2xl border-slate-200 bg-slate-50/80 px-4 text-[15px] text-slate-900 shadow-none focus-visible:border-slate-300 focus-visible:ring-slate-900/10'
+const LOCAL_AVATAR_PREVIEW_COOKIE_TTL_SECONDS = 60 * 60 * 24 * 30
+const LOCAL_AVATAR_PREVIEW_COOKIE_MAX_LENGTH = 3_500
+const LOCAL_AVATAR_PREVIEW_SIZES = [96, 72, 56]
+const LOCAL_AVATAR_PREVIEW_QUALITIES = [0.72, 0.56, 0.4]
 
 function splitName(fullName: string | null) {
   const trimmed = (fullName || '').trim()
@@ -119,6 +123,84 @@ function deriveJobTitle(user: SelfProfileUser | null) {
   if (normalizedRole === 'trader_admin') return 'Trader Administrator'
   if (normalizedRole === 'company_user') return 'Company Operations User'
   return formatRole(user.role)
+}
+
+function sanitizeCookieFragment(value: string) {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-')
+  return normalized || 'user'
+}
+
+function getAvatarPreviewCookieName(userId: string) {
+  return `profile-avatar-preview-${sanitizeCookieFragment(userId)}`
+}
+
+function getAvatarPreviewMemoryCookieName(userId: string) {
+  return `profile-avatar-preview-memory-${sanitizeCookieFragment(userId)}`
+}
+
+function readClientCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null
+  const row = document.cookie.split('; ').find((entry) => entry.startsWith(`${name}=`))
+  if (!row) return null
+  return decodeURIComponent(row.slice(name.length + 1))
+}
+
+function writeClientCookie(name: string, value: string, maxAgeSeconds = LOCAL_AVATAR_PREVIEW_COOKIE_TTL_SECONDS) {
+  if (typeof document === 'undefined') return
+  document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax`
+}
+
+function deleteClientCookie(name: string) {
+  if (typeof document === 'undefined') return
+  document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('Unable to read the selected image'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function loadImageElement(source: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('Unable to load the selected image'))
+    image.src = source
+  })
+}
+
+async function buildCookieFriendlyAvatarPreview(file: File): Promise<string | null> {
+  const sourceDataUrl = await readFileAsDataUrl(file)
+  const image = await loadImageElement(sourceDataUrl)
+
+  for (const size of LOCAL_AVATAR_PREVIEW_SIZES) {
+    for (const quality of LOCAL_AVATAR_PREVIEW_QUALITIES) {
+      const canvas = document.createElement('canvas')
+      canvas.width = size
+      canvas.height = size
+
+      const context = canvas.getContext('2d')
+      if (!context) continue
+
+      const shortestEdge = Math.min(image.width, image.height)
+      const sourceX = Math.max(0, (image.width - shortestEdge) / 2)
+      const sourceY = Math.max(0, (image.height - shortestEdge) / 2)
+
+      context.clearRect(0, 0, size, size)
+      context.drawImage(image, sourceX, sourceY, shortestEdge, shortestEdge, 0, 0, size, size)
+
+      const previewDataUrl = canvas.toDataURL('image/jpeg', quality)
+      if (previewDataUrl.length <= LOCAL_AVATAR_PREVIEW_COOKIE_MAX_LENGTH) {
+        return previewDataUrl
+      }
+    }
+  }
+
+  return null
 }
 
 function ProfileField({
@@ -186,6 +268,7 @@ export default function ProfileSettings({
   const [isSavingProfile, setIsSavingProfile] = useState(false)
   const [isSavingPassword, setIsSavingPassword] = useState(false)
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
+  const [rememberAvatarPreview, setRememberAvatarPreview] = useState(false)
   const avatarInputRef = useRef<HTMLInputElement | null>(null)
   const avatarObjectUrlRef = useRef<string | null>(null)
 
@@ -273,6 +356,28 @@ export default function ProfileSettings({
     }
   }, [])
 
+  useEffect(() => {
+    const userId = String(user?.userId || '').trim()
+    if (!userId) {
+      setRememberAvatarPreview(false)
+      return
+    }
+
+    const memoryCookieName = getAvatarPreviewMemoryCookieName(userId)
+    const previewCookieName = getAvatarPreviewCookieName(userId)
+    const shouldRemember = readClientCookie(memoryCookieName) === '1'
+    const rememberedPreview = shouldRemember ? readClientCookie(previewCookieName) : null
+
+    setRememberAvatarPreview(shouldRemember)
+
+    if (avatarObjectUrlRef.current) {
+      URL.revokeObjectURL(avatarObjectUrlRef.current)
+      avatarObjectUrlRef.current = null
+    }
+
+    setAvatarPreview(rememberedPreview && rememberedPreview.startsWith('data:image/') ? rememberedPreview : null)
+  }, [user?.userId])
+
   const fullNameDraft = combineName(firstName, lastName)
   const savedName = (user?.name || '').trim()
   const hasProfileChanges = Boolean(user) && fullNameDraft !== savedName
@@ -304,9 +409,37 @@ export default function ProfileSettings({
         ? `${user.traderName} multi-company access`
         : 'Workspace access not assigned'
 
-  const handlePhotoSelection = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleRememberAvatarPreviewChange = (checked: boolean) => {
+    const userId = String(user?.userId || '').trim()
+    if (!userId) return
+
+    const memoryCookieName = getAvatarPreviewMemoryCookieName(userId)
+    const previewCookieName = getAvatarPreviewCookieName(userId)
+
+    setRememberAvatarPreview(checked)
+
+    if (!checked) {
+      deleteClientCookie(memoryCookieName)
+      deleteClientCookie(previewCookieName)
+      showToast('info', 'Preview memory turned off', 'Photo preview will stay only in the current tab unless you enable device memory again.')
+      return
+    }
+
+    writeClientCookie(memoryCookieName, '1')
+    if (avatarPreview && avatarPreview.startsWith('data:image/')) {
+      writeClientCookie(previewCookieName, avatarPreview)
+      showToast('success', 'Preview memory turned on', 'This device will keep the current photo preview in browser cookies.')
+      return
+    }
+
+    showToast('info', 'Preview memory turned on', 'Choose a photo to save a small preview in browser cookies on this device.')
+  }
+
+  const handlePhotoSelection = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
+
+    const userId = String(user?.userId || '').trim()
 
     if (avatarObjectUrlRef.current) {
       URL.revokeObjectURL(avatarObjectUrlRef.current)
@@ -315,8 +448,41 @@ export default function ProfileSettings({
     const objectUrl = URL.createObjectURL(file)
     avatarObjectUrlRef.current = objectUrl
     setAvatarPreview(objectUrl)
-    showToast('info', 'Local photo preview updated', 'Photo storage is not connected yet, so this preview stays on this device only.')
     event.target.value = ''
+
+    if (!rememberAvatarPreview || !userId) {
+      showToast('info', 'Local photo preview updated', 'Preview updated for this tab only. Turn on device memory if you want it kept after refresh.')
+      return
+    }
+
+    try {
+      const previewDataUrl = await buildCookieFriendlyAvatarPreview(file)
+      const previewCookieName = getAvatarPreviewCookieName(userId)
+      const memoryCookieName = getAvatarPreviewMemoryCookieName(userId)
+
+      writeClientCookie(memoryCookieName, '1')
+
+      if (!previewDataUrl) {
+        deleteClientCookie(previewCookieName)
+        showToast('info', 'Local photo preview updated', 'Preview updated, but this image is too large for cookie storage so it will stay only in the current tab.')
+        return
+      }
+
+      if (avatarObjectUrlRef.current) {
+        URL.revokeObjectURL(avatarObjectUrlRef.current)
+        avatarObjectUrlRef.current = null
+      }
+
+      writeClientCookie(previewCookieName, previewDataUrl)
+      setAvatarPreview(previewDataUrl)
+      showToast('success', 'Local photo preview saved', 'This device will remember the photo preview in browser cookies until you turn it off or clear browser data.')
+    } catch (error) {
+      showToast(
+        'info',
+        'Local photo preview updated',
+        error instanceof Error ? error.message : 'Preview updated for the current tab only.'
+      )
+    }
   }
 
   const handleSaveProfile = async () => {
@@ -634,11 +800,27 @@ export default function ProfileSettings({
                 </Button>
               </div>
 
+              <label className="flex items-center gap-2 text-sm text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={rememberAvatarPreview}
+                  onChange={(event) => handleRememberAvatarPreviewChange(event.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+                />
+                Remember local photo preview on this device
+              </label>
+
               {avatarPreview ? (
                 <p className="text-xs leading-5 text-slate-500">
-                  Avatar preview is local for now. When file storage is connected later, this same control can be upgraded without changing the page layout.
+                  {rememberAvatarPreview
+                    ? 'This preview is being remembered in browser cookies on this device only.'
+                    : 'Device memory is off by default, so this preview stays only in the current tab.'}
                 </p>
-              ) : null}
+              ) : (
+                <p className="text-xs leading-5 text-slate-500">
+                  Device memory is off by default. Turn it on only if you want this browser to remember a small local photo preview.
+                </p>
+              )}
             </div>
           </div>
         </section>

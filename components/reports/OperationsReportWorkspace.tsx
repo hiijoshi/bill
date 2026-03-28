@@ -1387,12 +1387,12 @@ export default function OperationsReportWorkspace({
             <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
               <div className="space-y-2">
                 <Label>Companies</Label>
-                <details className="group relative">
+                <details className="group">
                   <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 marker:hidden [&::-webkit-details-marker]:hidden">
                     <span className="truncate">{selectedCompanySummary}</span>
                     <span className="ml-3 shrink-0 text-xs text-slate-400">{selectedCompanyIds.length} selected</span>
                   </summary>
-                  <div className="absolute z-20 mt-2 w-[320px] rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.35)]">
+                  <div className="mt-2 w-full max-w-[360px] rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.35)]">
                     <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-3">
                       <p className="text-sm font-semibold text-slate-950">Choose companies</p>
                       <div className="flex gap-2 text-xs">

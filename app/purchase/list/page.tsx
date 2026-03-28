@@ -166,6 +166,18 @@ function normalizeFilterText(value: unknown): string {
     .toLowerCase()
 }
 
+function getRegularFarmerName(bill: RegularPurchaseBill): string {
+  return String(bill.farmerNameSnapshot || bill.farmer?.name || 'Unknown Farmer')
+}
+
+function getRegularFarmerAddress(bill: RegularPurchaseBill): string {
+  return String(bill.farmerAddressSnapshot || bill.farmer?.address || '')
+}
+
+function getRegularAnubandh(bill: RegularPurchaseBill): string {
+  return String(bill.krashakAnubandhSnapshot || bill.farmer?.krashakAnubandhNumber || '')
+}
+
 export default function PurchaseListPage() {
   const router = useRouter()
   const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>([])
@@ -533,18 +545,6 @@ export default function PurchaseListPage() {
       return bill.purchaseItems.length > 0 ? Number(bill.purchaseItems[0].rate || 0) : 0
     }
     return bill.specialPurchaseItems.length > 0 ? Number(bill.specialPurchaseItems[0].rate || 0) : 0
-  }
-
-  const getRegularFarmerName = (bill: RegularPurchaseBill) => {
-    return String(bill.farmerNameSnapshot || bill.farmer?.name || 'Unknown Farmer')
-  }
-
-  const getRegularFarmerAddress = (bill: RegularPurchaseBill) => {
-    return String(bill.farmerAddressSnapshot || bill.farmer?.address || '')
-  }
-
-  const getRegularAnubandh = (bill: RegularPurchaseBill) => {
-    return String(bill.krashakAnubandhSnapshot || bill.farmer?.krashakAnubandhNumber || '')
   }
 
   const csvEscape = (value: string | number) => {

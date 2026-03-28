@@ -1,3 +1,5 @@
+import { sanitizePrintCompanyAddress } from '@/lib/print-company'
+
 export interface SalesPrintItem {
   id: string
   productName: string
@@ -167,7 +169,7 @@ export function mapSalesBillToPrintData(bill: SalesBillPrintSource | null | unde
     billDateLabel: formatDisplayDate(toDateValue(bill?.billDate)),
     printDateLabel: formatDisplayDate(new Date()),
     companyName: toStringValue(bill?.company?.name),
-    companyAddress: toStringValue(bill?.company?.address),
+    companyAddress: sanitizePrintCompanyAddress(bill?.company?.address),
     companyPhone: toStringValue(bill?.company?.phone),
     partyName: toStringValue(bill?.party?.name),
     partyAddress: toStringValue(bill?.party?.address),

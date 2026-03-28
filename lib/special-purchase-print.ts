@@ -1,4 +1,5 @@
 import { formatDisplayDate } from '@/lib/purchase-print'
+import { sanitizePrintCompanyAddress } from '@/lib/print-company'
 
 export interface SpecialPurchaseBillPrintData {
   id: string
@@ -92,7 +93,7 @@ export function mapSpecialPurchaseBillToPrintData(bill: SpecialPurchaseBillLike)
     billDateLabel: formatDisplayDate(toDateInput(bill?.billDate)),
     printDateLabel: formatDisplayDate(new Date()),
     companyName: String(bill?.company?.name || ''),
-    companyAddress: String(bill?.company?.address || ''),
+    companyAddress: sanitizePrintCompanyAddress(bill?.company?.address),
     companyPhone: String(bill?.company?.phone || ''),
     mandiAccountNumber: String(bill?.company?.mandiAccountNumber || ''),
     supplierName: String(bill?.supplier?.name || ''),

@@ -63,17 +63,34 @@ interface Payment {
   partyName: string
   payDate: string
   amount: number
-  mode: 'cash' | 'online' | 'bank'
+  mode: string
+  modeCategory: 'cash' | 'online' | 'bank'
+  modeLabel: string
   status: 'pending' | 'paid'
   txnRef?: string
   note?: string
   createdAt: string
 }
 
+type PaymentApiRecord = {
+  id: string
+  billType: 'purchase' | 'sales'
+  billId?: string
+  billNo?: string
+  partyName?: string
+  payDate?: string
+  amount?: number
+  mode?: string
+  status?: 'pending' | 'paid'
+  txnRef?: string
+  note?: string
+  createdAt?: string
+}
+
 type PaymentsApiPayload =
-  | Payment[]
+  | PaymentApiRecord[]
   | {
-      data?: Payment[]
+      data?: PaymentApiRecord[]
     }
 
 type OverviewPayload = {
@@ -118,12 +135,59 @@ const toDateInputValue = (value: string): string => {
   return `${year}-${month}-${day}`
 }
 
-const normalizePaymentsCollection = (payload: PaymentsApiPayload): Payment[] => {
+const normalizePaymentsCollection = (payload: PaymentsApiPayload): PaymentApiRecord[] => {
   if (Array.isArray(payload)) return payload
   if (payload && typeof payload === 'object' && Array.isArray(payload.data)) {
     return payload.data
   }
   return []
+}
+
+const getPaymentModeCategory = (rawMode: unknown): 'cash' | 'online' | 'bank' => {
+  const normalized = String(rawMode || '').trim().toLowerCase()
+  if (!normalized || normalized === 'cash' || normalized === 'c' || normalized.includes('cash') || normalized.includes('nakad')) {
+    return 'cash'
+  }
+  if (
+    normalized === 'bank' ||
+    normalized.includes('bank') ||
+    normalized.includes('neft') ||
+    normalized.includes('rtgs') ||
+    normalized.includes('imps') ||
+    normalized.includes('cheque') ||
+    normalized.includes('check') ||
+    normalized.includes('dd') ||
+    normalized.includes('wire') ||
+    normalized.includes('transfer')
+  ) {
+    return 'bank'
+  }
+  if (
+    normalized === 'online' ||
+    normalized.includes('online') ||
+    normalized.includes('upi') ||
+    normalized.includes('wallet') ||
+    normalized.includes('card') ||
+    normalized.includes('qr') ||
+    normalized.includes('gpay') ||
+    normalized.includes('phonepe') ||
+    normalized.includes('paytm') ||
+    normalized.includes('netbanking')
+  ) {
+    return 'online'
+  }
+  return 'bank'
+}
+
+const getPaymentModeLabel = (rawMode: unknown): string => {
+  const value = String(rawMode || '').trim()
+  if (!value) return 'Cash'
+
+  const normalized = value.toLowerCase()
+  if (normalized === 'cash' || normalized === 'c') return 'Cash'
+  if (normalized === 'online') return 'Online'
+  if (normalized === 'bank') return 'Bank Transfer'
+  return value.toUpperCase() === value ? value : value.replace(/_/g, ' ')
 }
 
 export default function PaymentDashboardPage() {
@@ -231,7 +295,9 @@ export default function PaymentDashboardPage() {
         partyName: payment.partyName || '',
         payDate: payment.payDate || '',
         amount: clampNonNegative(payment.amount || 0),
-        mode: payment.mode === 'bank' ? 'bank' : payment.mode === 'online' ? 'online' : 'cash',
+        mode: String(payment.mode || '').trim(),
+        modeCategory: getPaymentModeCategory(payment.mode),
+        modeLabel: getPaymentModeLabel(payment.mode),
         status: payment.status === 'pending' ? 'pending' : 'paid',
         txnRef: payment.txnRef || '',
         note: payment.note || '',
@@ -284,7 +350,7 @@ export default function PaymentDashboardPage() {
     setPaymentDraft({
       payDate: toDateInputValue(payment.payDate),
       amount: String(clampNonNegative(payment.amount)),
-      mode: payment.mode === 'bank' ? 'bank' : payment.mode === 'online' ? 'online' : 'cash',
+      mode: payment.modeCategory,
       status: payment.status === 'pending' ? 'pending' : 'paid',
       txnRef: payment.txnRef || '',
       note: payment.note || ''
@@ -386,7 +452,7 @@ export default function PaymentDashboardPage() {
       .filter((payment) => {
         if (payment.billType !== activeTab) return false
         if (partyFilter !== 'all' && payment.partyName !== partyFilter) return false
-        if (modeFilter !== 'all' && payment.mode !== modeFilter) return false
+        if (modeFilter !== 'all' && payment.modeCategory !== modeFilter) return false
 
         const paymentDate = new Date(payment.payDate)
         if (fromDate && paymentDate < fromDate) return false
@@ -653,7 +719,7 @@ export default function PaymentDashboardPage() {
                         <TableCell>{formatDateSafe(payment.payDate)}</TableCell>
                         <TableCell>₹{clampNonNegative(payment.amount).toFixed(2)}</TableCell>
                         <TableCell>
-                          <Badge variant="outline">{payment.mode}</Badge>
+                          <Badge variant="outline">{payment.modeLabel}</Badge>
                         </TableCell>
                         <TableCell>
                           <Badge variant={payment.status === 'paid' ? 'default' : 'secondary'}>

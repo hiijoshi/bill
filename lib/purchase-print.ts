@@ -1,3 +1,5 @@
+import { sanitizePrintCompanyAddress } from '@/lib/print-company'
+
 export interface PurchaseBillPrintData {
   id: string
   billNo: string
@@ -123,7 +125,7 @@ export function mapPurchaseBillToPrintData(bill: PurchaseBillPrintSource | null 
   const item = Array.isArray(bill?.purchaseItems) ? bill.purchaseItems[0] : null
 
   const companyName = toStringValue(bill?.companyNameSnapshot ?? bill?.company?.name)
-  const companyAddress = toStringValue(bill?.company?.address)
+  const companyAddress = sanitizePrintCompanyAddress(bill?.company?.address)
   const companyPhone = toStringValue(bill?.company?.phone)
   const mandiAccountNumber = toStringValue(bill?.mandiAccountNumberSnapshot ?? bill?.company?.mandiAccountNumber)
 
