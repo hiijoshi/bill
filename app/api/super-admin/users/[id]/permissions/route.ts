@@ -7,6 +7,7 @@ import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { syncSupabaseForLegacyUserMutationWithTimeout } from '@/lib/supabase/legacy-user-sync'
 import { normalizePrismaApiError } from '@/lib/prisma-errors'
+import { getLinkedCompaniesForUser } from '@/lib/super-admin-user-companies'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'User ID is required') })
 
@@ -56,22 +57,6 @@ function normalizePermissionRows(input: z.infer<typeof permissionRowSchema>[]) {
   })
 }
 
-async function getCompanyOptionsForTrader(traderId: string) {
-  return prisma.company.findMany({
-    where: {
-      traderId,
-      deletedAt: null
-    },
-    select: {
-      id: true,
-      name: true
-    },
-    orderBy: {
-      name: 'asc'
-    }
-  })
-}
-
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -111,14 +96,22 @@ export async function GET(
       )
     }
 
-    const companyOptions = await getCompanyOptionsForTrader(user.traderId)
+    const companyOptions = await getLinkedCompaniesForUser(prisma, {
+      userId: user.id,
+      traderId: user.traderId,
+      primaryCompanyId: user.companyId
+    })
     const queryCompanyId = new URL(request.url).searchParams.get('companyId')?.trim()
-    const companyId = queryCompanyId || user.companyId || companyOptions[0]?.id || null
+    const preferredCompanyId =
+      queryCompanyId && companyOptions.some((company) => company.id === queryCompanyId)
+        ? queryCompanyId
+        : null
+    const companyId = preferredCompanyId || user.companyId || companyOptions[0]?.id || null
 
     if (!companyId) {
       return NextResponse.json(
         {
-          error: 'No active companies found for this trader. Create a company first.',
+          error: 'No linked companies found for this user. Assign a company from User Management first.',
           user,
           companyId: '',
           companyOptions: [],
@@ -224,6 +217,19 @@ export async function PUT(
     if (!companyId) {
       return NextResponse.json(
         { error: 'Company ID is required to assign privileges' },
+        { status: 400 }
+      )
+    }
+
+    const companyOptions = await getLinkedCompaniesForUser(prisma, {
+      userId: user.id,
+      traderId: user.traderId,
+      primaryCompanyId: user.companyId
+    })
+
+    if (!companyOptions.some((company) => company.id === companyId)) {
+      return NextResponse.json(
+        { error: 'Company is not linked to this user. Assign it from User Management first.' },
         { status: 400 }
       )
     }

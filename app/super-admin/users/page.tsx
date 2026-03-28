@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Edit, Plus, Trash2 } from 'lucide-react'
+import { Edit, Plus, Trash2, X } from 'lucide-react'
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
 
 type Trader = { id: string; name: string }
@@ -36,6 +36,7 @@ export default function SuperAdminUsersPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [createMode, setCreateMode] = useState<'new' | 'existing'>('new')
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([])
+  const [removingCompanyKey, setRemovingCompanyKey] = useState<string | null>(null)
   const [form, setForm] = useState({
     traderId: '',
     companyId: '',
@@ -150,16 +151,30 @@ export default function SuperAdminUsersPage() {
   }
 
   const getUserLinkedCompanies = (user: User) => {
-    const byId = new Map<string, string>()
+    const byId = new Map<string, { id: string; name: string; isPrimary: boolean }>()
     if (user.companyId) {
-      byId.set(user.companyId, user.company?.name || user.companyId)
+      byId.set(user.companyId, {
+        id: user.companyId,
+        name: user.company?.name || user.companyId,
+        isPrimary: true
+      })
     }
     for (const permission of user.permissions || []) {
       const companyId = permission.companyId || ''
       if (!companyId) continue
-      byId.set(companyId, permission.company?.name || companyId)
+      const existing = byId.get(companyId)
+      byId.set(companyId, {
+        id: companyId,
+        name: permission.company?.name || existing?.name || companyId,
+        isPrimary: existing?.isPrimary || user.companyId === companyId
+      })
     }
-    return Array.from(byId.entries()).map(([id, name]) => ({ id, name }))
+    return Array.from(byId.values()).sort((left, right) => {
+      if (left.isPrimary !== right.isPrimary) {
+        return left.isPrimary ? -1 : 1
+      }
+      return left.name.localeCompare(right.name)
+    })
   }
 
   const save = async () => {
@@ -246,6 +261,36 @@ export default function SuperAdminUsersPage() {
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete user')
+    }
+  }
+
+  const removeCompanyAccess = async (user: User, companyId: string, companyName: string) => {
+    const linkedCompanies = getUserLinkedCompanies(user)
+    if (linkedCompanies.length <= 1) {
+      setError('User must keep at least one company. Delete the user if you want to remove all access.')
+      return
+    }
+
+    if (!confirm(`Remove ${companyName} access from ${user.userId}?`)) return
+
+    const actionKey = `${user.id}:${companyId}`
+    setRemovingCompanyKey(actionKey)
+    setError(null)
+
+    try {
+      const res = await fetch(
+        `/api/super-admin/users/${user.id}/companies?companyId=${encodeURIComponent(companyId)}`,
+        { method: 'DELETE' }
+      )
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(payload.error || 'Failed to remove company access')
+      }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to remove company access')
+    } finally {
+      setRemovingCompanyKey(null)
     }
   }
 
@@ -405,7 +450,11 @@ export default function SuperAdminUsersPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {users.map((user) => (
+              {users.map((user) => {
+                const linkedCompanies = getUserLinkedCompanies(user)
+                const canRemoveCompany = linkedCompanies.length > 1
+
+                return (
                 <TableRow key={user.id}>
                   <TableCell>{user.userId}</TableCell>
                   <TableCell>{user.name || '-'}</TableCell>
@@ -413,10 +462,30 @@ export default function SuperAdminUsersPage() {
                   <TableCell>{user.trader?.name || user.traderId}</TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
-                      {getUserLinkedCompanies(user).length > 0 ? (
-                        getUserLinkedCompanies(user).map((company) => (
-                          <span key={`${user.id}:${company.id}`} className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-700">
-                            {company.name}
+                      {linkedCompanies.length > 0 ? (
+                        linkedCompanies.map((company) => (
+                          <span
+                            key={`${user.id}:${company.id}`}
+                            className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-700"
+                          >
+                            <span>{company.name}</span>
+                            {company.isPrimary ? (
+                              <span className="rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-600">
+                                Primary
+                              </span>
+                            ) : null}
+                            {canRemoveCompany ? (
+                              <button
+                                type="button"
+                                className="rounded p-0.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                aria-label={`Remove ${company.name}`}
+                                title={`Remove ${company.name}`}
+                                disabled={removingCompanyKey === `${user.id}:${company.id}`}
+                                onClick={() => removeCompanyAccess(user, company.id, company.name)}
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            ) : null}
                           </span>
                         ))
                       ) : (
@@ -443,7 +512,7 @@ export default function SuperAdminUsersPage() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+              )})}
             </TableBody>
           </Table>
         </CardContent>
