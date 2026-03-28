@@ -11,6 +11,7 @@ import {
   normalizePartyOpeningBalanceAmount,
   normalizePartyOpeningBalanceType
 } from '@/lib/party-opening-balance'
+import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-schema'
 
 function normalizeCompanyId(raw: string | null): string | null {
   if (!raw) return null
@@ -95,6 +96,8 @@ function parseOptionalDateValue(value: unknown): Date | null {
 
 export async function GET(request: NextRequest) {
   try {
+    await ensurePartyOpeningBalanceSchema(prisma)
+
     const { searchParams } = new URL(request.url)
     const companyId = normalizeCompanyId(searchParams.get('companyId')) || getCompanyIdFromAuthenticatedRequest(request)
 
@@ -210,6 +213,8 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    await ensurePartyOpeningBalanceSchema(prisma)
+
     const parsed = await parseJsonWithSchema(request, postSchema)
     if (!parsed.ok) return parsed.response
 
@@ -268,6 +273,8 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    await ensurePartyOpeningBalanceSchema(prisma)
+
     const parsed = await parseJsonWithSchema(request, putSchema)
     if (!parsed.ok) return parsed.response
 

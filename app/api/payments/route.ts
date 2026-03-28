@@ -17,6 +17,7 @@ import {
   getSignedPartyOpeningBalance,
   isPartyOpeningBalanceReference
 } from '@/lib/party-opening-balance'
+import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-schema'
 
 const paymentCreateSchema = z
   .object({
@@ -61,6 +62,8 @@ export async function POST(request: NextRequest) {
   if (!authResult.ok) return authResult.response
 
   try {
+    await ensurePartyOpeningBalanceSchema(prisma)
+
     const body = await request.json().catch(() => null)
     const parsed = paymentCreateSchema.safeParse(body)
     if (!parsed.success) {

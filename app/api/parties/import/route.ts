@@ -6,6 +6,7 @@ import {
   normalizePartyOpeningBalanceAmount,
   normalizePartyOpeningBalanceType,
 } from '@/lib/party-opening-balance'
+import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-schema'
 
 type PartyImportRow = Record<string, string>
 
@@ -119,6 +120,8 @@ const normalizeOptionalNumber = (value: string): number | null => {
 
 export async function POST(request: NextRequest) {
   try {
+    await ensurePartyOpeningBalanceSchema(prisma)
+
     const { searchParams } = new URL(request.url)
     const companyId = searchParams.get('companyId')?.trim() || ''
 

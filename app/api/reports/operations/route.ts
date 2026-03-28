@@ -15,6 +15,7 @@ import {
   isPartyOpeningBalanceReference,
   normalizePartyOpeningBalanceType
 } from '@/lib/party-opening-balance'
+import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-schema'
 import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
 
 type CompanyOption = {
@@ -156,6 +157,8 @@ export async function GET(request: NextRequest) {
   if (!authResult.ok) return authResult.response
 
   try {
+    await ensurePartyOpeningBalanceSchema(prisma)
+
     const { searchParams } = new URL(request.url)
     const requestedCompanyIds = Array.from(
       new Set(
