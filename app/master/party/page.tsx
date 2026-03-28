@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
@@ -14,10 +13,6 @@ import { getCompanyIdFromSearch } from '@/lib/company-context'
 import { useRouter } from 'next/navigation'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { isAbortError } from '@/lib/http'
-import {
-  formatSignedPartyBalanceLabel,
-  getSignedPartyOpeningBalance,
-} from '@/lib/party-opening-balance'
 
 interface Party {
   id: string
@@ -27,7 +22,7 @@ interface Party {
   phone1?: string
   phone2?: string
   openingBalance?: number
-  openingBalanceType?: 'receivable' | 'payable'
+  openingBalanceType?: 'receivable'
   openingBalanceDate?: string | null
   openingOutstandingAmount?: number
   currentBalanceAmount?: number
@@ -59,6 +54,8 @@ const formatDateLabel = (value: string | null | undefined): string => {
   return parsed.toLocaleDateString('en-GB')
 }
 
+const formatCurrency = (value: number | null | undefined): string => `₹${Number(value || 0).toFixed(2)}`
+
 export default function PartyMasterPage() {
   const router = useRouter()
   const importInputRef = useRef<HTMLInputElement | null>(null)
@@ -79,7 +76,6 @@ export default function PartyMasterPage() {
     phone1: '',
     phone2: '',
     openingBalance: '',
-    openingBalanceType: 'receivable' as 'receivable' | 'payable',
     openingBalanceDate: getFinancialYearStartValue(),
     creditLimit: '',
     creditDays: '',
@@ -265,7 +261,6 @@ export default function PartyMasterPage() {
       phone1: party.phone1 || '',
       phone2: party.phone2 || '',
       openingBalance: party.openingBalance != null ? String(party.openingBalance) : '',
-      openingBalanceType: party.openingBalanceType === 'payable' ? 'payable' : 'receivable',
       openingBalanceDate: party.openingBalanceDate ? String(party.openingBalanceDate).slice(0, 10) : getFinancialYearStartValue(),
       creditLimit: party.creditLimit != null ? String(party.creditLimit) : '',
       creditDays: party.creditDays != null ? String(party.creditDays) : '',
@@ -349,7 +344,7 @@ export default function PartyMasterPage() {
       party.phone1 || '',
       party.phone2 || '',
       party.openingBalance ?? '',
-      party.openingBalanceType || 'receivable',
+      'receivable',
       party.openingBalanceDate ? String(party.openingBalanceDate).slice(0, 10) : '',
       party.creditLimit ?? '',
       party.creditDays ?? '',
@@ -427,7 +422,6 @@ export default function PartyMasterPage() {
       phone1: '',
       phone2: '',
       openingBalance: '',
-      openingBalanceType: 'receivable',
       openingBalanceDate: getFinancialYearStartValue(),
       creditLimit: '',
       creditDays: '',
@@ -564,7 +558,7 @@ export default function PartyMasterPage() {
                       />
                     </div>
                     <div>
-                      <Label htmlFor="openingBalance">Opening Principal</Label>
+                      <Label htmlFor="openingBalance">Opening Receivable</Label>
                       <Input
                         id="openingBalance"
                         type="number"
@@ -572,25 +566,11 @@ export default function PartyMasterPage() {
                         step="0.01"
                         value={formData.openingBalance}
                         onChange={(e) => setFormData({ ...formData, openingBalance: e.target.value })}
-                        placeholder="Enter opening principal"
+                        placeholder="Amount pending from previous year"
                       />
-                    </div>
-                    <div>
-                      <Label htmlFor="openingBalanceType">Opening Principal Type</Label>
-                      <Select
-                        value={formData.openingBalanceType}
-                        onValueChange={(value: 'receivable' | 'payable') =>
-                          setFormData({ ...formData, openingBalanceType: value })
-                        }
-                      >
-                        <SelectTrigger id="openingBalanceType">
-                          <SelectValue placeholder="Select principal type" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="receivable">Receivable</SelectItem>
-                          <SelectItem value="payable">Payable</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        This is the receivable brought forward from old books on the first day of the financial year.
+                      </p>
                     </div>
                     <div>
                       <Label htmlFor="openingBalanceDate">Opening Date</Label>
@@ -688,8 +668,8 @@ export default function PartyMasterPage() {
                       <TableHead>Type</TableHead>
                       <TableHead>Address</TableHead>
                       <TableHead>Phone</TableHead>
-                      <TableHead>Opening Principal</TableHead>
-                      <TableHead>Current Closing</TableHead>
+                      <TableHead>Opening Receivable</TableHead>
+                      <TableHead>Closing Receivable</TableHead>
                       <TableHead>Credit Control</TableHead>
                       <TableHead>Bank Details</TableHead>
                       <TableHead>Created Date</TableHead>
@@ -714,11 +694,7 @@ export default function PartyMasterPage() {
                         </TableCell>
                         <TableCell>
                           <div className="text-sm">
-                            <div className="font-medium">
-                              {formatSignedPartyBalanceLabel(
-                                getSignedPartyOpeningBalance(party.openingBalance, party.openingBalanceType)
-                              )}
-                            </div>
+                            <div className="font-medium">{formatCurrency(party.openingBalance)}</div>
                             <div className="text-gray-500">
                               {formatDateLabel(party.openingBalanceDate)}
                             </div>
@@ -726,11 +702,9 @@ export default function PartyMasterPage() {
                         </TableCell>
                         <TableCell>
                           <div className="text-sm">
-                            <div className="font-medium">
-                              {formatSignedPartyBalanceLabel(Number(party.currentBalanceAmount || 0))}
-                            </div>
+                            <div className="font-medium">{formatCurrency(party.currentBalanceAmount)}</div>
                             <div className="text-gray-500">
-                              Opening pending: {formatSignedPartyBalanceLabel(Number(party.openingOutstandingAmount || 0))}
+                              Opening pending: {formatCurrency(party.openingOutstandingAmount)}
                             </div>
                           </div>
                         </TableCell>

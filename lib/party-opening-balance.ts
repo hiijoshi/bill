@@ -4,17 +4,16 @@ export const PARTY_OPENING_BALANCE_REFERENCE_PREFIX = 'party-opening:'
 
 export type PartyOpeningBalanceType = 'receivable' | 'payable'
 
-export function normalizePartyOpeningBalanceType(value: unknown): PartyOpeningBalanceType {
-  return String(value || '').trim().toLowerCase() === 'payable' ? 'payable' : 'receivable'
+export function normalizePartyOpeningBalanceType(_value: unknown): PartyOpeningBalanceType {
+  return 'receivable'
 }
 
 export function normalizePartyOpeningBalanceAmount(value: unknown): number {
   return roundCurrency(normalizeNonNegative(value))
 }
 
-export function getSignedPartyOpeningBalance(amount: unknown, type: unknown): number {
-  const normalizedAmount = normalizePartyOpeningBalanceAmount(amount)
-  return normalizePartyOpeningBalanceType(type) === 'payable' ? -normalizedAmount : normalizedAmount
+export function getSignedPartyOpeningBalance(amount: unknown, _type: unknown): number {
+  return normalizePartyOpeningBalanceAmount(amount)
 }
 
 export function getPartyOpeningBalanceReference(partyId: string): string {
@@ -27,8 +26,5 @@ export function isPartyOpeningBalanceReference(value: unknown): boolean {
 
 export function formatSignedPartyBalanceLabel(amount: number): string {
   const normalized = roundCurrency(Number(amount || 0))
-  if (normalized < 0) {
-    return `Payable ${Math.abs(normalized).toFixed(2)}`
-  }
   return `Receivable ${normalized.toFixed(2)}`
 }

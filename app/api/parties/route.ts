@@ -131,19 +131,20 @@ export async function GET(request: NextRequest) {
     ])
 
     const partyIds = parties.map((party) => party.id)
-    const [salesBills, openingPayments] = partyIds.length > 0
+    const [salesBillBalances, openingPaymentBalances] = partyIds.length > 0
       ? await Promise.all([
-          prisma.salesBill.findMany({
+          prisma.salesBill.groupBy({
+            by: ['partyId'],
             where: {
               companyId,
               partyId: { in: partyIds }
             },
-            select: {
-              partyId: true,
+            _sum: {
               balanceAmount: true
             }
           }),
-          prisma.payment.findMany({
+          prisma.payment.groupBy({
+            by: ['partyId'],
             where: {
               companyId,
               billType: 'sales',
@@ -151,8 +152,7 @@ export async function GET(request: NextRequest) {
               partyId: { in: partyIds },
               billId: { startsWith: getPartyOpeningBalanceReference('') }
             },
-            select: {
-              partyId: true,
+            _sum: {
               amount: true
             }
           })
@@ -160,30 +160,27 @@ export async function GET(request: NextRequest) {
       : [[], []]
 
     const salesBalanceByPartyId = new Map<string, number>()
-    for (const bill of salesBills) {
+    for (const bill of salesBillBalances) {
       salesBalanceByPartyId.set(
         bill.partyId,
-        roundCurrency((salesBalanceByPartyId.get(bill.partyId) || 0) + normalizeNonNegative(bill.balanceAmount))
+        roundCurrency(normalizeNonNegative(bill._sum.balanceAmount))
       )
     }
 
     const openingReceiptsByPartyId = new Map<string, number>()
-    for (const payment of openingPayments) {
+    for (const payment of openingPaymentBalances) {
       const partyId = String(payment.partyId || '').trim()
       if (!partyId) continue
       openingReceiptsByPartyId.set(
         partyId,
-        roundCurrency((openingReceiptsByPartyId.get(partyId) || 0) + normalizeNonNegative(payment.amount))
+        roundCurrency(normalizeNonNegative(payment._sum.amount))
       )
     }
 
     const enrichedParties = parties.map((party) => {
-      const openingSigned = getSignedPartyOpeningBalance(party.openingBalance, party.openingBalanceType)
+      const openingReceivable = getSignedPartyOpeningBalance(party.openingBalance, party.openingBalanceType)
       const openingReceipts = roundCurrency(openingReceiptsByPartyId.get(party.id) || 0)
-      const openingOutstandingAmount =
-        openingSigned > 0
-          ? roundCurrency(Math.max(0, openingSigned - openingReceipts))
-          : roundCurrency(openingSigned)
+      const openingOutstandingAmount = roundCurrency(Math.max(0, openingReceivable - openingReceipts))
       const currentBalanceAmount = roundCurrency(
         openingOutstandingAmount + (salesBalanceByPartyId.get(party.id) || 0)
       )
@@ -191,7 +188,7 @@ export async function GET(request: NextRequest) {
       return {
         ...party,
         openingBalance: normalizePartyOpeningBalanceAmount(party.openingBalance),
-        openingBalanceType: normalizePartyOpeningBalanceType(party.openingBalanceType),
+        openingBalanceType: 'receivable' as const,
         openingOutstandingAmount,
         currentBalanceAmount
       }
