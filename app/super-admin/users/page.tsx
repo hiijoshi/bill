@@ -21,6 +21,11 @@ type User = {
   name: string | null
   role: string
   trader?: Trader
+  company?: { id: string; name: string } | null
+  permissions?: Array<{
+    companyId?: string | null
+    company?: { id: string; name: string } | null
+  }>
 }
 
 export default function SuperAdminUsersPage() {
@@ -29,9 +34,12 @@ export default function SuperAdminUsersPage() {
   const [companies, setCompanies] = useState<Company[]>([])
   const [error, setError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [createMode, setCreateMode] = useState<'new' | 'existing'>('new')
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([])
   const [form, setForm] = useState({
     traderId: '',
     companyId: '',
+    existingUserId: '',
     userId: '',
     password: '',
     name: ''
@@ -65,16 +73,124 @@ export default function SuperAdminUsersPage() {
 
   const resetForm = () => {
     setEditingId(null)
-    setForm({ traderId: '', companyId: '', userId: '', password: '', name: '' })
+    setCreateMode('new')
+    setSelectedCompanyIds([])
+    setForm({ traderId: '', companyId: '', existingUserId: '', userId: '', password: '', name: '' })
+  }
+
+  const availableCompanies = companies.filter((company) => !form.traderId || company.traderId === form.traderId)
+  const traderUsers = users.filter((user) => user.traderId === form.traderId)
+  const selectedExistingUser =
+    createMode === 'existing' && form.existingUserId
+      ? traderUsers.find((user) => user.id === form.existingUserId) || null
+      : null
+
+  const linkedCompanyIds = Array.from(
+    new Set(
+      [
+        ...(selectedExistingUser?.companyId ? [selectedExistingUser.companyId] : []),
+        ...((selectedExistingUser?.permissions || [])
+          .map((permission) => permission.companyId || '')
+          .filter((value) => value.length > 0))
+      ]
+    )
+  )
+
+  const toggleCompanySelection = (companyId: string) => {
+    setSelectedCompanyIds((prev) =>
+      prev.includes(companyId) ? prev.filter((value) => value !== companyId) : [...prev, companyId]
+    )
+  }
+
+  const startCreateNew = () => {
+    setCreateMode('new')
+    setSelectedCompanyIds([])
+    setForm((prev) => ({
+      ...prev,
+      existingUserId: '',
+      userId: '',
+      password: '',
+      name: ''
+    }))
+  }
+
+  const startAttachExisting = () => {
+    setCreateMode('existing')
+    setSelectedCompanyIds([])
+    setForm((prev) => ({
+      ...prev,
+      existingUserId: '',
+      userId: '',
+      password: '',
+      name: ''
+    }))
+  }
+
+  const handleExistingUserChange = (userId: string) => {
+    const target = traderUsers.find((user) => user.id === userId) || null
+    const targetCompanyIds = Array.from(
+      new Set(
+        [
+          ...(target?.companyId ? [target.companyId] : []),
+          ...((target?.permissions || [])
+            .map((permission) => permission.companyId || '')
+            .filter((value) => value.length > 0))
+        ]
+      )
+    )
+
+    setForm((prev) => ({
+      ...prev,
+      existingUserId: userId,
+      userId: target?.userId || '',
+      name: target?.name || '',
+      password: ''
+    }))
+    setSelectedCompanyIds(targetCompanyIds)
+  }
+
+  const getUserLinkedCompanies = (user: User) => {
+    const byId = new Map<string, string>()
+    if (user.companyId) {
+      byId.set(user.companyId, user.company?.name || user.companyId)
+    }
+    for (const permission of user.permissions || []) {
+      const companyId = permission.companyId || ''
+      if (!companyId) continue
+      byId.set(companyId, permission.company?.name || companyId)
+    }
+    return Array.from(byId.entries()).map(([id, name]) => ({ id, name }))
   }
 
   const save = async () => {
     setError(null)
-    if (!form.traderId || !form.companyId || !form.userId) {
-      setError('Trader, Company and User ID are required')
+    const companyIds = Array.from(
+      new Set(
+        (editingId ? [form.companyId] : selectedCompanyIds).filter((value) => (value || '').trim().length > 0)
+      )
+    )
+
+    if (!form.traderId || companyIds.length === 0) {
+      setError('Trader and at least one company are required')
       return
     }
-    if (form.password.length < 6) {
+
+    if (createMode === 'existing' && !editingId && !form.existingUserId) {
+      setError('Select an existing user first')
+      return
+    }
+
+    if (!form.userId) {
+      setError('User ID is required')
+      return
+    }
+
+    if (!editingId && createMode === 'new' && form.password.length < 6) {
+      setError('Password must be at least 6 characters')
+      return
+    }
+
+    if (editingId && form.password.length > 0 && form.password.length < 6) {
       setError('Password must be at least 6 characters')
       return
     }
@@ -85,10 +201,12 @@ export default function SuperAdminUsersPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           traderId: form.traderId,
-          companyId: form.companyId || undefined,
+          companyId: companyIds[0] || undefined,
+          companyIds,
+          existingUserId: !editingId && createMode === 'existing' ? form.existingUserId || undefined : undefined,
           userId: form.userId.trim(),
           name: form.name.trim() || undefined,
-          password: form.password
+          password: form.password || undefined
         })
       })
       if (!res.ok) {
@@ -104,9 +222,12 @@ export default function SuperAdminUsersPage() {
 
   const startEdit = (user: User) => {
     setEditingId(user.id)
+    setCreateMode('new')
+    setSelectedCompanyIds(user.companyId ? [user.companyId] : [])
     setForm({
       traderId: user.traderId,
       companyId: user.companyId || '',
+      existingUserId: '',
       userId: user.userId,
       password: '',
       name: user.name || ''
@@ -142,9 +263,37 @@ export default function SuperAdminUsersPage() {
           <CardTitle>{editingId ? 'Edit User' : 'Create User'}</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {!editingId ? (
+            <div className="md:col-span-2 flex flex-wrap gap-2">
+              <Button type="button" variant={createMode === 'new' ? 'default' : 'outline'} onClick={startCreateNew}>
+                New User
+              </Button>
+              <Button type="button" variant={createMode === 'existing' ? 'default' : 'outline'} onClick={startAttachExisting}>
+                User Selection
+              </Button>
+            </div>
+          ) : null}
           <div>
             <Label>Trader</Label>
-            <Select value={form.traderId || undefined} onValueChange={(value) => setForm((p) => ({ ...p, traderId: value }))}>
+            <Select
+              value={form.traderId || undefined}
+              onValueChange={(value) => {
+                setForm((p) => ({
+                  ...p,
+                  traderId: value,
+                  companyId: '',
+                  existingUserId: '',
+                  ...(createMode === 'new'
+                    ? {}
+                    : {
+                        userId: '',
+                        name: '',
+                        password: ''
+                      })
+                }))
+                setSelectedCompanyIds([])
+              }}
+            >
               <SelectTrigger><SelectValue placeholder="Select trader" /></SelectTrigger>
               <SelectContent>
                 {traders.map((trader) => (
@@ -153,35 +302,84 @@ export default function SuperAdminUsersPage() {
               </SelectContent>
             </Select>
           </div>
+          {!editingId && createMode === 'existing' ? (
+            <div>
+              <Label>User Selection</Label>
+              <Select value={form.existingUserId || undefined} onValueChange={handleExistingUserChange}>
+                <SelectTrigger><SelectValue placeholder="Select existing user" /></SelectTrigger>
+                <SelectContent>
+                  {traderUsers.map((user) => (
+                    <SelectItem key={user.id} value={user.id}>
+                      {user.userId}{user.name ? ` - ${user.name}` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
           <div>
             <Label>User ID</Label>
-            <Input value={form.userId} onChange={(e) => setForm((p) => ({ ...p, userId: e.target.value }))} />
+            <Input
+              value={form.userId}
+              disabled={!editingId && createMode === 'existing'}
+              onChange={(e) => setForm((p) => ({ ...p, userId: e.target.value }))}
+            />
           </div>
-          <div>
-            <Label>Company</Label>
-            <Select value={form.companyId || undefined} onValueChange={(value) => setForm((p) => ({ ...p, companyId: value }))}>
-              <SelectTrigger><SelectValue placeholder="Select company" /></SelectTrigger>
-              <SelectContent>
-                {companies
-                  .filter((company) => !form.traderId || company.traderId === form.traderId)
-                  .map((company) => (
+          {editingId ? (
+            <div>
+              <Label>Company</Label>
+              <Select value={form.companyId || undefined} onValueChange={(value) => setForm((p) => ({ ...p, companyId: value }))}>
+                <SelectTrigger><SelectValue placeholder="Select company" /></SelectTrigger>
+                <SelectContent>
+                  {availableCompanies.map((company) => (
                     <SelectItem key={company.id} value={company.id}>{company.name}</SelectItem>
                   ))}
-              </SelectContent>
-            </Select>
-          </div>
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <div className="md:col-span-2">
+              <Label>Company Checklist</Label>
+              <div className="grid gap-2 rounded border border-slate-200 p-3 md:grid-cols-2">
+                {availableCompanies.map((company) => {
+                  const alreadyLinked = createMode === 'existing' && linkedCompanyIds.includes(company.id)
+                  return (
+                    <label key={company.id} className={`flex items-center gap-2 rounded px-2 py-1 text-sm ${alreadyLinked ? 'bg-slate-50 text-slate-500' : 'hover:bg-slate-50'}`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedCompanyIds.includes(company.id)}
+                        disabled={alreadyLinked}
+                        onChange={() => toggleCompanySelection(company.id)}
+                      />
+                      <span>{company.name}</span>
+                      {alreadyLinked ? <span className="ml-auto text-xs">Already linked</span> : null}
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+          )}
           <div>
             <Label>Name</Label>
-            <Input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} />
+            <Input
+              value={form.name}
+              disabled={!editingId && createMode === 'existing'}
+              onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+            />
           </div>
           <div>
             <Label>Role</Label>
             <Input value="company_user (auto)" disabled />
           </div>
           <div className="md:col-span-2">
-            <Label>Password</Label>
+            <Label>{!editingId && createMode === 'existing' ? 'Password (optional, only if you want to change it)' : 'Password'}</Label>
             <Input type="password" value={form.password} onChange={(e) => setForm((p) => ({ ...p, password: e.target.value }))} />
           </div>
+          {!editingId && createMode === 'existing' ? (
+            <div className="md:col-span-2 rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+              Select an existing user under the same trader, then tick additional companies. Already linked companies are shown as locked in the checklist.
+            </div>
+          ) : null}
           <div className="md:col-span-2 flex justify-end gap-2">
             {editingId && <Button variant="outline" onClick={resetForm}>Cancel</Button>}
             <Button onClick={save}><Plus className="mr-2 h-4 w-4" />{editingId ? 'Update' : 'Create'}</Button>
@@ -201,7 +399,7 @@ export default function SuperAdminUsersPage() {
                 <TableHead>Name</TableHead>
                 <TableHead>Role</TableHead>
                 <TableHead>Trader</TableHead>
-                <TableHead>Company</TableHead>
+                <TableHead>Companies</TableHead>
                 <TableHead>Permissions</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -213,7 +411,19 @@ export default function SuperAdminUsersPage() {
                   <TableCell>{user.name || '-'}</TableCell>
                   <TableCell>{user.role}</TableCell>
                   <TableCell>{user.trader?.name || user.traderId}</TableCell>
-                  <TableCell>{user.companyId || '-'}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {getUserLinkedCompanies(user).length > 0 ? (
+                        getUserLinkedCompanies(user).map((company) => (
+                          <span key={`${user.id}:${company.id}`} className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-700">
+                            {company.name}
+                          </span>
+                        ))
+                      ) : (
+                        <span>-</span>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell>
                     <Link
                       href={`/super-admin/users/${user.id}`}

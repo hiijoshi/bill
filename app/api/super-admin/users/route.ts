@@ -14,9 +14,11 @@ import { isUniqueConstraintError, normalizePrismaApiError } from '@/lib/prisma-e
 const createUserSchema = z
   .object({
     traderId: z.string().trim().min(1, 'Trader ID is required'),
-    companyId: z.string().trim().min(1, 'Company ID is required'),
+    companyId: z.string().trim().min(1, 'Company ID is required').optional().nullable(),
+    companyIds: z.array(z.string().trim().min(1, 'Company ID is required')).optional(),
+    existingUserId: z.string().trim().min(1).optional().nullable(),
     userId: z.string().trim().min(1, 'User ID is required').max(50),
-    password: z.string().min(6, 'Password must be at least 6 characters'),
+    password: z.string().optional().nullable(),
     name: z.string().trim().max(100).optional().nullable(),
     locked: z.boolean().optional(),
     active: z.boolean().optional(),
@@ -26,12 +28,24 @@ const createUserSchema = z
 
 function normalizeCreatePayload(payload: z.infer<typeof createUserSchema>) {
   const activeLocked = payload.active === undefined ? undefined : !payload.active
+  const companyIds = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(payload.companyIds) ? payload.companyIds : []),
+        payload.companyId || ''
+      ]
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    )
+  )
 
   return {
     traderId: payload.traderId.trim(),
-    companyId: payload.companyId.trim(),
+    companyId: companyIds[0] || '',
+    companyIds,
+    existingUserId: payload.existingUserId?.trim() || null,
     userId: payload.userId.trim().toLowerCase(),
-    password: payload.password,
+    password: payload.password?.trim() || '',
     name: normalizeOptionalString(payload.name),
     role: 'company_user' as const,
     locked: activeLocked ?? payload.locked ?? false,
@@ -122,39 +136,50 @@ async function respondForExistingUserLink(params: {
 }) {
   const { request, authResult, normalized, existingUser } = params
 
-  const linkedCompany = await prisma.userPermission.findFirst({
+  const existingPermissionRows = await prisma.userPermission.findMany({
     where: {
       userId: existingUser.id,
-      companyId: normalized.companyId
+      companyId: {
+        in: normalized.companyIds
+      }
     },
-    select: { id: true }
+    select: { companyId: true }
+  })
+  const linkedCompanyIds = new Set(existingPermissionRows.map((row) => row.companyId))
+  const missingCompanyIds = normalized.companyIds.filter((companyId) => {
+    if (linkedCompanyIds.has(companyId)) return false
+    if (existingUser.companyId === companyId) return false
+    return true
   })
 
-  if (existingUser.companyId === normalized.companyId || linkedCompany) {
+  if (missingCompanyIds.length === 0) {
     return NextResponse.json(
-      { error: 'User with this ID is already linked to this company' },
+      { error: 'User with this ID is already linked to the selected companies' },
       { status: 409 }
     )
   }
 
-  const hashedPassword = await bcrypt.hash(normalized.password, 12)
+  const hashedPassword =
+    normalized.password.length >= 6 ? await bcrypt.hash(normalized.password, 12) : null
 
   await prisma.$transaction(async (tx) => {
     await tx.user.update({
       where: { id: existingUser.id },
       data: {
         companyId: existingUser.companyId || normalized.companyId,
-        password: hashedPassword,
+        ...(hashedPassword ? { password: hashedPassword } : {}),
         name: normalized.name ?? existingUser.name,
         locked: normalized.locked
       }
     })
 
-    await replacePermissionsForCompany(tx, {
-      userId: existingUser.id,
-      companyId: normalized.companyId,
-      preset: normalized.privilegePreset
-    })
+    for (const companyId of missingCompanyIds) {
+      await replacePermissionsForCompany(tx, {
+        userId: existingUser.id,
+        companyId,
+        preset: normalized.privilegePreset
+      })
+    }
   })
 
   const refreshedUser = await findExistingUserForCreate(normalized.traderId, normalized.userId)
@@ -181,7 +206,8 @@ async function respondForExistingUserLink(params: {
       ...userWithoutPassword,
       active: !userWithoutPassword.locked,
       linkedExistingUser: true,
-      linkedCompanyId: normalized.companyId
+      linkedCompanyId: normalized.companyId,
+      linkedCompanyIds: missingCompanyIds
     },
     requestMeta: getAuditRequestMeta(request),
     notes: 'Attached existing user to additional company'
@@ -192,7 +218,7 @@ async function respondForExistingUserLink(params: {
     try {
       const syncResult = await syncSupabaseForLegacyUserMutationWithTimeout({
         legacyUserId: refreshedUser.id,
-        password: normalized.password
+        password: normalized.password || null
       })
       if (!syncResult.synced && syncResult.reason) {
         cloudSyncWarning = syncResult.reason
@@ -209,6 +235,7 @@ async function respondForExistingUserLink(params: {
       active: !userWithoutPassword.locked,
       linkedExistingUser: true,
       linkedCompanyId: normalized.companyId,
+      linkedCompanyIds: missingCompanyIds,
       credentialsUpdated: true,
       ...(cloudSyncWarning ? { cloudSyncWarning } : {})
     },
@@ -230,7 +257,20 @@ export async function GET(request: NextRequest) {
       where: {
         ...(includeDeleted ? {} : { deletedAt: null }),
         ...(traderId ? { traderId } : {}),
-        ...(companyId ? { companyId } : {}),
+        ...(companyId
+          ? {
+              OR: [
+                { companyId },
+                {
+                  permissions: {
+                    some: {
+                      companyId
+                    }
+                  }
+                }
+              ]
+            }
+          : {}),
         NOT: [{ role: 'SUPER_ADMIN' }, { role: 'super_admin' }]
       },
       select: {
@@ -307,6 +347,10 @@ export async function POST(request: NextRequest) {
     parsedCreatePayload = parsed.data
     const normalized = normalizeCreatePayload(parsed.data)
 
+    if (normalized.companyIds.length === 0) {
+      return NextResponse.json({ error: 'At least one company is required' }, { status: 400 })
+    }
+
     const trader = await prisma.trader.findFirst({
       where: {
         id: normalized.traderId,
@@ -326,24 +370,60 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Trader is locked' }, { status: 403 })
     }
 
-    const company = await prisma.company.findFirst({
+    const companies = await prisma.company.findMany({
       where: {
-        id: normalized.companyId,
+        id: {
+          in: normalized.companyIds
+        },
         traderId: normalized.traderId,
         deletedAt: null
       },
       select: { id: true, locked: true }
     })
 
-    if (!company) {
-      return NextResponse.json({ error: 'Company not found for this trader' }, { status: 404 })
+    if (companies.length !== normalized.companyIds.length) {
+      return NextResponse.json({ error: 'One or more selected companies were not found for this trader' }, { status: 404 })
     }
 
-    if (company.locked) {
-      return NextResponse.json({ error: 'Company is locked' }, { status: 403 })
+    const lockedCompany = companies.find((company) => company.locked)
+    if (lockedCompany) {
+      return NextResponse.json({ error: 'One or more selected companies are locked' }, { status: 403 })
     }
 
-    const existingUser = await findExistingUserForCreate(normalized.traderId, normalized.userId)
+    const existingUser = normalized.existingUserId
+      ? await prisma.user.findFirst({
+          where: {
+            id: normalized.existingUserId,
+            traderId: normalized.traderId,
+            deletedAt: null
+          },
+          include: {
+            trader: {
+              select: {
+                id: true,
+                name: true
+              }
+            },
+            company: {
+              select: {
+                id: true,
+                name: true
+              }
+            },
+            permissions: {
+              select: {
+                companyId: true,
+                company: {
+                  select: {
+                    id: true,
+                    name: true
+                  }
+                }
+              }
+            }
+          }
+        })
+      : await findExistingUserForCreate(normalized.traderId, normalized.userId)
 
     if (existingUser) {
       return respondForExistingUserLink({
@@ -352,6 +432,10 @@ export async function POST(request: NextRequest) {
         normalized,
         existingUser
       })
+    }
+
+    if (normalized.password.length < 6) {
+      return NextResponse.json({ error: 'Password must be at least 6 characters' }, { status: 400 })
     }
 
     const traderCapacity = await getTraderCapacitySnapshot(prisma, normalized.traderId)
@@ -384,11 +468,13 @@ export async function POST(request: NextRequest) {
         }
       })
 
-      await replacePermissionsForCompany(tx, {
-        userId: createdUser.id,
-        companyId: normalized.companyId,
-        preset: normalized.privilegePreset
-      })
+      for (const companyId of normalized.companyIds) {
+        await replacePermissionsForCompany(tx, {
+          userId: createdUser.id,
+          companyId,
+          preset: normalized.privilegePreset
+        })
+      }
 
       return createdUser.id
     })

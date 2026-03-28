@@ -6,9 +6,10 @@ import { LogOut, Menu, User } from 'lucide-react'
 import Sidebar from './Sidebar'
 import HeaderAccountPanel from '@/components/account/HeaderAccountPanel'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { isAbortError } from '@/lib/http'
 import { clearClientCache, getClientCache, setClientCache } from '@/lib/client-fetch-cache'
-import { APP_COMPANY_CHANGED_EVENT } from '@/lib/company-context'
+import { APP_COMPANY_CHANGED_EVENT, notifyAppCompanyChanged } from '@/lib/company-context'
 
 interface DashboardLayoutProps {
   children: React.ReactNode
@@ -48,8 +49,11 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
   const [currentUser, setCurrentUser] = useState<string | null>(null)
   const [currentUserName, setCurrentUserName] = useState<string | null>(null)
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null)
+  const [availableCompanies, setAvailableCompanies] = useState<CompanySummary[]>([])
   const [resolvedCompanyId, setResolvedCompanyId] = useState(companyId)
   const [currentCompanyName, setCurrentCompanyName] = useState<string | null>(null)
+  const [isSwitchingCompany, setIsSwitchingCompany] = useState(false)
+  const [companySwitchError, setCompanySwitchError] = useState<string | null>(null)
   const router = useRouter()
 
   const loadShellContext = useCallback(async (force = false) => {
@@ -91,6 +95,17 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
 
       await Promise.all(requests)
 
+      const normalizedCompanies = Array.isArray(companiesPayload)
+        ? companiesPayload
+            .map((row) => ({
+              id: String(row.id || '').trim(),
+              name: String(row.name || row.id || '').trim() || String(row.id || '').trim(),
+              locked: Boolean(row.locked)
+            }))
+            .filter((row) => row.id.length > 0)
+        : []
+      setAvailableCompanies(normalizedCompanies)
+
       if (!authPayload) {
         return
       }
@@ -124,7 +139,7 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
           : ''
       const companyName =
         cachedCompanyName ||
-        companiesPayload?.find((row) => row.id === targetCompanyId)?.name ||
+        normalizedCompanies.find((row) => row.id === targetCompanyId)?.name ||
         'Selected company'
 
       setResolvedCompanyId(targetCompanyId)
@@ -196,6 +211,44 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
     router.push('/login')
   }
 
+  const handleCompanySwitch = async (nextCompanyId: string) => {
+    if (!nextCompanyId || nextCompanyId === resolvedCompanyId || isSwitchingCompany) {
+      return
+    }
+
+    setCompanySwitchError(null)
+    setIsSwitchingCompany(true)
+
+    try {
+      const response = await fetch('/api/auth/company', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({ companyId: nextCompanyId, force: true })
+      })
+      const payload = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        throw new Error(typeof payload?.error === 'string' ? payload.error : 'Failed to switch company')
+      }
+
+      clearClientCache()
+      notifyAppCompanyChanged(nextCompanyId)
+
+      const currentUrl = new URL(window.location.href)
+      currentUrl.searchParams.delete('companyId')
+      currentUrl.searchParams.delete('companyIds')
+      window.location.assign(`${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`)
+      return
+    } catch (error) {
+      setCompanySwitchError(error instanceof Error ? error.message : 'Failed to switch company')
+    } finally {
+      setIsSwitchingCompany(false)
+    }
+  }
+
+  const showCompanySwitcher = availableCompanies.length > 1
+
   return (
     <div className={lockViewport ? 'flex h-dvh overflow-hidden bg-gray-50' : 'flex min-h-dvh bg-gray-50'}>
       <Suspense fallback={<div className="w-20 border-r bg-white" />}>
@@ -234,7 +287,32 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
                 </span>
               ) : null}
             </div>
-            <div className="flex items-center gap-2 self-start md:self-auto">
+            <div className="flex flex-wrap items-center justify-end gap-2 self-start md:self-auto">
+              {showCompanySwitcher ? (
+                <div className="min-w-[180px] max-w-[240px]">
+                  <Select
+                    value={resolvedCompanyId || undefined}
+                    onValueChange={(value) => {
+                      void handleCompanySwitch(value)
+                    }}
+                    disabled={isSwitchingCompany}
+                  >
+                    <SelectTrigger
+                      className="h-10 w-full rounded-2xl border-slate-200 bg-white text-sm text-slate-700"
+                      aria-label="Change active company"
+                    >
+                      <SelectValue placeholder="Change company" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableCompanies.map((company) => (
+                        <SelectItem key={company.id} value={company.id} disabled={company.locked}>
+                          {company.name}{company.locked ? ' (Locked)' : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
               {headerActions}
               {currentUser && (
                 <HeaderAccountPanel
@@ -250,6 +328,11 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
               )}
             </div>
           </div>
+          {companySwitchError ? (
+            <div className="mx-auto mt-3 max-w-7xl rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {companySwitchError}
+            </div>
+          ) : null}
         </div>
         {children}
       </div>
