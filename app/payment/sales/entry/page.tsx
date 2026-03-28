@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { ArrowLeft, CreditCard, DollarSign, MessageCircle, Search } from 'lucide-react'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { getPartyOpeningBalanceReference } from '@/lib/party-opening-balance'
 import { openWhatsappChat } from '@/lib/whatsapp'
 
 interface SalesBill {
@@ -41,6 +42,16 @@ interface PaymentMode {
   name: string
   code: string
   isActive: boolean
+}
+
+interface PartyOutstandingRow {
+  id: string
+  name: string
+  address?: string
+  phone1?: string
+  openingBalance?: number
+  openingBalanceDate?: string | null
+  openingOutstandingAmount?: number
 }
 
 type PartyBillGroup = {
@@ -369,13 +380,50 @@ function SalesPaymentEntryPageContent() {
 
   const fetchSalesBills = async (targetCompanyId: string) => {
     try {
-      const response = await fetch(`/api/sales-bills?companyId=${targetCompanyId}`)
-      const data = await response.json()
-      const rows = Array.isArray(data) ? data : []
-      
-      // Filter bills that have pending balance
-      const pendingBills = rows.filter((bill: SalesBill) => Number(bill?.balanceAmount || 0) > 0)
-      setSalesBills(pendingBills)
+      const [salesResponse, partiesResponse] = await Promise.all([
+        fetch(`/api/sales-bills?companyId=${targetCompanyId}`),
+        fetch(`/api/parties?companyId=${targetCompanyId}`)
+      ])
+
+      const salesPayload = await salesResponse.json().catch(() => [])
+      const partyPayload = await partiesResponse.json().catch(() => [])
+      const salesRows = Array.isArray(salesPayload)
+        ? salesPayload
+        : Array.isArray(salesPayload?.data)
+          ? salesPayload.data
+          : []
+      const partyRows = Array.isArray(partyPayload)
+        ? partyPayload
+        : Array.isArray(partyPayload?.data)
+          ? partyPayload.data
+          : []
+
+      const pendingBillRows = salesRows.filter((bill: SalesBill) => Number(bill?.balanceAmount || 0) > 0)
+      const openingBalanceRows = partyRows
+        .filter((party: PartyOutstandingRow) => Number(party?.openingOutstandingAmount || 0) > 0)
+        .map((party: PartyOutstandingRow): SalesBill => {
+          const openingAmount = Number(party.openingBalance || 0)
+          const outstandingAmount = Number(party.openingOutstandingAmount || 0)
+          const receivedAmount = Math.max(0, openingAmount - outstandingAmount)
+
+          return {
+            id: getPartyOpeningBalanceReference(party.id),
+            billNo: 'Opening Balance',
+            billDate: party.openingBalanceDate || new Date().toISOString(),
+            totalAmount: openingAmount,
+            receivedAmount,
+            balanceAmount: outstandingAmount,
+            status: outstandingAmount <= 0 ? 'paid' : receivedAmount > 0 ? 'partial' : 'unpaid',
+            party: {
+              id: party.id,
+              name: party.name,
+              address: party.address || '',
+              phone1: party.phone1 || ''
+            }
+          }
+        })
+
+      setSalesBills([...pendingBillRows, ...openingBalanceRows])
       setLoading(false)
     } catch (error) {
       console.error('Error fetching sales bills:', error)
@@ -391,10 +439,12 @@ function SalesPaymentEntryPageContent() {
   }
 
   const submitReceipt = async (targetBillId: string, targetAmount: number) => {
+    const targetBill = salesBills.find((bill) => bill.id === targetBillId)
     const receiptData = {
       companyId,
       billType: 'sales',
       billId: targetBillId,
+      partyId: targetBill?.party?.id || null,
       payDate: receiptDate,
       amount: targetAmount,
       mode: selectedPaymentMode,

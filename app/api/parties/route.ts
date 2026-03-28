@@ -4,6 +4,13 @@ import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { cleanString, normalizeTenDigitPhone } from '@/lib/field-validation'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
+import { normalizeNonNegative, roundCurrency } from '@/lib/billing-calculations'
+import {
+  getPartyOpeningBalanceReference,
+  getSignedPartyOpeningBalance,
+  normalizePartyOpeningBalanceAmount,
+  normalizePartyOpeningBalanceType
+} from '@/lib/party-opening-balance'
 
 function normalizeCompanyId(raw: string | null): string | null {
   if (!raw) return null
@@ -47,6 +54,9 @@ const postSchema = z.object({
   address: z.string().optional().nullable(),
   phone1: z.string().optional().nullable(),
   phone2: z.string().optional().nullable(),
+  openingBalance: z.union([z.number(), z.string()]).optional().nullable(),
+  openingBalanceType: z.enum(['receivable', 'payable']).optional(),
+  openingBalanceDate: z.string().optional().nullable(),
   creditLimit: z.union([z.number(), z.string()]).optional().nullable(),
   creditDays: z.union([z.number(), z.string()]).optional().nullable(),
   ifscCode: z.string().optional().nullable(),
@@ -60,6 +70,9 @@ const putSchema = z.object({
   address: z.string().optional().nullable(),
   phone1: z.string().optional().nullable(),
   phone2: z.string().optional().nullable(),
+  openingBalance: z.union([z.number(), z.string()]).optional().nullable(),
+  openingBalanceType: z.enum(['receivable', 'payable']).optional(),
+  openingBalanceDate: z.string().optional().nullable(),
   creditLimit: z.union([z.number(), z.string()]).optional().nullable(),
   creditDays: z.union([z.number(), z.string()]).optional().nullable(),
   ifscCode: z.string().optional().nullable(),
@@ -72,6 +85,12 @@ function normalizeOptionalNonNegativeNumber(value: unknown): number | null {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return null
   return Math.max(0, parsed)
+}
+
+function parseOptionalDateValue(value: unknown): Date | null {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const parsed = new Date(value)
+  return Number.isFinite(parsed.getTime()) ? parsed : null
 }
 
 export async function GET(request: NextRequest) {
@@ -108,14 +127,81 @@ export async function GET(request: NextRequest) {
       pagination.enabled ? prisma.party.count({ where }) : Promise.resolve(0)
     ])
 
+    const partyIds = parties.map((party) => party.id)
+    const [salesBills, openingPayments] = partyIds.length > 0
+      ? await Promise.all([
+          prisma.salesBill.findMany({
+            where: {
+              companyId,
+              partyId: { in: partyIds }
+            },
+            select: {
+              partyId: true,
+              balanceAmount: true
+            }
+          }),
+          prisma.payment.findMany({
+            where: {
+              companyId,
+              billType: 'sales',
+              deletedAt: null,
+              partyId: { in: partyIds },
+              billId: { startsWith: getPartyOpeningBalanceReference('') }
+            },
+            select: {
+              partyId: true,
+              amount: true
+            }
+          })
+        ])
+      : [[], []]
+
+    const salesBalanceByPartyId = new Map<string, number>()
+    for (const bill of salesBills) {
+      salesBalanceByPartyId.set(
+        bill.partyId,
+        roundCurrency((salesBalanceByPartyId.get(bill.partyId) || 0) + normalizeNonNegative(bill.balanceAmount))
+      )
+    }
+
+    const openingReceiptsByPartyId = new Map<string, number>()
+    for (const payment of openingPayments) {
+      const partyId = String(payment.partyId || '').trim()
+      if (!partyId) continue
+      openingReceiptsByPartyId.set(
+        partyId,
+        roundCurrency((openingReceiptsByPartyId.get(partyId) || 0) + normalizeNonNegative(payment.amount))
+      )
+    }
+
+    const enrichedParties = parties.map((party) => {
+      const openingSigned = getSignedPartyOpeningBalance(party.openingBalance, party.openingBalanceType)
+      const openingReceipts = roundCurrency(openingReceiptsByPartyId.get(party.id) || 0)
+      const openingOutstandingAmount =
+        openingSigned > 0
+          ? roundCurrency(Math.max(0, openingSigned - openingReceipts))
+          : roundCurrency(openingSigned)
+      const currentBalanceAmount = roundCurrency(
+        openingOutstandingAmount + (salesBalanceByPartyId.get(party.id) || 0)
+      )
+
+      return {
+        ...party,
+        openingBalance: normalizePartyOpeningBalanceAmount(party.openingBalance),
+        openingBalanceType: normalizePartyOpeningBalanceType(party.openingBalanceType),
+        openingOutstandingAmount,
+        currentBalanceAmount
+      }
+    })
+
     if (pagination.enabled) {
       return NextResponse.json({
-        data: parties,
+        data: enrichedParties,
         meta: buildPaginationMeta(total, pagination)
       })
     }
 
-    return NextResponse.json(parties)
+    return NextResponse.json(enrichedParties)
   } catch (error) {
     console.error('Error fetching parties:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -153,6 +239,9 @@ export async function POST(request: NextRequest) {
         address: cleanString(parsed.data.address),
         phone1,
         phone2,
+        openingBalance: normalizePartyOpeningBalanceAmount(parsed.data.openingBalance),
+        openingBalanceType: normalizePartyOpeningBalanceType(parsed.data.openingBalanceType),
+        openingBalanceDate: parseOptionalDateValue(parsed.data.openingBalanceDate),
         creditLimit: normalizeOptionalNonNegativeNumber(parsed.data.creditLimit),
         creditDays: normalizeOptionalNonNegativeNumber(parsed.data.creditDays),
         ifscCode: cleanString(parsed.data.ifscCode)?.toUpperCase(),
@@ -218,6 +307,9 @@ export async function PUT(request: NextRequest) {
         address: cleanString(parsed.data.address),
         phone1,
         phone2,
+        openingBalance: normalizePartyOpeningBalanceAmount(parsed.data.openingBalance),
+        openingBalanceType: normalizePartyOpeningBalanceType(parsed.data.openingBalanceType),
+        openingBalanceDate: parseOptionalDateValue(parsed.data.openingBalanceDate),
         creditLimit: normalizeOptionalNonNegativeNumber(parsed.data.creditLimit),
         creditDays: normalizeOptionalNonNegativeNumber(parsed.data.creditDays),
         ifscCode: cleanString(parsed.data.ifscCode)?.toUpperCase(),

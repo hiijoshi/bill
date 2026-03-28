@@ -9,6 +9,12 @@ import {
 } from '@/lib/api-security'
 import { createBankEntryProvider, SUPPORTED_BANK_SYNC_PROVIDERS } from '@/lib/bank-integration'
 import { normalizeNonNegative, roundCurrency } from '@/lib/billing-calculations'
+import {
+  getPartyOpeningBalanceReference,
+  getSignedPartyOpeningBalance,
+  isPartyOpeningBalanceReference,
+  normalizePartyOpeningBalanceType
+} from '@/lib/party-opening-balance'
 import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
 
 type CompanyOption = {
@@ -363,6 +369,7 @@ export async function GET(request: NextRequest) {
       const needsDailyView = requestedView === 'daily-transaction' || requestedView === 'daily-consolidated'
       const needsBankLedgerView = requestedView === 'bank-ledger'
       const needsDetailedPayments = needsDailyView || needsBankLedgerView
+      const needsPartyBalances = requestedView === 'outstanding' || needsLedgerView
 
       const [
       salesTotalAggregate,
@@ -580,11 +587,16 @@ export async function GET(request: NextRequest) {
         orderBy: [{ entryDate: 'desc' }, { createdAt: 'desc' }]
       })
         : Promise.resolve([]),
-      needsLedgerView
+      needsPartyBalances
         ? prisma.party.findMany({
         where: {
           companyId: { in: targetCompanyIds },
           OR: [
+            {
+              openingBalance: {
+                gt: 0
+              }
+            },
             {
               salesBills: {
                 some: dateTo ? { billDate: { lte: dateTo } } : {}
@@ -606,7 +618,10 @@ export async function GET(request: NextRequest) {
           companyId: true,
           name: true,
           address: true,
-          phone1: true
+          phone1: true,
+          openingBalance: true,
+          openingBalanceType: true,
+          openingBalanceDate: true
         },
         orderBy: [{ name: 'asc' }]
       })
@@ -718,6 +733,45 @@ export async function GET(request: NextRequest) {
         )
       }
 
+      const openingPaymentRows =
+        needsPartyBalances && parties.length > 0
+          ? await prisma.payment.findMany({
+              where: {
+                companyId: { in: targetCompanyIds },
+                billType: 'sales',
+                deletedAt: null,
+                partyId: { in: parties.map((party) => party.id) },
+                billId: { startsWith: getPartyOpeningBalanceReference('') },
+                ...(dateTo ? { payDate: { lte: dateTo } } : {})
+              },
+              select: {
+                partyId: true,
+                amount: true
+              }
+            })
+          : []
+
+      const openingReceiptsByPartyId = new Map<string, number>()
+      for (const payment of openingPaymentRows) {
+        const partyId = String(payment.partyId || '').trim()
+        if (!partyId) continue
+        openingReceiptsByPartyId.set(
+          partyId,
+          roundCurrency((openingReceiptsByPartyId.get(partyId) || 0) + normalizeNonNegative(payment.amount))
+        )
+      }
+
+      const openingOutstandingByPartyId = new Map<string, number>()
+      for (const party of parties) {
+        const openingSigned = getSignedPartyOpeningBalance(party.openingBalance, party.openingBalanceType)
+        const openingReceipts = roundCurrency(openingReceiptsByPartyId.get(party.id) || 0)
+        const openingOutstanding =
+          openingSigned > 0
+            ? roundCurrency(Math.max(0, openingSigned - openingReceipts))
+            : roundCurrency(openingSigned)
+        openingOutstandingByPartyId.set(party.id, openingOutstanding)
+      }
+
       const outstandingMap = new Map<string, OutstandingAccumulator>()
 
       for (const bill of salesBillsAsOf) {
@@ -751,6 +805,41 @@ export async function GET(request: NextRequest) {
       outstandingMap.set(groupKey, existing)
       }
 
+      for (const party of parties) {
+        const openingSigned = getSignedPartyOpeningBalance(party.openingBalance, party.openingBalanceType)
+        const openingOutstanding = roundCurrency(openingOutstandingByPartyId.get(party.id) || 0)
+        const openingReceipts = roundCurrency(openingReceiptsByPartyId.get(party.id) || 0)
+
+        if (openingSigned === 0 && openingOutstanding === 0) continue
+
+        const groupKey = `${party.companyId}:${party.id}`
+        const existing = outstandingMap.get(groupKey) || {
+          partyId: party.id,
+          companyId: party.companyId,
+          companyName: companyNameMap.get(party.companyId) || party.companyId,
+          partyName: String(party.name || 'Unknown'),
+          phone1: String(party.phone1 || ''),
+          address: String(party.address || ''),
+          saleAmount: 0,
+          receivedAmount: 0,
+          balanceAmount: 0,
+          invoiceCount: 0,
+          lastBillDate: ''
+        }
+
+        if (openingSigned > 0) {
+          existing.saleAmount += openingSigned
+          existing.receivedAmount += openingReceipts
+        }
+
+        existing.balanceAmount += openingOutstanding
+        const openingDateKey = dateKey(party.openingBalanceDate)
+        if (openingDateKey && (!existing.lastBillDate || openingDateKey > existing.lastBillDate)) {
+          existing.lastBillDate = openingDateKey
+        }
+        outstandingMap.set(groupKey, existing)
+      }
+
       const outstandingRows = Array.from(outstandingMap.values())
       .map((row) => ({
         ...row,
@@ -772,6 +861,10 @@ export async function GET(request: NextRequest) {
           name: String(party.name || ''),
           address: String(party.address || ''),
           phone1: String(party.phone1 || ''),
+          openingBalance: roundCurrency(normalizeNonNegative(party.openingBalance)),
+          openingBalanceType: normalizePartyOpeningBalanceType(party.openingBalanceType),
+          openingBalanceDate: dateKey(party.openingBalanceDate),
+          openingOutstandingAmount: roundCurrency(openingOutstandingByPartyId.get(party.id) || 0),
           balanceAmount: roundCurrency(outstandingRow?.balanceAmount || 0)
         }
       }).sort((a, b) => b.balanceAmount - a.balanceAmount || a.name.localeCompare(b.name))
@@ -879,6 +972,9 @@ export async function GET(request: NextRequest) {
       : [[], [], null, null]
 
       const openingBalance = roundCurrency(
+      (selectedParty
+        ? getSignedPartyOpeningBalance(selectedParty.openingBalance, selectedParty.openingBalanceType)
+        : 0) +
       normalizeNonNegative(openingSalesAggregate?._sum.totalAmount) -
         normalizeNonNegative(openingPaymentsAggregate?._sum.amount)
       )
@@ -932,7 +1028,7 @@ export async function GET(request: NextRequest) {
         date: payment.payDate,
         type: 'receipt' as PartyLedgerEntryType,
         refNo: String(ledgerBillMap.get(payment.billId) || payment.txnRef || ''),
-        description: 'Payment Receipt',
+        description: isPartyOpeningBalanceReference(payment.billId) ? 'Opening Balance Receipt' : 'Payment Receipt',
         companyId: payment.companyId,
         companyName: companyNameMap.get(payment.companyId) || payment.companyId,
         paymentMode: formatPaymentMode(payment.mode),

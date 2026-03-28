@@ -1,5 +1,9 @@
 import { prisma } from '@/lib/prisma'
 import { normalizeNonNegative, roundCurrency } from '@/lib/billing-calculations'
+import {
+  getPartyOpeningBalanceReference,
+  getSignedPartyOpeningBalance
+} from '@/lib/party-opening-balance'
 
 export const DEFAULT_PARTY_CREDIT_DAYS = 30
 
@@ -45,6 +49,9 @@ export async function getPartyCreditSnapshot({
       id: true,
       name: true,
       phone1: true,
+      openingBalance: true,
+      openingBalanceType: true,
+      openingBalanceDate: true,
       creditLimit: true,
       creditDays: true,
     },
@@ -54,18 +61,32 @@ export async function getPartyCreditSnapshot({
     return null
   }
 
-  const bills = await prisma.salesBill.findMany({
-    where: {
-      companyId,
-      partyId,
-      ...(excludeBillId ? { id: { not: excludeBillId } } : {}),
-    },
-    select: {
-      billDate: true,
-      balanceAmount: true,
-    },
-    orderBy: { billDate: 'asc' },
-  })
+  const [bills, openingPaymentsAggregate] = await Promise.all([
+    prisma.salesBill.findMany({
+      where: {
+        companyId,
+        partyId,
+        ...(excludeBillId ? { id: { not: excludeBillId } } : {}),
+      },
+      select: {
+        billDate: true,
+        balanceAmount: true,
+      },
+      orderBy: { billDate: 'asc' },
+    }),
+    prisma.payment.aggregate({
+      where: {
+        companyId,
+        partyId,
+        billType: 'sales',
+        deletedAt: null,
+        billId: getPartyOpeningBalanceReference(partyId)
+      },
+      _sum: {
+        amount: true
+      }
+    })
+  ])
 
   const today = new Date(referenceDate)
   today.setHours(0, 0, 0, 0)
@@ -75,8 +96,15 @@ export async function getPartyCreditSnapshot({
     Math.floor(Number(party.creditDays ?? DEFAULT_PARTY_CREDIT_DAYS))
   )
 
+  const openingSignedBalance = getSignedPartyOpeningBalance(party.openingBalance, party.openingBalanceType)
+  const openingPaymentsAmount = roundCurrency(normalizeNonNegative(openingPaymentsAggregate._sum.amount))
+  const openingOutstandingAmount =
+    openingSignedBalance > 0
+      ? roundCurrency(Math.max(0, openingSignedBalance - openingPaymentsAmount))
+      : roundCurrency(openingSignedBalance)
+
   const outstandingAmount = roundCurrency(
-    bills.reduce((sum, bill) => sum + normalizeNonNegative(bill.balanceAmount), 0)
+    openingOutstandingAmount + bills.reduce((sum, bill) => sum + normalizeNonNegative(bill.balanceAmount), 0)
   )
 
   const overdueAmount = roundCurrency(
@@ -89,7 +117,14 @@ export async function getPartyCreditSnapshot({
       dueDate.setDate(dueDate.getDate() + creditDays)
 
       return dueDate.getTime() < today.getTime() ? sum + balance : sum
-    }, 0)
+    }, openingOutstandingAmount > 0 && party.openingBalanceDate
+      ? (() => {
+          const dueDate = new Date(party.openingBalanceDate)
+          dueDate.setHours(0, 0, 0, 0)
+          dueDate.setDate(dueDate.getDate() + creditDays)
+          return dueDate.getTime() < today.getTime() ? openingOutstandingAmount : 0
+        })()
+      : 0)
   )
 
   const normalizedPendingSaleAmount = roundCurrency(normalizeNonNegative(pendingSaleAmount))

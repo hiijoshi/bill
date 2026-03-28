@@ -113,6 +113,9 @@ model Party {
   address   String?
   phone1    String?
   phone2    String?
+  openingBalance Float  @default(0)
+  openingBalanceType String @default("receivable")
+  openingBalanceDate DateTime?
   creditLimit Float?
   creditDays Int?
   ifscCode  String?

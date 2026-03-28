@@ -11,12 +11,19 @@ import {
 } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
+import { roundCurrency } from '@/lib/billing-calculations'
+import {
+  getPartyOpeningBalanceReference,
+  getSignedPartyOpeningBalance,
+  isPartyOpeningBalanceReference
+} from '@/lib/party-opening-balance'
 
 const paymentCreateSchema = z
   .object({
     companyId: z.string().trim().min(1, 'Company ID is required'),
     billType: z.enum(['purchase', 'sales']),
     billId: z.string().trim().min(1, 'Bill ID is required'),
+    partyId: z.string().trim().optional().nullable(),
     payDate: z.string().trim().min(1, 'Pay date is required'),
     amount: z.coerce.number().positive('Amount must be greater than zero'),
     mode: z.string().trim().min(1, 'Payment mode is required'),
@@ -81,31 +88,90 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
     }
 
-    const bill =
-      data.billType === 'purchase'
-        ? await prisma.purchaseBill.findFirst({
-            where: { id: data.billId, companyId: data.companyId },
-            include: { farmer: true }
-          })
-        : await prisma.salesBill.findFirst({
-            where: { id: data.billId, companyId: data.companyId },
-            include: { party: true }
-          })
+    const isOpeningBalancePayment = data.billType === 'sales' && isPartyOpeningBalanceReference(data.billId)
+    let totalAmount = 0
+    let paidAmount = 0
+    let outstanding = 0
+    let billDateValue = new Date(data.payDate)
+    let salesPartyId: string | null = null
+    let farmerId: string | null = null
 
-    if (!bill) {
-      return NextResponse.json({ error: 'Bill not found' }, { status: 404 })
+    if (isOpeningBalancePayment) {
+      const openingPartyId =
+        (typeof data.partyId === 'string' && data.partyId.trim()) ||
+        data.billId.replace(getPartyOpeningBalanceReference(''), '').trim()
+
+      if (!openingPartyId) {
+        return NextResponse.json({ error: 'Party ID is required for opening balance receipts' }, { status: 400 })
+      }
+
+      const party = await prisma.party.findFirst({
+        where: { id: openingPartyId, companyId: data.companyId },
+        select: {
+          id: true,
+          openingBalance: true,
+          openingBalanceType: true,
+          openingBalanceDate: true
+        }
+      })
+
+      if (!party) {
+        return NextResponse.json({ error: 'Party not found' }, { status: 404 })
+      }
+
+      const openingSignedBalance = getSignedPartyOpeningBalance(party.openingBalance, party.openingBalanceType)
+      if (openingSignedBalance <= 0) {
+        return NextResponse.json({ error: 'This party does not have a receivable opening balance to settle' }, { status: 400 })
+      }
+
+      const openingPaymentsAggregate = await prisma.payment.aggregate({
+        where: {
+          companyId: data.companyId,
+          billType: 'sales',
+          partyId: party.id,
+          billId: getPartyOpeningBalanceReference(party.id),
+          deletedAt: null
+        },
+        _sum: {
+          amount: true
+        }
+      })
+
+      totalAmount = roundCurrency(openingSignedBalance)
+      paidAmount = clampNonNegative(openingPaymentsAggregate._sum.amount)
+      outstanding = Math.max(0, totalAmount - paidAmount)
+      billDateValue = party.openingBalanceDate || billDateValue
+      salesPartyId = party.id
+    } else {
+      const bill =
+        data.billType === 'purchase'
+          ? await prisma.purchaseBill.findFirst({
+              where: { id: data.billId, companyId: data.companyId },
+              include: { farmer: true }
+            })
+          : await prisma.salesBill.findFirst({
+              where: { id: data.billId, companyId: data.companyId },
+              include: { party: true }
+            })
+
+      if (!bill) {
+        return NextResponse.json({ error: 'Bill not found' }, { status: 404 })
+      }
+
+      totalAmount = bill.totalAmount
+      paidAmount =
+        data.billType === 'purchase'
+          ? 'paidAmount' in bill
+            ? bill.paidAmount
+            : 0
+          : 'receivedAmount' in bill
+            ? bill.receivedAmount
+            : 0
+      outstanding = Math.max(0, totalAmount - paidAmount)
+      billDateValue = bill.billDate
+      salesPartyId = data.billType === 'sales' && 'partyId' in bill ? bill.partyId || null : null
+      farmerId = data.billType === 'purchase' && 'farmerId' in bill ? bill.farmerId || null : null
     }
-
-    const totalAmount = bill.totalAmount
-    const paidAmount =
-      data.billType === 'purchase'
-        ? 'paidAmount' in bill
-          ? bill.paidAmount
-          : 0
-        : 'receivedAmount' in bill
-          ? bill.receivedAmount
-          : 0
-    const outstanding = Math.max(0, totalAmount - paidAmount)
 
     if (data.amount > outstanding) {
       return NextResponse.json({ error: 'Payment amount cannot exceed pending balance' }, { status: 400 })
@@ -123,7 +189,7 @@ export async function POST(request: NextRequest) {
           companyId: data.companyId,
           billType: data.billType,
           billId: data.billId,
-          billDate: bill.billDate,
+          billDate: billDateValue,
           payDate: new Date(data.payDate),
           amount: data.amount,
           mode: data.mode,
@@ -139,14 +205,18 @@ export async function POST(request: NextRequest) {
           status: paymentStatus,
           txnRef: normalizeOptionalString(data.txnRef),
           note: normalizeOptionalString(data.note),
-          partyId: data.billType === 'sales' && 'partyId' in bill ? bill.partyId || null : null,
-          farmerId: data.billType === 'purchase' && 'farmerId' in bill ? bill.farmerId || null : null
+          partyId: data.billType === 'sales' ? salesPartyId : null,
+          farmerId
         }
       })
 
       const newPaid = paidAmount + data.amount
       const newBalance = Math.max(0, totalAmount - newPaid)
       const billStatus = newBalance === 0 ? 'paid' : newBalance === totalAmount ? 'unpaid' : 'partial'
+
+      if (isOpeningBalancePayment) {
+        return payment
+      }
 
       if (data.billType === 'purchase') {
         await tx.purchaseBill.update({
@@ -307,7 +377,9 @@ export async function GET(request: NextRequest) {
       ...payment,
       amount: clampNonNegative(payment.amount),
       billNo:
-        payment.billType === 'purchase'
+        payment.billType === 'sales' && isPartyOpeningBalanceReference(payment.billId)
+          ? 'Opening Balance'
+          : payment.billType === 'purchase'
           ? purchaseBillMap.get(payment.billId) || ''
           : salesBillMap.get(payment.billId) || '',
       partyName: payment.party?.name || payment.farmer?.name || ''
