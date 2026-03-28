@@ -120,17 +120,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Product not found in this company' }, { status: 404 })
     }
 
-    const existing = await prisma.salesItemMaster.findFirst({
-      where: {
-        companyId,
-        productId: parsed.data.productId
-      }
-    })
-
-    if (existing) {
-      return NextResponse.json({ error: 'Sales item already exists for this product' }, { status: 400 })
-    }
-
     const created = await prisma.salesItemMaster.create({
       data: {
         companyId,
@@ -187,17 +176,6 @@ export async function PUT(request: NextRequest) {
       })
       if (!product) {
         return NextResponse.json({ error: 'Product not found in this company' }, { status: 404 })
-      }
-
-      const duplicate = await prisma.salesItemMaster.findFirst({
-        where: {
-          companyId,
-          productId: nextProductId,
-          id: { not: id }
-        }
-      })
-      if (duplicate) {
-        return NextResponse.json({ error: 'Sales item already exists for this product' }, { status: 400 })
       }
     }
 

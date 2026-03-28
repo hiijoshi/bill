@@ -353,8 +353,8 @@ export default function SpecialPurchaseEntryPage() {
       if (response.ok) {
         if (printAfterSave && responseData?.specialPurchaseBill?.id) {
           const printPath = companyId
-            ? `/purchase/special/${responseData.specialPurchaseBill.id}/print?companyId=${encodeURIComponent(companyId)}`
-            : `/purchase/special/${responseData.specialPurchaseBill.id}/print`
+            ? `/purchase/special/${responseData.specialPurchaseBill.id}/print?companyId=${encodeURIComponent(companyId)}&returnTo=special-entry`
+            : `/purchase/special/${responseData.specialPurchaseBill.id}/print?returnTo=special-entry`
           router.push(printPath)
           return
         }

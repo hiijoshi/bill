@@ -159,6 +159,13 @@ function toDateInputValue(date: Date): string {
   return `${year}-${month}-${day}`
 }
 
+function normalizeFilterText(value: unknown): string {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
 export default function PurchaseListPage() {
   const router = useRouter()
   const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>([])
@@ -308,27 +315,30 @@ export default function PurchaseListPage() {
     }
 
     if (billNumber) {
+      const normalizedBillNumber = normalizeFilterText(billNumber)
       filtered = filtered.filter(bill => {
         const billNo = bill.type === 'regular' ? bill.billNo : bill.supplierInvoiceNo
-        return billNo.toLowerCase().includes(billNumber.toLowerCase())
+        return normalizeFilterText(billNo).includes(normalizedBillNumber)
       })
     }
 
     if (partyName) {
+      const normalizedPartyName = normalizeFilterText(partyName)
       filtered = filtered.filter(bill => {
-        const party = bill.type === 'regular'
-          ? { name: getRegularFarmerName(bill) }
-          : bill.supplier
-        return party.name.toLowerCase().includes(partyName.toLowerCase())
+        const partyNameValue = bill.type === 'regular'
+          ? getRegularFarmerName(bill)
+          : bill.supplier?.name
+        return normalizeFilterText(partyNameValue).includes(normalizedPartyName)
       })
     }
 
     if (partyAddress) {
+      const normalizedPartyAddress = normalizeFilterText(partyAddress)
       filtered = filtered.filter(bill => {
-        const party = bill.type === 'regular'
-          ? { address: getRegularFarmerAddress(bill) }
-          : bill.supplier
-        return party.address?.toLowerCase().includes(partyAddress.toLowerCase())
+        const partyAddressValue = bill.type === 'regular'
+          ? getRegularFarmerAddress(bill)
+          : bill.supplier?.address
+        return normalizeFilterText(partyAddressValue).includes(normalizedPartyAddress)
       })
     }
 
@@ -373,11 +383,12 @@ export default function PurchaseListPage() {
     }
 
     if (registrationNumber) {
+      const normalizedRegistrationNumber = normalizeFilterText(registrationNumber)
       filtered = filtered.filter(bill => {
         if (bill.type === 'regular') {
-          return getRegularAnubandh(bill).toLowerCase().includes(registrationNumber.toLowerCase())
+          return normalizeFilterText(getRegularAnubandh(bill)).includes(normalizedRegistrationNumber)
         } else {
-          return bill.supplier.gstNumber?.toLowerCase().includes(registrationNumber.toLowerCase())
+          return normalizeFilterText(bill.supplier?.gstNumber).includes(normalizedRegistrationNumber)
         }
       })
     }

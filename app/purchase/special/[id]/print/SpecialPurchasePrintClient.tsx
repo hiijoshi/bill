@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 
 import { Button } from '@/components/ui/button'
 import type { SpecialPurchaseBillPrintData } from '@/lib/special-purchase-print'
@@ -12,13 +12,33 @@ type Props = {
 
 export default function SpecialPurchasePrintClient({ printData }: Props) {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const companyId = searchParams.get('companyId') || ''
+  const returnTo = searchParams.get('returnTo')
+
+  const returnPath = useMemo(() => {
+    if (returnTo !== 'special-entry') return null
+    return companyId
+      ? `/purchase/special-entry?companyId=${encodeURIComponent(companyId)}`
+      : '/purchase/special-entry'
+  }, [companyId, returnTo])
 
   useEffect(() => {
+    const handleAfterPrint = () => {
+      if (!returnPath) return
+      router.replace(returnPath)
+    }
+
     const timeout = window.setTimeout(() => {
       window.print()
     }, 300)
-    return () => window.clearTimeout(timeout)
-  }, [])
+
+    window.addEventListener('afterprint', handleAfterPrint)
+    return () => {
+      window.clearTimeout(timeout)
+      window.removeEventListener('afterprint', handleAfterPrint)
+    }
+  }, [returnPath, router])
 
   const payableToSupplier = useMemo(() => {
     return Math.max(0, printData.totalAmount)
@@ -56,7 +76,7 @@ export default function SpecialPurchasePrintClient({ printData }: Props) {
       `}</style>
 
       <div className="no-print mb-4 flex items-center justify-between">
-        <Button variant="outline" onClick={() => router.back()}>Back</Button>
+        <Button variant="outline" onClick={() => (returnPath ? router.replace(returnPath) : router.back())}>Back</Button>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => window.print()}>Print</Button>
           <Button onClick={() => router.push('/purchase/list')}>Purchase List</Button>

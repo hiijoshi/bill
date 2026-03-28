@@ -9,15 +9,15 @@ function StockRedirect() {
 
   useEffect(() => {
     const query = searchParams.toString()
-    router.replace(query ? `/stock/dashboard?${query}` : '/stock/dashboard')
+    router.replace(query ? `/stock/adjustment?${query}` : '/stock/adjustment')
   }, [router, searchParams])
 
-  return <div className="flex h-64 items-center justify-center text-lg">Redirecting to stock dashboard...</div>
+  return <div className="flex h-64 items-center justify-center text-lg">Redirecting to stock adjustment...</div>
 }
 
 export default function StockPage() {
   return (
-    <Suspense fallback={<div className="flex h-64 items-center justify-center text-lg">Loading stock dashboard...</div>}>
+    <Suspense fallback={<div className="flex h-64 items-center justify-center text-lg">Loading stock adjustment...</div>}>
       <StockRedirect />
     </Suspense>
   )

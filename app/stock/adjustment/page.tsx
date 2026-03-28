@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Activity, ArrowLeft, BarChart3, Package, Scale } from 'lucide-react'
 
@@ -21,6 +21,7 @@ interface Product {
   name: string
   unit: string
   currentStock: number
+  isActive?: boolean
 }
 
 interface StockLedgerEntry {
@@ -87,9 +88,16 @@ function normalizeProducts(payload: unknown): Product[] {
       id: String(product?.id || ''),
       name: String(product?.name || ''),
       unit: String(product?.unit || ''),
-      currentStock: Number(product?.currentStock || 0)
+      currentStock: Number(product?.currentStock || 0),
+      isActive:
+        product?.isActive === false ||
+        product?.isActive === 0 ||
+        product?.isActive === '0' ||
+        product?.isActive === 'false'
+          ? false
+          : true
     }))
-    .filter((product) => product.id && product.name)
+    .filter((product) => product.id && product.name && product.isActive !== false)
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
@@ -154,6 +162,7 @@ function formatReference(value: string): string {
 
 export default function StockAdjustmentPage() {
   const router = useRouter()
+  const preferredProductIdRef = useRef('')
 
   const [companyId, setCompanyId] = useState('')
   const [pageLoading, setPageLoading] = useState(true)
@@ -209,6 +218,12 @@ export default function StockAdjustmentPage() {
       if (current && nextProducts.some((product) => product.id === current)) {
         return current
       }
+      if (preferredProductIdRef.current && nextProducts.some((product) => product.id === preferredProductIdRef.current)) {
+        const nextSelected = preferredProductIdRef.current
+        preferredProductIdRef.current = ''
+        return nextSelected
+      }
+      preferredProductIdRef.current = ''
       return nextProducts.find((product) => product.currentStock > 0)?.id || nextProducts[0]?.id || ''
     })
   }, [])
@@ -283,6 +298,8 @@ export default function StockAdjustmentPage() {
     let cancelled = false
 
     ;(async () => {
+      const paramsFromUrl = new URLSearchParams(window.location.search)
+      preferredProductIdRef.current = paramsFromUrl.get('productId')?.trim() || ''
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
       if (cancelled) return
 
@@ -344,6 +361,9 @@ export default function StockAdjustmentPage() {
   const lowStockCount = Array.from(productMetrics.values()).filter((product) => product.currentStock <= 0).length
   const totalStock = Array.from(productMetrics.values()).reduce((sum, product) => sum + product.currentStock, 0)
   const totalAdjustmentEntries = stockSummary.reduce((sum, product) => sum + Number(product.adjustmentEntries || 0), 0)
+  const mainDashboardPath = companyId
+    ? `/main/dashboard?companyId=${encodeURIComponent(companyId)}`
+    : '/main/dashboard'
 
   const resetForm = () => {
     setAdjustmentType('in')
@@ -437,7 +457,7 @@ export default function StockAdjustmentPage() {
           <div className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm lg:flex-row lg:items-center lg:justify-between">
             <div className="space-y-2">
               <div className="flex items-center gap-3">
-                <Button type="button" variant="outline" onClick={() => router.push('/stock/dashboard')}>
+                <Button type="button" variant="outline" onClick={() => router.push(mainDashboardPath)}>
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back
                 </Button>

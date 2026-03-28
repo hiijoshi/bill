@@ -70,6 +70,12 @@ interface Payment {
   createdAt: string
 }
 
+type PaymentsApiPayload =
+  | Payment[]
+  | {
+      data?: Payment[]
+    }
+
 type OverviewPayload = {
   purchaseBills?: PurchaseBill[]
   salesBills?: SalesBill[]
@@ -110,6 +116,14 @@ const toDateInputValue = (value: string): string => {
   const month = String(base.getMonth() + 1).padStart(2, '0')
   const day = String(base.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+const normalizePaymentsCollection = (payload: PaymentsApiPayload): Payment[] => {
+  if (Array.isArray(payload)) return payload
+  if (payload && typeof payload === 'object' && Array.isArray(payload.data)) {
+    return payload.data
+  }
+  return []
 }
 
 export default function PaymentDashboardPage() {
@@ -165,15 +179,20 @@ export default function PaymentDashboardPage() {
 
       const overviewParams = new URLSearchParams({
         companyId: companyIdParam,
-        include: 'purchaseBills,salesBills,payments'
+        include: 'purchaseBills,salesBills'
       })
-      const overviewResponse = await fetch(`/api/main-dashboard/overview?${overviewParams.toString()}`)
-      if (overviewResponse.status === 401) {
+
+      const [overviewResponse, paymentsResponse] = await Promise.all([
+        fetch(`/api/main-dashboard/overview?${overviewParams.toString()}`),
+        fetch(`/api/payments?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' })
+      ])
+
+      if (overviewResponse.status === 401 || paymentsResponse.status === 401) {
         setLoading(false)
         router.push('/login')
         return
       }
-      if (overviewResponse.status === 403) {
+      if (overviewResponse.status === 403 || paymentsResponse.status === 403) {
         setPurchaseBills([])
         setSalesBills([])
         setPayments([])
@@ -181,7 +200,10 @@ export default function PaymentDashboardPage() {
         return
       }
 
-      const overview = await overviewResponse.json().catch(() => ({} as OverviewPayload))
+      const [overview, paymentsPayload] = await Promise.all([
+        overviewResponse.json().catch(() => ({} as OverviewPayload)),
+        paymentsResponse.json().catch(() => ([] as PaymentsApiPayload))
+      ])
       const nextPurchaseBills: PurchaseBill[] = Array.isArray(overview.purchaseBills)
         ? overview.purchaseBills.map((bill: PurchaseBill) => ({
             ...bill,
@@ -201,35 +223,20 @@ export default function PaymentDashboardPage() {
       setPurchaseBills(nextPurchaseBills)
       setSalesBills(nextSalesBills)
 
-      const purchaseBillMap = new Map(nextPurchaseBills.map((bill) => [bill.id, bill]))
-      const salesBillMap = new Map(nextSalesBills.map((bill) => [bill.id, bill]))
-      const normalizedPayments: Payment[] = Array.isArray(overview.payments)
-        ? overview.payments.map((payment: NonNullable<OverviewPayload['payments']>[number]) => {
-            const linkedBill =
-              payment.billType === 'purchase'
-                ? purchaseBillMap.get(payment.billId || '')
-                : salesBillMap.get(payment.billId || '')
-            return {
-              id: payment.id,
-              billType: payment.billType,
-              billId: payment.billId || '',
-              billNo: linkedBill?.billNo || '',
-              partyName:
-                payment.party?.name ||
-                payment.farmer?.name ||
-                (payment.billType === 'purchase'
-                  ? (linkedBill as PurchaseBill | undefined)?.supplier?.name || (linkedBill as PurchaseBill | undefined)?.farmer?.name || ''
-                  : (linkedBill as SalesBill | undefined)?.party?.name || ''),
-              payDate: payment.payDate || '',
-              amount: clampNonNegative(payment.amount || 0),
-              mode: payment.mode === 'bank' ? 'bank' : payment.mode === 'online' ? 'online' : 'cash',
-              status: payment.status === 'pending' ? 'pending' : 'paid',
-              txnRef: payment.txnRef || '',
-              note: payment.note || '',
-              createdAt: payment.createdAt || payment.billDate || payment.payDate || ''
-            }
-          })
-        : []
+      const normalizedPayments: Payment[] = normalizePaymentsCollection(paymentsPayload).map((payment) => ({
+        ...payment,
+        billType: payment.billType === 'sales' ? 'sales' : 'purchase',
+        billId: payment.billId || '',
+        billNo: payment.billNo || '',
+        partyName: payment.partyName || '',
+        payDate: payment.payDate || '',
+        amount: clampNonNegative(payment.amount || 0),
+        mode: payment.mode === 'bank' ? 'bank' : payment.mode === 'online' ? 'online' : 'cash',
+        status: payment.status === 'pending' ? 'pending' : 'paid',
+        txnRef: payment.txnRef || '',
+        note: payment.note || '',
+        createdAt: payment.createdAt || payment.payDate || ''
+      }))
       setPayments(normalizedPayments)
       setClientCache(cacheKey, {
         purchaseBills: nextPurchaseBills,
@@ -360,9 +367,16 @@ export default function PaymentDashboardPage() {
   }
 
   const paymentPartyOptions = useMemo(() => {
-    const unique = Array.from(new Set(payments.map((payment) => payment.partyName || '').filter(Boolean)))
+    const unique = Array.from(
+      new Set(
+        payments
+          .filter((payment) => payment.billType === activeTab)
+          .map((payment) => payment.partyName || '')
+          .filter(Boolean)
+      )
+    )
     return unique.sort((a, b) => a.localeCompare(b))
-  }, [payments])
+  }, [activeTab, payments])
 
   const filteredPayments = useMemo(() => {
     const fromDate = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null
@@ -370,6 +384,7 @@ export default function PaymentDashboardPage() {
 
     return payments
       .filter((payment) => {
+        if (payment.billType !== activeTab) return false
         if (partyFilter !== 'all' && payment.partyName !== partyFilter) return false
         if (modeFilter !== 'all' && payment.mode !== modeFilter) return false
 
@@ -383,7 +398,7 @@ export default function PaymentDashboardPage() {
         const bTime = new Date(b.payDate).getTime()
         return bTime - aTime
       })
-  }, [payments, partyFilter, modeFilter, dateFrom, dateTo])
+  }, [payments, activeTab, partyFilter, modeFilter, dateFrom, dateTo])
 
   if (loading) {
     return (

@@ -85,7 +85,6 @@ const menuItems: MenuItem[] = [
     icon: Package,
     children: [
       { title: 'Stock Adjustment', href: '/stock/adjustment', permissionModule: 'STOCK_ADJUSTMENT' },
-      { title: 'Stock Dashboard', href: '/stock/dashboard', permissionModule: 'STOCK_DASHBOARD' },
     ],
   },
   {

@@ -95,15 +95,15 @@ function ReportsMainPageContent() {
 
   if (companyResolving) {
     return (
-      <DashboardLayout companyId="">
+      <DashboardLayout companyId="" lockViewport>
         <div className="flex h-64 items-center justify-center text-lg">Loading...</div>
       </DashboardLayout>
     )
   }
 
   return (
-    <DashboardLayout companyId={companyId}>
-      <div className="min-h-full bg-[#f5f5f7]">
+      <DashboardLayout companyId={companyId} lockViewport>
+        <div className="min-h-full bg-[#f5f5f7]">
         <div className="mx-auto w-full max-w-[1600px] space-y-6 p-6 md:p-8">
           {companyWarning && (
             <div className="rounded-[1.25rem] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

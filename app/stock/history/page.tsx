@@ -14,8 +14,8 @@ export default function StockHistoryRedirectPage() {
     if (companyId) params.set('companyId', companyId)
     if (productId) params.set('productId', productId)
     const query = params.toString()
-    router.replace(query ? `/stock/dashboard?${query}` : '/stock/dashboard')
+    router.replace(query ? `/stock/adjustment?${query}` : '/stock/adjustment')
   }, [router])
 
-  return <div className="p-6 text-sm text-gray-500">Redirecting to stock preview...</div>
+  return <div className="p-6 text-sm text-gray-500">Redirecting to stock adjustment...</div>
 }

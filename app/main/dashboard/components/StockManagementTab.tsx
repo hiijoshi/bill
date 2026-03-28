@@ -244,12 +244,24 @@ export default function StockManagementTab({
   )
   const isLoading = hasInitialData ? false : loading
 
+  const buildStockAdjustmentPath = useCallback((productId?: string) => {
+    const params = new URLSearchParams()
+    if (companyId) {
+      params.set('companyId', companyId)
+    }
+    if (productId) {
+      params.set('productId', productId)
+    }
+    const query = params.toString()
+    return query ? `/stock/adjustment?${query}` : '/stock/adjustment'
+  }, [companyId])
+
   const handleStockAdjustment = () => {
-    router.push('/stock/dashboard')
+    router.push(buildStockAdjustmentPath())
   }
 
   const handleViewHistory = (productId: string) => {
-    router.push(`/stock/dashboard?productId=${productId}`)
+    router.push(buildStockAdjustmentPath(productId))
   }
 
   if (isLoading) {

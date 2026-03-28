@@ -12,6 +12,7 @@ import { AlertTriangle, MessageCircle, Pencil, Plus, Search, Trash2 } from 'luci
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
+import { deleteClientCacheByPrefix } from '@/lib/client-fetch-cache'
 import { openWhatsappChat } from '@/lib/whatsapp'
 
 interface Party {
@@ -161,6 +162,13 @@ function formatRemainingLimitText(value: number | null): string {
   return amountText
 }
 
+function normalizeSearchText(value: unknown): string {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
 export default function SalesEntryPage() {
   const router = useRouter()
   const itemIdSequence = useRef(0)
@@ -181,7 +189,9 @@ export default function SalesEntryPage() {
   const [currentFormItems, setCurrentFormItems] = useState<SalesItem[]>([])
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
   const [partySearchTerm, setPartySearchTerm] = useState('')
+  const [showPartyDropdown, setShowPartyDropdown] = useState(false)
   const [salesItemSearchTerm, setSalesItemSearchTerm] = useState('')
+  const [showSalesItemDropdown, setShowSalesItemDropdown] = useState(false)
 
   // Invoice Tab 1 - Basic Info
   const [invoiceNo, setInvoiceNo] = useState('')
@@ -211,9 +221,12 @@ export default function SalesEntryPage() {
   const [advanceExpense, setAdvanceExpense] = useState('')
   const [insurance, setInsurance] = useState('')
   const [manualGrandTotal, setManualGrandTotal] = useState('')
+  const [manualGrandTotalTouched, setManualGrandTotalTouched] = useState(false)
   const [partyRisk, setPartyRisk] = useState<PartyRiskResponse | null>(null)
   const [riskDialogOpen, setRiskDialogOpen] = useState(false)
   const [pendingRequestData, setPendingRequestData] = useState<Record<string, unknown> | null>(null)
+  const preserveLoadedManualGrandTotalRef = useRef(false)
+  const previousComputedGrandTotalRef = useRef<number | null>(null)
 
   const onlyDigits = (value: string, max = 10) => value.replace(/\D/g, '').slice(0, max)
   const toNonNegative = (value: string) => {
@@ -241,20 +254,30 @@ export default function SalesEntryPage() {
   const isEditMode = editBillId !== ''
 
   const filteredParties = useMemo(() => {
-    const query = partySearchTerm.trim().toLowerCase()
+    const query = normalizeSearchText(partySearchTerm)
     if (!query) return parties
     return parties.filter((party) => {
-      if (party.id === selectedParty) return true
-      return String(party.name || '').toLowerCase().includes(query)
+      const haystack = [
+        party.name,
+        party.address,
+        party.phone1,
+        party.phone2,
+        party.type
+      ]
+        .map((value) => normalizeSearchText(value))
+        .filter(Boolean)
+        .join(' ')
+
+      return haystack.includes(query)
     })
-  }, [parties, partySearchTerm, selectedParty])
+  }, [parties, partySearchTerm])
 
   const filteredSalesItems = useMemo(() => {
-    const query = salesItemSearchTerm.trim().toLowerCase()
+    const query = normalizeSearchText(salesItemSearchTerm)
     if (!query) return salesItems
     return salesItems.filter((salesItem) => {
       if (salesItem.id === currentItem.salesItemId) return true
-      const label = `${salesItem.salesItemName || ''} ${salesItem.product?.name || ''}`.toLowerCase()
+      const label = normalizeSearchText(`${salesItem.salesItemName || ''} ${salesItem.product?.name || ''}`)
       return label.includes(query)
     })
   }, [salesItems, salesItemSearchTerm, currentItem.salesItemId])
@@ -310,6 +333,21 @@ export default function SalesEntryPage() {
     setToPay(Math.max(0, freight - adv).toString())
   }, [freightAmount, advance])
 
+  useEffect(() => {
+    const previousComputedGrandTotal = previousComputedGrandTotalRef.current
+    previousComputedGrandTotalRef.current = computedGrandTotal
+
+    if (previousComputedGrandTotal === null) return
+    if (Math.abs(previousComputedGrandTotal - computedGrandTotal) < 0.01) return
+    if (preserveLoadedManualGrandTotalRef.current) {
+      preserveLoadedManualGrandTotalRef.current = false
+      return
+    }
+    if (!manualGrandTotalTouched && manualGrandTotal !== '') {
+      setManualGrandTotal('')
+    }
+  }, [computedGrandTotal, manualGrandTotal, manualGrandTotalTouched])
+
   const handleAdvanceChange = (value: string) => {
     const normalized = toNonNegative(value)
     if (normalized === '') {
@@ -348,8 +386,14 @@ export default function SalesEntryPage() {
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement
-      if (!target.closest('.search-dropdown-container')) {
+      if (
+        !target.closest('.transport-search-dropdown-container') &&
+        !target.closest('.party-search-dropdown-container') &&
+        !target.closest('.sales-item-search-dropdown-container')
+      ) {
         setShowTransportDropdown(false)
+        setShowPartyDropdown(false)
+        setShowSalesItemDropdown(false)
       }
     }
 
@@ -382,11 +426,31 @@ export default function SalesEntryPage() {
       setPartyAddress(party.address || '')
       setPartyContact(party.phone1 || '')
       setPartySearchTerm(party.name || '')
+      setShowPartyDropdown(false)
     } else {
       setPartyName('')
       setPartyAddress('')
       setPartyContact('')
     }
+  }
+
+  const handlePartySearch = (term: string) => {
+    setPartySearchTerm(term)
+    setShowPartyDropdown(true)
+  }
+
+  const handleSalesItemSearch = (term: string) => {
+    setSalesItemSearchTerm(term)
+    setShowSalesItemDropdown(true)
+  }
+
+  const handleSalesItemSelect = (salesItemId: string) => {
+    const selected = salesItems.find((item) => item.id === salesItemId) || null
+    setCurrentItem((prev) => ({ ...prev, salesItemId }))
+    if (selected) {
+      setSalesItemSearchTerm(selected.salesItemName || selected.product?.name || '')
+    }
+    setShowSalesItemDropdown(false)
   }
 
   // Handle new party addition
@@ -457,7 +521,11 @@ export default function SalesEntryPage() {
   }
 
   const handleAddNewTransport = () => {
-    router.push('/master/transport')
+    const targetPath = companyId
+      ? `/master/transport?companyId=${encodeURIComponent(companyId)}`
+      : '/master/transport'
+
+    window.open(targetPath, '_blank', 'noopener,noreferrer')
   }
 
   const handleSendWhatsappReminder = useCallback(async () => {
@@ -555,7 +623,17 @@ export default function SalesEntryPage() {
     itemIdSequence.current = mappedItems.length
     setCurrentFormItems(mappedItems)
     updateTotals(mappedItems)
-    setManualGrandTotal(String(Math.max(0, Number(bill.totalAmount || 0))))
+    const loadedComputedGrandTotal = roundCurrency(
+      mappedItems.reduce((sum, item) => sum + (item.amount || 0) + (item.gstAmount || 0), 0) +
+      Math.max(0, Number(firstTransport?.freightAmount || 0)) +
+      Math.max(0, Number(firstTransport?.otherAmount || 0)) +
+      Math.max(0, Number(firstTransport?.insuranceAmount || 0))
+    )
+    const storedGrandTotal = roundCurrency(Math.max(0, Number(bill.totalAmount || 0)))
+    const hasStoredManualOverride = Math.abs(storedGrandTotal - loadedComputedGrandTotal) >= 0.01
+    preserveLoadedManualGrandTotalRef.current = hasStoredManualOverride
+    setManualGrandTotalTouched(false)
+    setManualGrandTotal(hasStoredManualOverride ? String(storedGrandTotal) : '')
   }, [updateTotals])
 
   const fetchData = useCallback(async () => {
@@ -789,6 +867,9 @@ export default function SalesEntryPage() {
 
       if (response.ok) {
         const resolvedId = parsedResponse?.salesBillId || parsedResponse?.salesBill?.id || editBillId
+        if (companyId) {
+          deleteClientCacheByPrefix(`sales-bills:${companyId}`)
+        }
         alert(isEditMode ? 'Sales bill updated successfully!' : 'Sales bill created successfully!')
         if (resolvedId) {
           const printPath = companyId
@@ -1014,14 +1095,42 @@ export default function SalesEntryPage() {
                         <Label htmlFor="party">Party</Label>
                         <div className="space-y-2">
                           <div className="flex flex-col gap-2 xl:flex-row">
-                            <div className="relative flex-1">
+                            <div className="relative flex-1 party-search-dropdown-container">
                               <Input
                                 value={partySearchTerm}
-                                onChange={(e) => setPartySearchTerm(e.target.value)}
-                                placeholder="Search party name..."
+                                onChange={(e) => handlePartySearch(e.target.value)}
+                                onFocus={() => setShowPartyDropdown(true)}
+                                placeholder="Search party name, address, or phone..."
                                 className="pr-10"
                               />
                               <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                              {showPartyDropdown && (
+                                <div className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-gray-200 bg-white shadow-lg">
+                                  {filteredParties.length > 0 ? (
+                                    filteredParties
+                                      .filter((party, index, self) => !!party?.id && index === self.findIndex((p) => p.id === party.id))
+                                      .map((party) => (
+                                        <div
+                                          key={party.id}
+                                          className="cursor-pointer border-b border-gray-100 px-3 py-2 last:border-b-0 hover:bg-gray-100"
+                                          onClick={() => handlePartySelect(party.id)}
+                                        >
+                                          <div className="font-medium">{party.name}</div>
+                                          {party.address ? (
+                                            <div className="text-sm text-gray-500">{party.address}</div>
+                                          ) : null}
+                                          {party.phone1 ? (
+                                            <div className="text-xs text-gray-500">Phone: {party.phone1}</div>
+                                          ) : null}
+                                        </div>
+                                      ))
+                                  ) : (
+                                    <div className="px-3 py-2 text-sm text-gray-500">
+                                      No parties found.
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                             <Button
                               type="button"
@@ -1155,7 +1264,7 @@ export default function SalesEntryPage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                       <div>
                         <Label htmlFor="transportName">Transport Name</Label>
-                        <div className="relative search-dropdown-container">
+                        <div className="relative transport-search-dropdown-container">
                           <div className="flex gap-2">
                             <div className="relative flex-1">
                               <Input
@@ -1283,18 +1392,39 @@ export default function SalesEntryPage() {
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-4">
                         <div className="lg:col-span-2">
                           <Label htmlFor="itemProduct">Sales Items</Label>
-                          <div className="relative mb-2">
+                          <div className="relative mb-2 sales-item-search-dropdown-container">
                             <Input
                               value={salesItemSearchTerm}
-                              onChange={(e) => setSalesItemSearchTerm(e.target.value)}
-                              placeholder="Search sales item..."
+                              onChange={(e) => handleSalesItemSearch(e.target.value)}
+                              onFocus={() => setShowSalesItemDropdown(true)}
+                              placeholder="Search sales item or product..."
                               className="pr-10"
                             />
                             <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                            {showSalesItemDropdown && (
+                              <div className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-gray-200 bg-white shadow-lg">
+                                {filteredSalesItems.length > 0 ? (
+                                  filteredSalesItems.map((salesItem) => (
+                                    <div
+                                      key={salesItem.id}
+                                      className="cursor-pointer border-b border-gray-100 px-3 py-2 last:border-b-0 hover:bg-gray-100"
+                                      onClick={() => handleSalesItemSelect(salesItem.id)}
+                                    >
+                                      <div className="font-medium">{salesItem.salesItemName}</div>
+                                      <div className="text-sm text-gray-500">
+                                        {salesItem.product?.name || 'No product'}
+                                      </div>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div className="px-3 py-2 text-sm text-gray-500">
+                                    No sales items found.
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          <Select value={currentItem.salesItemId} onValueChange={(value) => {
-                            setCurrentItem({ ...currentItem, salesItemId: value })
-                          }}>
+                          <Select value={currentItem.salesItemId} onValueChange={handleSalesItemSelect}>
                             <SelectTrigger>
                               <SelectValue placeholder="Select Sales Item" />
                             </SelectTrigger>
@@ -1594,7 +1724,11 @@ export default function SalesEntryPage() {
                         min="0"
                         step="0.01"
                         value={manualGrandTotal}
-                        onChange={(e) => setManualGrandTotal(toNonNegative(e.target.value))}
+                        onChange={(e) => {
+                          const nextValue = toNonNegative(e.target.value)
+                          setManualGrandTotal(nextValue)
+                          setManualGrandTotalTouched(nextValue !== '')
+                        }}
                         placeholder={computedGrandTotal.toFixed(2)}
                         className="mt-2"
                       />
@@ -1605,7 +1739,10 @@ export default function SalesEntryPage() {
                         type="button"
                         variant="outline"
                         className="mt-3"
-                        onClick={() => setManualGrandTotal('')}
+                        onClick={() => {
+                          setManualGrandTotal('')
+                          setManualGrandTotalTouched(false)
+                        }}
                         disabled={manualGrandTotal === ''}
                       >
                         Reset to Calculated Total

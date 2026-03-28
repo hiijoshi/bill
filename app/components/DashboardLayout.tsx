@@ -14,6 +14,7 @@ interface DashboardLayoutProps {
   children: React.ReactNode
   companyId: string
   headerActions?: React.ReactNode
+  lockViewport?: boolean
 }
 
 type AuthMePayload = {
@@ -41,7 +42,7 @@ const AUTH_CACHE_AGE_MS = 30_000
 const COMPANIES_CACHE_AGE_MS = 60_000
 const APP_SHELL_AUTH_LOADED_EVENT = 'app-shell-auth-loaded'
 
-export default function DashboardLayout({ children, companyId, headerActions }: DashboardLayoutProps) {
+export default function DashboardLayout({ children, companyId, headerActions, lockViewport = false }: DashboardLayoutProps) {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
   const [currentUser, setCurrentUser] = useState<string | null>(null)
@@ -196,7 +197,7 @@ export default function DashboardLayout({ children, companyId, headerActions }: 
   }
 
   return (
-    <div className="flex min-h-dvh bg-gray-50">
+    <div className={lockViewport ? 'flex h-dvh overflow-hidden bg-gray-50' : 'flex min-h-dvh bg-gray-50'}>
       <Suspense fallback={<div className="w-20 border-r bg-white" />}>
         <Sidebar
           companyId={resolvedCompanyId}
@@ -206,7 +207,7 @@ export default function DashboardLayout({ children, companyId, headerActions }: 
           onCloseMobile={closeMobileSidebar}
         />
       </Suspense>
-      <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
         {/* Top Navigation Bar */}
         <div className="border-b bg-white px-4 py-3 shadow-sm md:px-6">
           <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 md:gap-4">

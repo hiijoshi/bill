@@ -25,6 +25,7 @@ type StockOverviewSummaryQueryRow = {
   productId: string
   productName: string
   productUnit: string | null
+  productIsActive: boolean | number | bigint | string | null
   totalIn: number | string | null
   totalOut: number | string | null
   closingStock: number | string | null
@@ -249,6 +250,7 @@ export async function GET(request: NextRequest) {
             p."id" AS "productId",
             p."name" AS "productName",
             u."symbol" AS "productUnit",
+            p."isActive" AS "productIsActive",
             COALESCE(SUM(sl."qtyIn"), 0) AS "totalIn",
             COALESCE(SUM(sl."qtyOut"), 0) AS "totalOut",
             COALESCE(SUM(sl."qtyIn"), 0) - COALESCE(SUM(sl."qtyOut"), 0) AS "closingStock",
@@ -262,7 +264,7 @@ export async function GET(request: NextRequest) {
             ON sl."productId" = p."id"
            AND sl."companyId" = p."companyId"
           WHERE p."companyId" = ${companyId}
-          GROUP BY p."id", p."name", u."symbol"
+          GROUP BY p."id", p."name", u."symbol", p."isActive"
           ORDER BY p."name" ASC
         `,
         includeMeta
@@ -318,6 +320,7 @@ export async function GET(request: NextRequest) {
           id: row.productId,
           name: row.productName,
           unit: row.productUnit,
+          isActive: row.productIsActive === false || row.productIsActive === 0 || row.productIsActive === '0' || row.productIsActive === 'false' ? false : true,
           currentStock: row.closingStock
         })),
         summary,

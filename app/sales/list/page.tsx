@@ -489,7 +489,7 @@ export default function SalesListPage() {
         'Insurance Amount',
         'Transport Name',
         'Lorry No',
-        'Payable',
+        'Receivable',
         'Received',
         'Balance',
         'Status'
@@ -570,7 +570,7 @@ export default function SalesListPage() {
     <table>
       <thead>
         <tr>
-          <th>Invoice</th><th>Date</th><th>Party</th><th>Bags</th><th>Weight</th><th>Rate</th><th>Other</th><th>Insurance</th><th>Transport</th><th>Lorry</th><th>Payable</th><th>Received</th><th>Balance</th><th>Status</th>
+          <th>Invoice</th><th>Date</th><th>Party</th><th>Bags</th><th>Weight</th><th>Rate</th><th>Other</th><th>Insurance</th><th>Transport</th><th>Lorry</th><th>Receivable</th><th>Received</th><th>Balance</th><th>Status</th>
         </tr>
       </thead>
       <tbody>${bodyRows}</tbody>
@@ -685,12 +685,12 @@ export default function SalesListPage() {
                 />
               </div>
               <div>
-                <Label htmlFor="payable">Payable</Label>
+                <Label htmlFor="payable">Receivable</Label>
                 <Input
                   id="payable"
                   value={payable}
                   onChange={(e) => setPayable(e.target.value)}
-                  placeholder="Enter payable amount"
+                  placeholder="Enter receivable amount"
                 />
               </div>
             </div>
@@ -745,7 +745,7 @@ export default function SalesListPage() {
                     <TableHead>Other Amt</TableHead>
                     <TableHead>Insurance Amt</TableHead>
                     <TableHead>Transport</TableHead>
-                    <TableHead>Payable</TableHead>
+                    <TableHead>Receivable</TableHead>
                     <TableHead>Received</TableHead>
                     <TableHead>Balance</TableHead>
                     <TableHead>Status</TableHead>

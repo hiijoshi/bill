@@ -320,8 +320,8 @@ export default function PurchaseEntryPage() {
       if (response.ok) {
         if (printAfterSave && responseData?.id) {
           const printPath = companyId
-            ? `/purchase/${responseData.id}/print?companyId=${encodeURIComponent(companyId)}`
-            : `/purchase/${responseData.id}/print`
+            ? `/purchase/${responseData.id}/print?companyId=${encodeURIComponent(companyId)}&returnTo=entry`
+            : `/purchase/${responseData.id}/print?returnTo=entry`
           router.push(printPath)
           return
         }

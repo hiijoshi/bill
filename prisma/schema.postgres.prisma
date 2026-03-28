@@ -383,7 +383,7 @@ model SalesItemMaster {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  @@unique([companyId, productId])
+  @@index([companyId, productId], map: "idx_sales_item_master_company_product")
 
   @@schema("public")
 }
