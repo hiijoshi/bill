@@ -265,15 +265,15 @@ export default function PaymentDashboardPage() {
           : Promise.resolve([] as BillApiPayload<SalesBill>),
         paymentsResponse.json().catch(() => ([] as PaymentsApiPayload))
       ])
-      const nextPurchaseBills: PurchaseBill[] = normalizeBillCollection(purchaseBillsPayload)
-        .map((bill: PurchaseBill) => ({
+      const nextPurchaseBills: PurchaseBill[] = normalizeBillCollection<PurchaseBill>(purchaseBillsPayload)
+        .map((bill) => ({
             ...bill,
             totalAmount: clampNonNegative(bill.totalAmount),
             paidAmount: clampNonNegative(bill.paidAmount),
             balanceAmount: clampNonNegative(bill.balanceAmount)
           }))
-      const nextSalesBills: SalesBill[] = normalizeBillCollection(salesBillsPayload)
-        .map((bill: SalesBill) => ({
+      const nextSalesBills: SalesBill[] = normalizeBillCollection<SalesBill>(salesBillsPayload)
+        .map((bill) => ({
             ...bill,
             totalAmount: clampNonNegative(bill.totalAmount),
             receivedAmount: clampNonNegative(bill.receivedAmount),
