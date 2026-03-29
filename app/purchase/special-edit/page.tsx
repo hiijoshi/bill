@@ -390,7 +390,7 @@ function SpecialPurchaseEditPageContent() {
                 <div>
                   <Label htmlFor="supplier">Supplier</Label>
                   <Select value={selectedSupplier} onValueChange={handleSupplierChange}>
-                    <SelectTrigger>
+                    <SelectTrigger id="supplier">
                       <SelectValue placeholder="Select supplier" />
                     </SelectTrigger>
                     <SelectContent>
@@ -405,7 +405,7 @@ function SpecialPurchaseEditPageContent() {
                 <div>
                   <Label htmlFor="product">Product</Label>
                   <Select value={selectedProduct} onValueChange={setSelectedProduct}>
-                    <SelectTrigger>
+                    <SelectTrigger id="product">
                       <SelectValue placeholder="Select product" />
                     </SelectTrigger>
                     <SelectContent>

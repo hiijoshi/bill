@@ -21,6 +21,12 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import {
+  DEFAULT_PAYMENT_MODES,
+  isBankPaymentMode,
+  isCashPaymentMode,
+  type PaymentModeOption
+} from '@/lib/payment-mode-utils'
 
 interface PurchaseBill {
   id: string
@@ -52,6 +58,8 @@ interface Bank {
   ifscCode: string
   accountNumber?: string
 }
+
+type PaymentMode = PaymentModeOption
 
 type PartyBillGroup = {
   partyKey: string
@@ -186,6 +194,7 @@ function PurchasePaymentEntryPageContent() {
 
   const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>([])
   const [banks, setBanks] = useState<Bank[]>([])
+  const [paymentModes, setPaymentModes] = useState<PaymentMode[]>([])
 
   const [billFilter, setBillFilter] = useState('')
   const [selectedPartyKey, setSelectedPartyKey] = useState('')
@@ -195,7 +204,7 @@ function PurchasePaymentEntryPageContent() {
   const [selectedBillIds, setSelectedBillIds] = useState<string[]>([])
 
   const [amount, setAmount] = useState('')
-  const [mode, setMode] = useState<'cash' | 'online' | 'bank'>('cash')
+  const [mode, setMode] = useState('cash')
   const [selectedBank, setSelectedBank] = useState('none')
   const [onlinePayAmount, setOnlinePayAmount] = useState('')
   const [onlinePaymentDate, setOnlinePaymentDate] = useState(new Date().toISOString().split('T')[0])
@@ -216,9 +225,22 @@ function PurchasePaymentEntryPageContent() {
   const [multiPaymentAmount, setMultiPaymentAmount] = useState('')
 
   const [hasAppliedBillQuery, setHasAppliedBillQuery] = useState(false)
-  const isCashMode = mode === 'cash'
-  const isOnlineMode = mode === 'online'
-  const isBankMode = mode === 'bank'
+  const paymentModeOptions = useMemo<PaymentMode[]>(() => {
+    return paymentModes.length > 0 ? paymentModes : DEFAULT_PAYMENT_MODES
+  }, [paymentModes])
+  const selectedPaymentMode = useMemo(
+    () => paymentModeOptions.find((paymentMode) => paymentMode.code === mode) || null,
+    [mode, paymentModeOptions]
+  )
+  const isCashMode = useMemo(
+    () => isCashPaymentMode(mode, selectedPaymentMode?.name || ''),
+    [mode, selectedPaymentMode]
+  )
+  const isBankMode = useMemo(
+    () => isBankPaymentMode(mode, selectedPaymentMode?.name || ''),
+    [mode, selectedPaymentMode]
+  )
+  const isOnlineMode = Boolean(mode) && !isCashMode && !isBankMode
 
   const pendingBills = useMemo(() => {
     return purchaseBills.filter((bill) => Number(bill.balanceAmount || 0) > 0)
@@ -379,6 +401,32 @@ function PurchasePaymentEntryPageContent() {
     }
   }, [])
 
+  const fetchPaymentModes = useCallback(async (targetCompanyId: string) => {
+    try {
+      const response = await fetch(`/api/payment-modes?companyId=${targetCompanyId}`)
+      if (!response.ok) {
+        setPaymentModes([])
+        return
+      }
+
+      const payload = await response.json()
+      const rows = Array.isArray(payload) ? payload : []
+      setPaymentModes(
+        rows
+          .map((row) => ({
+            id: String(row?.id || ''),
+            name: String(row?.name || '').trim(),
+            code: String(row?.code || '').trim(),
+            isActive: row?.isActive !== false
+          }))
+          .filter((row) => row.id && row.name && row.code && row.isActive)
+      )
+    } catch (error) {
+      console.error('Error fetching payment modes:', error)
+      setPaymentModes([])
+    }
+  }, [])
+
   useEffect(() => {
     ;(async () => {
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
@@ -398,7 +446,15 @@ function PurchasePaymentEntryPageContent() {
     setLoading(true)
     void fetchPurchaseBills(companyId)
     void fetchBanks(companyId)
-  }, [companyId, fetchBanks, fetchPurchaseBills])
+    void fetchPaymentModes(companyId)
+  }, [companyId, fetchBanks, fetchPaymentModes, fetchPurchaseBills])
+
+  useEffect(() => {
+    if (paymentModeOptions.length === 0) return
+    const hasSelectedMode = paymentModeOptions.some((paymentMode) => paymentMode.code === mode)
+    if (hasSelectedMode) return
+    setMode(paymentModeOptions[0]?.code || 'cash')
+  }, [mode, paymentModeOptions])
 
   useEffect(() => {
     if (isCashMode) {
@@ -866,14 +922,16 @@ function PurchasePaymentEntryPageContent() {
 
                   <div>
                     <Label htmlFor="mode">Payment Mode</Label>
-                    <Select value={mode} onValueChange={(value: 'cash' | 'online' | 'bank') => setMode(value)}>
+                    <Select value={mode} onValueChange={setMode}>
                       <SelectTrigger id="mode">
                         <SelectValue placeholder="Select payment mode" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="cash">Cash</SelectItem>
-                        <SelectItem value="online">Online</SelectItem>
-                        <SelectItem value="bank">Bank Transfer</SelectItem>
+                        {paymentModeOptions.map((paymentMode) => (
+                          <SelectItem key={paymentMode.id} value={paymentMode.code}>
+                            {paymentMode.name}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>

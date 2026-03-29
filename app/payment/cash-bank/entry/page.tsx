@@ -14,6 +14,10 @@ import {
   buildCashBankPaymentReference,
   CASH_BANK_PAYMENT_TYPE
 } from '@/lib/payment-entry-types'
+import {
+  DEFAULT_PAYMENT_MODES,
+  type PaymentModeOption
+} from '@/lib/payment-mode-utils'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 type AccountingHeadRecord = {
@@ -28,6 +32,8 @@ type SupplierRecord = {
   id: string
   name: string
 }
+
+type PaymentModeRecord = PaymentModeOption
 
 type SelectOption = {
   value: string
@@ -69,13 +75,14 @@ function CashBankPaymentEntryPageContent() {
   const [submitting, setSubmitting] = useState(false)
 
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0])
-  const [mode, setMode] = useState<'cash' | 'bank'>('cash')
+  const [mode, setMode] = useState('cash')
   const [selectedReference, setSelectedReference] = useState('')
   const [amount, setAmount] = useState('')
   const [remark, setRemark] = useState('')
 
   const [accountingHeadOptions, setAccountingHeadOptions] = useState<AccountingHeadRecord[]>([])
   const [supplierOptions, setSupplierOptions] = useState<SupplierRecord[]>([])
+  const [paymentModes, setPaymentModes] = useState<PaymentModeRecord[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -106,14 +113,16 @@ function CashBankPaymentEntryPageContent() {
 
     ;(async () => {
       try {
-        const [accountingHeadsResponse, suppliersResponse] = await Promise.all([
+        const [accountingHeadsResponse, suppliersResponse, paymentModesResponse] = await Promise.all([
           fetch(`/api/accounting-heads?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
-          fetch(`/api/suppliers?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' })
+          fetch(`/api/suppliers?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+          fetch(`/api/payment-modes?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' })
         ])
 
-        const [accountingHeadsPayload, suppliersPayload] = await Promise.all([
+        const [accountingHeadsPayload, suppliersPayload, paymentModesPayload] = await Promise.all([
           accountingHeadsResponse.json().catch(() => [] as CollectionPayload<AccountingHeadRecord>),
-          suppliersResponse.json().catch(() => [] as CollectionPayload<SupplierRecord>)
+          suppliersResponse.json().catch(() => [] as CollectionPayload<SupplierRecord>),
+          paymentModesResponse.json().catch(() => [] as CollectionPayload<PaymentModeRecord>)
         ])
 
         if (cancelled) return
@@ -133,6 +142,14 @@ function CashBankPaymentEntryPageContent() {
             name: String(row.name || '').trim()
           })).filter((row) => row.id && row.name)
         )
+        setPaymentModes(
+          normalizeCollection<PaymentModeRecord>(paymentModesPayload).map((row) => ({
+            id: String(row.id || ''),
+            name: String(row.name || '').trim(),
+            code: String(row.code || '').trim(),
+            isActive: row.isActive !== false
+          })).filter((row) => row.id && row.name && row.code && row.isActive)
+        )
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -144,6 +161,17 @@ function CashBankPaymentEntryPageContent() {
       cancelled = true
     }
   }, [companyId])
+
+  const paymentModeOptions = useMemo<PaymentModeRecord[]>(() => {
+    return paymentModes.length > 0 ? paymentModes : DEFAULT_PAYMENT_MODES
+  }, [paymentModes])
+
+  useEffect(() => {
+    if (paymentModeOptions.length === 0) return
+    const hasSelectedMode = paymentModeOptions.some((option) => option.code === mode)
+    if (hasSelectedMode) return
+    setMode(paymentModeOptions[0]?.code || 'cash')
+  }, [mode, paymentModeOptions])
 
   const referenceOptions = useMemo<SelectOption[]>(() => {
     const accountingHeads = accountingHeadOptions.map((head) => ({
@@ -291,13 +319,16 @@ function CashBankPaymentEntryPageContent() {
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="paymentMode">Mode of Payment</Label>
-                    <Select value={mode} onValueChange={(value: 'cash' | 'bank') => setMode(value)}>
+                    <Select value={mode} onValueChange={setMode}>
                       <SelectTrigger id="paymentMode">
                         <SelectValue placeholder="Select mode" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="cash">Cash</SelectItem>
-                        <SelectItem value="bank">Bank</SelectItem>
+                        {paymentModeOptions.map((paymentMode) => (
+                          <SelectItem key={paymentMode.id} value={paymentMode.code}>
+                            {paymentMode.name}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>

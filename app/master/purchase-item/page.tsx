@@ -351,7 +351,7 @@ export default function PurchaseItemMasterPage() {
                     <div>
                       <Label htmlFor="unit">Unit *</Label>
                       <Select value={formData.unit} onValueChange={(value) => setFormData({ ...formData, unit: value })}>
-                        <SelectTrigger>
+                        <SelectTrigger id="unit">
                           <SelectValue placeholder="Select unit" />
                         </SelectTrigger>
                         <SelectContent>

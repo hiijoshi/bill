@@ -35,6 +35,7 @@ import {
   PAYMENT_ENTRY_TYPES,
   SALES_RECEIPT_TYPE
 } from '@/lib/payment-entry-types'
+import { isCashPaymentMode } from '@/lib/payment-mode-utils'
 
 const paymentCreateSchema = z
   .object({
@@ -206,10 +207,24 @@ export async function POST(request: NextRequest) {
     }
 
     const paymentStatus = data.status || 'paid'
-    const modeLower = (data.mode || '').toLowerCase()
-    const isCashMode = modeLower === 'cash' || modeLower === 'c'
     const payDateValue = new Date(data.payDate)
     const normalizedIfscCode = normalizeOptionalString(data.ifscCode)?.toUpperCase() || null
+    const normalizedMode = String(data.mode || '').trim().toLowerCase()
+    const paymentModes = await prisma.paymentMode.findMany({
+      where: {
+        companyId: data.companyId
+      },
+      select: {
+        name: true,
+        code: true
+      }
+    })
+    const paymentModeRecord = paymentModes.find((paymentMode) => {
+      const code = String(paymentMode.code || '').trim().toLowerCase()
+      const name = String(paymentMode.name || '').trim().toLowerCase()
+      return code === normalizedMode || name === normalizedMode
+    })
+    const isCashMode = isCashPaymentMode(data.mode, paymentModeRecord?.name || '')
 
     const result = await prisma.$transaction(async (tx) => {
       const payment = await tx.payment.create({

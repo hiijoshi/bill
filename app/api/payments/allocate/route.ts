@@ -10,6 +10,7 @@ import {
   requireRoles
 } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
+import { isCashPaymentMode } from '@/lib/payment-mode-utils'
 
 const allocateSchema = z
   .object({
@@ -145,8 +146,22 @@ export async function POST(request: NextRequest) {
     if (!Number.isFinite(payDate.getTime())) {
       return NextResponse.json({ error: 'Invalid pay date' }, { status: 400 })
     }
-    const modeLower = (data.mode || '').trim().toLowerCase()
-    const isCashMode = modeLower === 'cash' || modeLower === 'c'
+    const normalizedMode = String(data.mode || '').trim().toLowerCase()
+    const paymentModes = await prisma.paymentMode.findMany({
+      where: {
+        companyId: data.companyId
+      },
+      select: {
+        name: true,
+        code: true
+      }
+    })
+    const paymentModeRecord = paymentModes.find((paymentMode) => {
+      const code = String(paymentMode.code || '').trim().toLowerCase()
+      const name = String(paymentMode.name || '').trim().toLowerCase()
+      return code === normalizedMode || name === normalizedMode
+    })
+    const isCashMode = isCashPaymentMode(data.mode, paymentModeRecord?.name || '')
     const normalizedIfscCode = normalizeOptionalString(data.ifscCode)?.toUpperCase() || null
 
     const requestedBills = await prisma.purchaseBill.findMany({

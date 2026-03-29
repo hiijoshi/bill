@@ -431,7 +431,7 @@ export default function SpecialPurchaseEntryPage() {
                     <Label htmlFor="supplier">Supplier</Label>
                     <div className="flex gap-2">
                       <Select value={selectedSupplier} onValueChange={handleSupplierChange}>
-                        <SelectTrigger className="flex-1">
+                        <SelectTrigger id="supplier" className="flex-1">
                           <SelectValue placeholder="Select Supplier" />
                         </SelectTrigger>
                         <SelectContent>
@@ -511,7 +511,7 @@ export default function SpecialPurchaseEntryPage() {
                   <div>
                     <Label htmlFor="product">Product</Label>
                     <Select value={selectedProduct} onValueChange={setSelectedProduct}>
-                      <SelectTrigger className="flex-1">
+                      <SelectTrigger id="product" className="flex-1">
                         <SelectValue placeholder="Select Product" />
                       </SelectTrigger>
                       <SelectContent>
@@ -549,7 +549,7 @@ export default function SpecialPurchaseEntryPage() {
                   <div>
                     <Label htmlFor="userUnit">User Unit (for conversion)</Label>
                     <Select value={selectedUserUnit} onValueChange={setSelectedUserUnit}>
-                      <SelectTrigger>
+                      <SelectTrigger id="userUnit">
                         <SelectValue placeholder="Select Unit e.g. Bag 90KG" />
                       </SelectTrigger>
                       <SelectContent>

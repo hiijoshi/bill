@@ -1097,6 +1097,7 @@ export default function SalesEntryPage() {
                           <div className="flex flex-col gap-2 xl:flex-row">
                             <div className="relative flex-1 party-search-dropdown-container">
                               <Input
+                                id="party"
                                 value={partySearchTerm}
                                 onChange={(e) => handlePartySearch(e.target.value)}
                                 onFocus={() => setShowPartyDropdown(true)}
@@ -1144,7 +1145,7 @@ export default function SalesEntryPage() {
                             </Button>
                           </div>
                           <Select value={selectedParty} onValueChange={handlePartySelect}>
-                            <SelectTrigger className="flex-1">
+                            <SelectTrigger id="partySelect" className="flex-1">
                               <SelectValue placeholder="Select Party" />
                             </SelectTrigger>
                             <SelectContent>
@@ -1394,6 +1395,7 @@ export default function SalesEntryPage() {
                           <Label htmlFor="itemProduct">Sales Items</Label>
                           <div className="relative mb-2 sales-item-search-dropdown-container">
                             <Input
+                              id="itemProduct"
                               value={salesItemSearchTerm}
                               onChange={(e) => handleSalesItemSearch(e.target.value)}
                               onFocus={() => setShowSalesItemDropdown(true)}
@@ -1425,7 +1427,7 @@ export default function SalesEntryPage() {
                             )}
                           </div>
                           <Select value={currentItem.salesItemId} onValueChange={handleSalesItemSelect}>
-                            <SelectTrigger>
+                            <SelectTrigger id="itemProductSelect">
                               <SelectValue placeholder="Select Sales Item" />
                             </SelectTrigger>
                             <SelectContent>

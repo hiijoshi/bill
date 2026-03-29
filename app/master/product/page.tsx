@@ -638,7 +638,7 @@ export default function ProductMasterPage() {
                         value={formData.gstRate}
                         onValueChange={(value) => setFormData({ ...formData, gstRate: value })}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger id="gstRate">
                           <SelectValue placeholder="Select GST rate" />
                         </SelectTrigger>
                         <SelectContent>

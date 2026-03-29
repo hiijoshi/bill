@@ -733,7 +733,7 @@ export default function PurchaseListPage() {
               <div>
                 <Label htmlFor="purchaseType">Purchase Type</Label>
                 <Select value={purchaseType} onValueChange={(value: PurchaseTypeFilter) => setPurchaseType(value)}>
-                  <SelectTrigger>
+                  <SelectTrigger id="purchaseType">
                     <SelectValue placeholder="Select type" />
                   </SelectTrigger>
                   <SelectContent>

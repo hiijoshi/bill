@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { ArrowLeft, CreditCard, DollarSign, MessageCircle, Search } from 'lucide-react'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { isCashPaymentMode } from '@/lib/payment-mode-utils'
 import { getPartyOpeningBalanceReference } from '@/lib/party-opening-balance'
 import { openWhatsappChat } from '@/lib/whatsapp'
 
@@ -64,12 +65,6 @@ const formatDateSafe = (value: string): string => {
   const parsed = new Date(value)
   if (!Number.isFinite(parsed.getTime())) return '-'
   return parsed.toLocaleDateString()
-}
-
-const isCashModeCode = (modeCode: string, modeName: string): boolean => {
-  const code = (modeCode || '').trim().toLowerCase()
-  const name = (modeName || '').trim().toLowerCase()
-  return code === 'cash' || code === 'c' || name.includes('cash') || name.includes('nakad')
 }
 
 export default function SalesPaymentEntryPage() {
@@ -172,7 +167,7 @@ function SalesPaymentEntryPageContent() {
     [paymentModes, selectedPaymentMode]
   )
   const isCashMode = useMemo(
-    () => isCashModeCode(selectedPaymentModeObj?.code || selectedPaymentMode, selectedPaymentModeObj?.name || ''),
+    () => isCashPaymentMode(selectedPaymentModeObj?.code || selectedPaymentMode, selectedPaymentModeObj?.name || ''),
     [selectedPaymentModeObj, selectedPaymentMode]
   )
 

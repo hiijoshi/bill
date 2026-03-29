@@ -194,7 +194,7 @@ export default function UserMasterPage() {
                     <div>
                       <Label htmlFor="trader">Trader *</Label>
                       <Select value={formData.traderId} onValueChange={(value) => setFormData({ ...formData, traderId: value })}>
-                        <SelectTrigger>
+                        <SelectTrigger id="trader">
                           <SelectValue placeholder="Select trader" />
                         </SelectTrigger>
                         <SelectContent>
@@ -239,7 +239,7 @@ export default function UserMasterPage() {
                     <div>
                       <Label htmlFor="role">Role *</Label>
                       <Select value={formData.role} onValueChange={(value) => setFormData({ ...formData, role: value })}>
-                        <SelectTrigger>
+                        <SelectTrigger id="role">
                           <SelectValue placeholder="Select role" />
                         </SelectTrigger>
                         <SelectContent>

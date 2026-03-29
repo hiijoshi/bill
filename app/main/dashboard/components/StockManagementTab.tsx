@@ -392,7 +392,7 @@ export default function StockManagementTab({
             <div>
               <Label htmlFor="filterProduct">Product</Label>
               <Select value={filterProduct} onValueChange={setFilterProduct}>
-                <SelectTrigger>
+                <SelectTrigger id="filterProduct">
                   <SelectValue placeholder="All Products" />
                 </SelectTrigger>
                 <SelectContent>
@@ -408,7 +408,7 @@ export default function StockManagementTab({
             <div>
               <Label htmlFor="filterType">Type</Label>
               <Select value={filterType} onValueChange={setFilterType}>
-                <SelectTrigger>
+                <SelectTrigger id="filterType">
                   <SelectValue placeholder="All Types" />
                 </SelectTrigger>
                 <SelectContent>

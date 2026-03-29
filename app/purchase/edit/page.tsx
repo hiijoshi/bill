@@ -466,7 +466,7 @@ function PurchaseEditPageContent() {
                   <div>
                     <Label htmlFor="product">Purchase Product</Label>
                     <Select value={selectedProduct} onValueChange={setSelectedProduct}>
-                      <SelectTrigger>
+                      <SelectTrigger id="product">
                         <SelectValue placeholder="Select Product" />
                       </SelectTrigger>
                       <SelectContent>

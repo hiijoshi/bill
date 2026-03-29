@@ -455,7 +455,7 @@ export default function PurchaseEntryPage() {
                   <div>
                     <Label htmlFor="product">Purchase Product</Label>
                     <Select value={selectedProduct} onValueChange={setSelectedProduct}>
-                      <SelectTrigger className="flex-1">
+                      <SelectTrigger id="product" className="flex-1">
                         <SelectValue placeholder="Select Product" />
                       </SelectTrigger>
                       <SelectContent>
@@ -480,7 +480,7 @@ export default function PurchaseEntryPage() {
                   <div>
                     <Label htmlFor="userUnit">User Unit (for conversion)</Label>
                     <Select value={selectedUserUnit} onValueChange={setSelectedUserUnit}>
-                      <SelectTrigger>
+                      <SelectTrigger id="userUnit">
                         <SelectValue placeholder="Select Unit e.g. Bag 90KG" />
                       </SelectTrigger>
                       <SelectContent>

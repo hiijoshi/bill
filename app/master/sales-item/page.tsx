@@ -446,7 +446,7 @@ export default function SalesItemMasterPage() {
                     <div>
                       <Label htmlFor="product">Product *</Label>
                       <Select value={formData.productId} onValueChange={(value) => setFormData({ ...formData, productId: value })}>
-                        <SelectTrigger>
+                        <SelectTrigger id="product">
                           <SelectValue placeholder="Select product" />
                         </SelectTrigger>
                         <SelectContent>
@@ -490,7 +490,7 @@ export default function SalesItemMasterPage() {
                     <div>
                       <Label htmlFor="gstRate">GST Rate (%)</Label>
                       <Select value={formData.gstRate} onValueChange={(value) => setFormData({ ...formData, gstRate: value })}>
-                        <SelectTrigger>
+                        <SelectTrigger id="gstRate">
                           <SelectValue placeholder="Select GST rate" />
                         </SelectTrigger>
                         <SelectContent>
