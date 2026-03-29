@@ -13,6 +13,10 @@ import {
   findPurchasePaymentTarget,
   updatePurchasePaymentTargetTotals
 } from '@/lib/purchase-payment-sync'
+import {
+  isBillLinkedPaymentType,
+  isPurchasePaymentType
+} from '@/lib/payment-entry-types'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'Payment ID is required') })
 
@@ -66,6 +70,10 @@ async function recalculateBillTotals(
   tx: Prisma.TransactionClient,
   payment: { id: string; companyId: string; billType: string; billId: string }
 ) {
+  if (!isBillLinkedPaymentType(payment.billType)) {
+    return
+  }
+
   const aggregate = await tx.payment.aggregate({
     where: {
       billType: payment.billType,
@@ -79,7 +87,7 @@ async function recalculateBillTotals(
 
   const paid = aggregate._sum.amount || 0
 
-  if (payment.billType === 'purchase') {
+  if (isPurchasePaymentType(payment.billType)) {
     const bill = await findPurchasePaymentTarget(tx, payment.companyId, payment.billId)
     if (!bill) return
 
@@ -165,7 +173,7 @@ export async function PUT(
     const nextAmount = parsedBody.data.amount ?? existingPayment.amount
 
     const result = await prisma.$transaction(async (tx) => {
-      if (parsedBody.data.amount !== undefined) {
+      if (parsedBody.data.amount !== undefined && isBillLinkedPaymentType(existingPayment.billType)) {
         const aggregate = await tx.payment.aggregate({
           where: {
             billType: existingPayment.billType,
@@ -180,7 +188,7 @@ export async function PUT(
 
         const otherPaymentsTotal = aggregate._sum.amount || 0
 
-        if (existingPayment.billType === 'purchase') {
+        if (isPurchasePaymentType(existingPayment.billType)) {
           const bill = await findPurchasePaymentTarget(tx, existingPayment.companyId, existingPayment.billId)
           if (!bill || otherPaymentsTotal + nextAmount > bill.totalAmount) {
             throw new Error('Payment amount exceeds pending balance')

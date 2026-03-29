@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Plus, Eye } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { getPaymentTypeLabel, isPaymentEntryType } from '@/lib/payment-entry-types'
 
 interface PurchaseBill {
   id: string
@@ -43,13 +44,14 @@ interface SalesBill {
 
 interface Payment {
   id: string
-  billType: 'purchase' | 'sales'
+  billType: string
+  billTypeLabel?: string
   billId: string
   billNo: string
   partyName: string
   payDate: string
   amount: number
-  mode: 'cash' | 'online' | 'bank'
+  mode: string
   txnRef?: string
   note?: string
   createdAt: string
@@ -143,6 +145,8 @@ export default function PaymentTab({
       const safePayments = Array.isArray(paymentsData)
         ? paymentsData.map((payment: Payment) => ({
             ...payment,
+            billType: isPaymentEntryType(payment.billType) ? payment.billType : String(payment.billType || '').trim(),
+            billTypeLabel: payment.billTypeLabel || getPaymentTypeLabel(payment.billType),
             amount: clampNonNegative(payment.amount)
           }))
         : []
@@ -247,6 +251,14 @@ export default function PaymentTab({
           <Button onClick={() => router.push('/payment/sales/entry')}>
             <Plus className="w-4 h-4 mr-2" />
             Record Sales Receipt
+          </Button>
+          <Button onClick={() => router.push('/payment/cash-bank/entry')}>
+            <Plus className="w-4 h-4 mr-2" />
+            Cash / Bank Payment
+          </Button>
+          <Button onClick={() => router.push('/payment/self-transfer/entry')}>
+            <Plus className="w-4 h-4 mr-2" />
+            Self Transfer
           </Button>
           <Button onClick={() => router.push('/payment/dashboard')}>
             <Eye className="w-4 h-4 mr-2" />
@@ -409,6 +421,8 @@ export default function PaymentTab({
                   <SelectItem value="all">All Types</SelectItem>
                   <SelectItem value="purchase">Purchase</SelectItem>
                   <SelectItem value="sales">Sales</SelectItem>
+                  <SelectItem value="cash_bank_payment">Cash / Bank Payment</SelectItem>
+                  <SelectItem value="self_transfer">Self Transfer</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -452,7 +466,7 @@ export default function PaymentTab({
                     <TableCell>{new Date(payment.payDate).toLocaleDateString()}</TableCell>
                     <TableCell>
                       <Badge variant="outline">
-                        {payment.billType === 'purchase' ? 'Purchase' : 'Sales'}
+                        {payment.billTypeLabel || getPaymentTypeLabel(payment.billType)}
                       </Badge>
                     </TableCell>
                     <TableCell>{payment.billNo}</TableCell>

@@ -21,6 +21,12 @@ import { Edit, Eye, Plus } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
+import {
+  getPaymentTypeLabel,
+  isBillLinkedPaymentType,
+  isPaymentEntryType,
+  SELF_TRANSFER_PAYMENT_TYPE
+} from '@/lib/payment-entry-types'
 
 interface PurchaseBill {
   id: string
@@ -57,14 +63,15 @@ interface SalesBill {
 
 interface Payment {
   id: string
-  billType: 'purchase' | 'sales'
+  billType: string
+  billTypeLabel: string
   billId: string
   billNo: string
   partyName: string
   payDate: string
   amount: number
   mode: string
-  modeCategory: 'cash' | 'online' | 'bank'
+  modeCategory: 'cash' | 'online' | 'bank' | 'transfer'
   modeLabel: string
   status: 'pending' | 'paid'
   txnRef?: string
@@ -74,7 +81,8 @@ interface Payment {
 
 type PaymentApiRecord = {
   id: string
-  billType: 'purchase' | 'sales'
+  billType?: string
+  billTypeLabel?: string
   billId?: string
   billNo?: string
   partyName?: string
@@ -137,8 +145,11 @@ const normalizeBillCollection = <T,>(payload: BillApiPayload<T>): T[] => {
   return []
 }
 
-const getPaymentModeCategory = (rawMode: unknown): 'cash' | 'online' | 'bank' => {
+const getPaymentModeCategory = (rawMode: unknown): 'cash' | 'online' | 'bank' | 'transfer' => {
   const normalized = String(rawMode || '').trim().toLowerCase()
+  if (normalized === SELF_TRANSFER_PAYMENT_TYPE || normalized.includes('transfer')) {
+    return 'transfer'
+  }
   if (!normalized || normalized === 'cash' || normalized === 'c' || normalized.includes('cash') || normalized.includes('nakad')) {
     return 'cash'
   }
@@ -178,6 +189,7 @@ const getPaymentModeLabel = (rawMode: unknown): string => {
   if (!value) return 'Cash'
 
   const normalized = value.toLowerCase()
+  if (normalized === SELF_TRANSFER_PAYMENT_TYPE || normalized.includes('transfer')) return 'Self Transfer'
   if (normalized === 'cash' || normalized === 'c') return 'Cash'
   if (normalized === 'online') return 'Online'
   if (normalized === 'bank') return 'Bank Transfer'
@@ -193,7 +205,8 @@ export default function PaymentDashboardPage() {
   const [loading, setLoading] = useState(true)
   const [companyId, setCompanyId] = useState('')
   const [partyFilter, setPartyFilter] = useState('all')
-  const [modeFilter, setModeFilter] = useState<'all' | 'cash' | 'online' | 'bank'>('all')
+  const [paymentTypeFilter, setPaymentTypeFilter] = useState<'all' | string>('all')
+  const [modeFilter, setModeFilter] = useState<'all' | 'cash' | 'online' | 'bank' | 'transfer'>('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
@@ -202,7 +215,7 @@ export default function PaymentDashboardPage() {
   const [paymentDraft, setPaymentDraft] = useState({
     payDate: '',
     amount: '',
-    mode: 'cash' as 'cash' | 'online' | 'bank',
+    mode: 'cash' as 'cash' | 'online' | 'bank' | 'transfer',
     status: 'paid' as 'pending' | 'paid',
     txnRef: '',
     note: ''
@@ -284,7 +297,8 @@ export default function PaymentDashboardPage() {
 
       const normalizedPayments: Payment[] = normalizePaymentsCollection(paymentsPayload).map((payment) => ({
         ...payment,
-        billType: payment.billType === 'sales' ? 'sales' : 'purchase',
+        billType: isPaymentEntryType(payment.billType) ? payment.billType : String(payment.billType || '').trim(),
+        billTypeLabel: payment.billTypeLabel || getPaymentTypeLabel(payment.billType),
         billId: payment.billId || '',
         billNo: payment.billNo || '',
         partyName: payment.partyName || '',
@@ -345,7 +359,7 @@ export default function PaymentDashboardPage() {
     setPaymentDraft({
       payDate: toDateInputValue(payment.payDate),
       amount: String(clampNonNegative(payment.amount)),
-      mode: payment.modeCategory,
+      mode: payment.mode.trim().toLowerCase().includes('transfer') ? 'transfer' : payment.modeCategory,
       status: payment.status === 'pending' ? 'pending' : 'paid',
       txnRef: payment.txnRef || '',
       note: payment.note || ''
@@ -431,13 +445,13 @@ export default function PaymentDashboardPage() {
     const unique = Array.from(
       new Set(
         payments
-          .filter((payment) => payment.billType === activeTab)
+          .filter((payment) => paymentTypeFilter === 'all' || payment.billType === paymentTypeFilter)
           .map((payment) => payment.partyName || '')
           .filter(Boolean)
       )
     )
     return unique.sort((a, b) => a.localeCompare(b))
-  }, [activeTab, payments])
+  }, [paymentTypeFilter, payments])
 
   const filteredPayments = useMemo(() => {
     const fromDate = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null
@@ -445,7 +459,7 @@ export default function PaymentDashboardPage() {
 
     return payments
       .filter((payment) => {
-        if (payment.billType !== activeTab) return false
+        if (paymentTypeFilter !== 'all' && payment.billType !== paymentTypeFilter) return false
         if (partyFilter !== 'all' && payment.partyName !== partyFilter) return false
         if (modeFilter !== 'all' && payment.modeCategory !== modeFilter) return false
 
@@ -459,7 +473,7 @@ export default function PaymentDashboardPage() {
         const bTime = new Date(b.payDate).getTime()
         return bTime - aTime
       })
-  }, [payments, activeTab, partyFilter, modeFilter, dateFrom, dateTo])
+  }, [payments, paymentTypeFilter, partyFilter, modeFilter, dateFrom, dateTo])
 
   if (loading) {
     return (
@@ -478,6 +492,14 @@ export default function PaymentDashboardPage() {
           <div className="flex justify-between items-center mb-6">
             <h1 className="text-3xl font-bold">Payment Management</h1>
             <div className="flex gap-2">
+              <Button variant="outline" onClick={() => router.push('/payment/cash-bank/entry')}>
+                <Plus className="w-4 h-4 mr-1" />
+                Cash / Bank Payment
+              </Button>
+              <Button variant="outline" onClick={() => router.push('/payment/self-transfer/entry')}>
+                <Plus className="w-4 h-4 mr-1" />
+                Self Transfer
+              </Button>
               <Button variant="outline" onClick={() => router.push('/main/dashboard')}>
                 Back to Dashboard
               </Button>
@@ -632,7 +654,22 @@ export default function PaymentDashboardPage() {
               <CardTitle>Payment History</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-5">
+              <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-6">
+                <div>
+                  <Label htmlFor="paymentTypeFilter">Type</Label>
+                  <Select value={paymentTypeFilter} onValueChange={setPaymentTypeFilter}>
+                    <SelectTrigger id="paymentTypeFilter">
+                      <SelectValue placeholder="All types" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Types</SelectItem>
+                      <SelectItem value="purchase">Purchase Payment</SelectItem>
+                      <SelectItem value="sales">Sales Receipt</SelectItem>
+                      <SelectItem value="cash_bank_payment">Cash / Bank Payment</SelectItem>
+                      <SelectItem value="self_transfer">Self Transfer</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div>
                   <Label htmlFor="partyFilter">Party</Label>
                   <Select value={partyFilter} onValueChange={setPartyFilter}>
@@ -653,7 +690,7 @@ export default function PaymentDashboardPage() {
                   <Label htmlFor="modeFilter">Bank/Mode</Label>
                   <Select
                     value={modeFilter}
-                    onValueChange={(value: 'all' | 'cash' | 'online' | 'bank') => setModeFilter(value)}
+                    onValueChange={(value: 'all' | 'cash' | 'online' | 'bank' | 'transfer') => setModeFilter(value)}
                   >
                     <SelectTrigger id="modeFilter">
                       <SelectValue placeholder="All modes" />
@@ -663,6 +700,7 @@ export default function PaymentDashboardPage() {
                       <SelectItem value="bank">Bank Transfer</SelectItem>
                       <SelectItem value="online">Online</SelectItem>
                       <SelectItem value="cash">Cash</SelectItem>
+                      <SelectItem value="transfer">Self Transfer</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -680,6 +718,7 @@ export default function PaymentDashboardPage() {
                     variant="outline"
                     className="w-full"
                     onClick={() => {
+                      setPaymentTypeFilter('all')
                       setPartyFilter('all')
                       setModeFilter('all')
                       setDateFrom('')
@@ -695,8 +734,9 @@ export default function PaymentDashboardPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead>Type</TableHead>
                       <TableHead>Bill No</TableHead>
-                      <TableHead>{activeTab === 'purchase' ? 'Supplier' : 'Party'}</TableHead>
+                      <TableHead>Counterparty / Transfer</TableHead>
                       <TableHead>Payment Date</TableHead>
                       <TableHead>Amount</TableHead>
                       <TableHead>Mode</TableHead>
@@ -709,6 +749,9 @@ export default function PaymentDashboardPage() {
                   <TableBody>
                     {filteredPayments.map((payment) => (
                       <TableRow key={payment.id}>
+                        <TableCell>
+                          <Badge variant="outline">{payment.billTypeLabel}</Badge>
+                        </TableCell>
                         <TableCell>{payment.billNo}</TableCell>
                         <TableCell>{payment.partyName}</TableCell>
                         <TableCell>{formatDateSafe(payment.payDate)}</TableCell>
@@ -729,11 +772,13 @@ export default function PaymentDashboardPage() {
                               <Edit className="mr-1 h-4 w-4" />
                               Edit Entry
                             </Button>
-                            {payment.billType === 'sales' && (
+                            {isBillLinkedPaymentType(payment.billType) && (
                               <Button
                                 size="sm"
                                 variant="ghost"
-                                onClick={() => handleEditBill(payment.billId, payment.billType)}
+                                onClick={() =>
+                                  handleEditBill(payment.billId, payment.billType === 'sales' ? 'sales' : 'purchase')
+                                }
                               >
                                 Edit Bill
                               </Button>
@@ -744,7 +789,7 @@ export default function PaymentDashboardPage() {
                     ))}
                     {filteredPayments.length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-center text-gray-500">
+                        <TableCell colSpan={10} className="text-center text-gray-500">
                           No payment history found for selected filters
                         </TableCell>
                       </TableRow>
@@ -793,7 +838,7 @@ export default function PaymentDashboardPage() {
                     <Label htmlFor="editMode">Mode</Label>
                     <Select
                       value={paymentDraft.mode}
-                      onValueChange={(value: 'cash' | 'online' | 'bank') =>
+                      onValueChange={(value: 'cash' | 'online' | 'bank' | 'transfer') =>
                         setPaymentDraft((prev) => ({ ...prev, mode: value }))
                       }
                     >
@@ -804,6 +849,7 @@ export default function PaymentDashboardPage() {
                         <SelectItem value="cash">Cash</SelectItem>
                         <SelectItem value="online">Online</SelectItem>
                         <SelectItem value="bank">Bank Transfer</SelectItem>
+                        <SelectItem value="transfer">Self Transfer</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

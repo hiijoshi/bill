@@ -10,6 +10,10 @@ import {
 import { prisma } from '@/lib/prisma'
 import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
 import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
+import {
+  isIncomingCashflowPaymentType,
+  isOutgoingCashflowPaymentType
+} from '@/lib/payment-entry-types'
 
 type OverviewSection =
   | 'purchaseBills'
@@ -566,9 +570,9 @@ async function loadOverviewPayload(params: {
   for (const row of paymentsByCompany) {
     const current = companyPerformanceMap.get(row.companyId)
     if (!current) continue
-    if (row.billType === 'sales') {
+    if (isIncomingCashflowPaymentType(row.billType)) {
       current.paymentIn += toNumber(row._sum.amount)
-    } else if (row.billType === 'purchase') {
+    } else if (isOutgoingCashflowPaymentType(row.billType)) {
       current.paymentOut += toNumber(row._sum.amount)
     }
   }
@@ -582,10 +586,10 @@ async function loadOverviewPayload(params: {
 
   const paymentTotal = toNumber(paymentSummary?._sum.amount)
   const paymentIn = paymentsByCompany
-    .filter((row) => row.billType === 'sales')
+    .filter((row) => isIncomingCashflowPaymentType(row.billType))
     .reduce((sum, row) => sum + toNumber(row._sum.amount), 0)
   const paymentOut = paymentsByCompany
-    .filter((row) => row.billType === 'purchase')
+    .filter((row) => isOutgoingCashflowPaymentType(row.billType))
     .reduce((sum, row) => sum + toNumber(row._sum.amount), 0)
 
   return {

@@ -17,6 +17,12 @@ import {
 } from '@/lib/party-opening-balance'
 import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-schema'
 import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
+import {
+  getPaymentTypeLabel,
+  isOutgoingCashflowPaymentType,
+  isSalesReceiptType,
+  isSelfTransferPaymentType
+} from '@/lib/payment-entry-types'
 
 type CompanyOption = {
   id: string
@@ -728,7 +734,10 @@ export async function GET(request: NextRequest) {
       const purchasePaidByBillId = new Map<string, number>()
 
       for (const payment of paymentsAsOf) {
-        const targetMap = payment.billType === 'sales' ? salesReceiptByBillId : purchasePaidByBillId
+        if (!payment.billId) continue
+        if (!isSalesReceiptType(payment.billType) && payment.billType !== 'purchase') continue
+
+        const targetMap = isSalesReceiptType(payment.billType) ? salesReceiptByBillId : purchasePaidByBillId
         targetMap.set(
           payment.billId,
           roundCurrency((targetMap.get(payment.billId) || 0) + normalizeNonNegative(payment._sum.amount))
@@ -1206,16 +1215,20 @@ export async function GET(request: NextRequest) {
       for (const payment of payments) {
       const key = dateKey(payment.payDate)
       const amount = roundCurrency(normalizeNonNegative(payment.amount))
-      const isSalesReceipt = payment.billType === 'sales'
+      const isSalesReceipt = isSalesReceiptType(payment.billType)
+      const isOutgoingPayment = isOutgoingCashflowPaymentType(payment.billType)
+      const isSelfTransfer = isSelfTransferPaymentType(payment.billType)
       const refNo = isSalesReceipt
         ? String(salesBillNoMap.get(payment.billId) || payment.txnRef || '')
-        : String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || payment.txnRef || '')
+        : payment.billType === 'purchase'
+          ? String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || payment.txnRef || '')
+          : String(payment.txnRef || '')
       const bankName = String(payment.bankNameSnapshot || '').trim() || '-'
 
       addDailyMetric(dailySummaryMap, key, payment.companyId, (row) => {
         if (isSalesReceipt) {
           row.totalSalesReceipt += amount
-        } else {
+        } else if (isOutgoingPayment) {
           row.totalPurchasePayment += amount
         }
       })
@@ -1225,14 +1238,16 @@ export async function GET(request: NextRequest) {
         date: key,
         companyId: payment.companyId,
         companyName: companyNameMap.get(payment.companyId) || payment.companyId,
-        category: isSalesReceipt ? 'payment-in' : 'payment-out',
-        type: isSalesReceipt ? 'Sales Receipt' : 'Purchase Payment',
+        category: isSelfTransfer ? 'transfer' : isSalesReceipt ? 'payment-in' : isOutgoingPayment ? 'payment-out' : 'payment',
+        type: getPaymentTypeLabel(payment.billType),
         refNo,
-        partyName: String(payment.party?.name || payment.farmer?.name || ''),
+        partyName: isSelfTransfer
+          ? [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
+          : String(payment.party?.name || payment.farmer?.name || payment.bankNameSnapshot || ''),
         productName: '-',
         amount,
         quantity: 0,
-        direction: isSalesReceipt ? 'IN' : 'OUT',
+        direction: isSelfTransfer ? 'TRANSFER' : isSalesReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-',
         paymentMode: formatPaymentMode(payment.mode),
         bankName,
         note: String(payment.note || '').trim() || formatPaymentMode(payment.mode)
@@ -1287,25 +1302,31 @@ export async function GET(request: NextRequest) {
       ? payments
           .filter((payment) => isBankLikePayment(payment))
           .map((payment) => {
-            const isSalesReceipt = payment.billType === 'sales'
+            const isSalesReceipt = isSalesReceiptType(payment.billType)
+            const isOutgoingPayment = isOutgoingCashflowPaymentType(payment.billType)
+            const isSelfTransfer = isSelfTransferPaymentType(payment.billType)
             const amount = roundCurrency(normalizeNonNegative(payment.amount))
             const billNo = isSalesReceipt
               ? String(salesBillNoMap.get(payment.billId) || '')
-              : String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || '')
+              : payment.billType === 'purchase'
+                ? String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || '')
+                : ''
             return {
               id: payment.id,
               date: dateKey(payment.payDate),
               companyId: payment.companyId,
               companyName: companyNameMap.get(payment.companyId) || payment.companyId,
-              direction: isSalesReceipt ? 'IN' : 'OUT',
-              billType: payment.billType === 'sales' ? 'Sales' : 'Purchase',
+              direction: isSelfTransfer ? 'TRANSFER' : isSalesReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-',
+              billType: getPaymentTypeLabel(payment.billType),
               billNo,
               refNo: billNo || String(payment.txnRef || ''),
-              partyName: String(payment.party?.name || payment.farmer?.name || ''),
+              partyName: isSelfTransfer
+                ? [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
+                : String(payment.party?.name || payment.farmer?.name || payment.bankNameSnapshot || ''),
               bankName: String(payment.bankNameSnapshot || '').trim() || 'Bank / Online',
               mode: formatPaymentMode(payment.mode),
               amountIn: roundCurrency(isSalesReceipt ? amount : 0),
-              amountOut: roundCurrency(!isSalesReceipt ? amount : 0),
+              amountOut: roundCurrency(isOutgoingPayment ? amount : 0),
               txnRef: String(payment.txnRef || ''),
               ifscCode: String(payment.ifscCode || ''),
               accountNo: String(payment.beneficiaryBankAccount || ''),

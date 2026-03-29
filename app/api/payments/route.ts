@@ -23,11 +23,22 @@ import {
   type PurchasePaymentTarget,
   updatePurchasePaymentTargetTotals
 } from '@/lib/purchase-payment-sync'
+import {
+  getPaymentTypeLabel,
+  isBillLinkedPaymentType,
+  isCashBankPaymentType,
+  isPaymentEntryType,
+  isPurchasePaymentType,
+  isSalesReceiptType,
+  isSelfTransferPaymentType,
+  PAYMENT_ENTRY_TYPES,
+  SALES_RECEIPT_TYPE
+} from '@/lib/payment-entry-types'
 
 const paymentCreateSchema = z
   .object({
     companyId: z.string().trim().min(1, 'Company ID is required'),
-    billType: z.enum(['purchase', 'sales']),
+    billType: z.enum(PAYMENT_ENTRY_TYPES),
     billId: z.string().trim().min(1, 'Bill ID is required'),
     partyId: z.string().trim().optional().nullable(),
     payDate: z.string().trim().min(1, 'Pay date is required'),
@@ -96,7 +107,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
     }
 
-    const isOpeningBalancePayment = data.billType === 'sales' && isPartyOpeningBalanceReference(data.billId)
+    const isOpeningBalancePayment = data.billType === SALES_RECEIPT_TYPE && isPartyOpeningBalanceReference(data.billId)
+    const isBillLinkedPayment = isBillLinkedPaymentType(data.billType)
     let totalAmount = 0
     let paidAmount = 0
     let outstanding = 0
@@ -151,8 +163,8 @@ export async function POST(request: NextRequest) {
       outstanding = Math.max(0, totalAmount - paidAmount)
       billDateValue = party.openingBalanceDate || billDateValue
       salesPartyId = party.id
-    } else {
-      if (data.billType === 'purchase') {
+    } else if (isBillLinkedPayment) {
+      if (isPurchasePaymentType(data.billType)) {
         purchaseTarget = await findPurchasePaymentTarget(prisma, data.companyId, data.billId)
 
         if (!purchaseTarget) {
@@ -180,9 +192,15 @@ export async function POST(request: NextRequest) {
         billDateValue = bill.billDate
         salesPartyId = 'partyId' in bill ? bill.partyId || null : null
       }
+    } else {
+      totalAmount = roundCurrency(data.amount)
+      paidAmount = 0
+      outstanding = roundCurrency(data.amount)
+      billDateValue = new Date(data.payDate)
+      salesPartyId = isCashBankPaymentType(data.billType) ? normalizeOptionalString(data.partyId) || null : null
     }
 
-    if (data.amount > outstanding) {
+    if (isBillLinkedPayment && data.amount > outstanding) {
       return NextResponse.json({ error: 'Payment amount cannot exceed pending balance' }, { status: 400 })
     }
 
@@ -214,8 +232,8 @@ export async function POST(request: NextRequest) {
           status: paymentStatus,
           txnRef: normalizeOptionalString(data.txnRef),
           note: normalizeOptionalString(data.note),
-          partyId: data.billType === 'sales' ? salesPartyId : null,
-          farmerId
+          partyId: isSalesReceiptType(data.billType) || isCashBankPaymentType(data.billType) ? salesPartyId : null,
+          farmerId: isPurchasePaymentType(data.billType) ? farmerId : null
         }
       })
 
@@ -227,7 +245,7 @@ export async function POST(request: NextRequest) {
         return payment
       }
 
-      if (data.billType === 'purchase') {
+      if (isPurchasePaymentType(data.billType)) {
         if (!purchaseTarget) {
           throw new Error('Bill not found')
         }
@@ -241,7 +259,7 @@ export async function POST(request: NextRequest) {
           },
           newPaid
         )
-      } else {
+      } else if (isSalesReceiptType(data.billType)) {
         await tx.salesBill.update({
           where: { id: data.billId },
           data: {
@@ -285,7 +303,7 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = new URL(request.url).searchParams
     const requestedCompanyId = searchParams.get('companyId')?.trim() || null
-    const billType = searchParams.get('billType')
+    const billType = searchParams.get('billType')?.trim() || null
     const pagination = parsePaginationParams(searchParams, { defaultPageSize: 50, maxPageSize: 200 })
     const includeDeleted =
       authResult.auth.role === 'super_admin' && parseBooleanParam(searchParams.get('includeDeleted'))
@@ -314,7 +332,7 @@ export async function GET(request: NextRequest) {
 
     const where = {
       companyId: { in: permissionScopedIds },
-      ...(billType === 'purchase' || billType === 'sales' ? { billType } : {}),
+      ...(billType && isPaymentEntryType(billType) ? { billType } : {}),
       ...(includeDeleted ? {} : { deletedAt: null }),
       ...(pagination.search
         ? {
@@ -323,7 +341,9 @@ export async function GET(request: NextRequest) {
               { note: { contains: pagination.search } },
               { mode: { contains: pagination.search } },
               { status: { contains: pagination.search } },
-              { billType: { contains: pagination.search } }
+              { billType: { contains: pagination.search } },
+              { bankNameSnapshot: { contains: pagination.search } },
+              { bankBranchSnapshot: { contains: pagination.search } }
             ]
           }
         : {})
@@ -344,6 +364,8 @@ export async function GET(request: NextRequest) {
           status: true,
           txnRef: true,
           note: true,
+          bankNameSnapshot: true,
+          bankBranchSnapshot: true,
           createdAt: true,
           party: {
             select: {
@@ -429,18 +451,25 @@ export async function GET(request: NextRequest) {
     const enhancedPayments = payments.map((payment) => ({
       ...payment,
       amount: clampNonNegative(payment.amount),
+      billTypeLabel: getPaymentTypeLabel(payment.billType),
       billNo:
-        payment.billType === 'sales' && isPartyOpeningBalanceReference(payment.billId)
+        payment.billType === SALES_RECEIPT_TYPE && isPartyOpeningBalanceReference(payment.billId)
           ? 'Opening Balance'
-          : payment.billType === 'purchase'
+          : isPurchasePaymentType(payment.billType)
           ? purchaseBillMap.get(payment.billId)?.billNo || specialPurchaseBillMap.get(payment.billId)?.billNo || ''
-          : salesBillMap.get(payment.billId) || '',
+          : payment.billType === SALES_RECEIPT_TYPE
+          ? salesBillMap.get(payment.billId) || ''
+          : getPaymentTypeLabel(payment.billType),
       partyName:
         payment.party?.name ||
         payment.farmer?.name ||
         purchaseBillMap.get(payment.billId)?.partyName ||
         specialPurchaseBillMap.get(payment.billId)?.partyName ||
-        ''
+        (isCashBankPaymentType(payment.billType)
+          ? String(payment.bankNameSnapshot || '').trim()
+          : isSelfTransferPaymentType(payment.billType)
+          ? [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
+          : '')
     }))
 
     if (pagination.enabled) {
