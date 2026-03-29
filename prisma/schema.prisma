@@ -74,6 +74,7 @@ model Company {
   payments      Payment[]
   transports    Transport[]
   banks         Bank[]
+  accountingHeads AccountingHead[]
   markas        Marka[]
   paymentModes  PaymentMode[]
   userPermissions UserPermission[]
@@ -469,6 +470,22 @@ model Bank {
 
   @@unique([companyId, name, ifscCode])
   @@index([companyId, name], map: "idx_banks_company_name")
+}
+
+model AccountingHead {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name        String
+  category    String
+  amount      Float    @default(0)
+  value       Float    @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId, category], map: "idx_accounting_heads_company_category")
+  @@index([companyId, name], map: "idx_accounting_heads_company_name")
 }
 
 model Marka {

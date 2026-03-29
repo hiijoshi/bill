@@ -222,6 +222,24 @@ export const SUPER_ADMIN_MASTER_RESOURCES: MasterResourceDefinition[] = [
     ]
   },
   {
+    key: 'accounting-heads',
+    label: 'Accounting Heads',
+    endpoint: '/api/accounting-heads',
+    helperText: 'Use accounting heads for mandi-specific direct cash or bank payments.',
+    fields: [
+      { key: 'name', label: 'Name', type: 'text', required: true },
+      { key: 'category', label: 'Category', type: 'text', required: true },
+      { key: 'amount', label: 'Amount', type: 'number', defaultValue: '0' },
+      { key: 'value', label: 'Value', type: 'number', defaultValue: '0' }
+    ],
+    columns: [
+      { key: 'name', label: 'Name' },
+      { key: 'category', label: 'Category' },
+      { key: 'amount', label: 'Amount' },
+      { key: 'value', label: 'Value' }
+    ]
+  },
+  {
     key: 'payment-modes',
     label: 'Payment Modes',
     endpoint: '/api/payment-modes',

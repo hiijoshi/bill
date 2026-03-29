@@ -16,9 +16,12 @@ import {
 } from '@/lib/payment-entry-types'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
-type PartyRecord = {
+type AccountingHeadRecord = {
   id: string
   name: string
+  category: string
+  amount: number
+  value: number
 }
 
 type SupplierRecord = {
@@ -28,10 +31,13 @@ type SupplierRecord = {
 
 type SelectOption = {
   value: string
-  entityType: 'party' | 'supplier'
+  entityType: 'accounting-head' | 'supplier'
   entityId: string
   name: string
   label: string
+  category?: string
+  amount?: number
+  valueAmount?: number
 }
 
 type CollectionPayload<T> =
@@ -68,7 +74,7 @@ function CashBankPaymentEntryPageContent() {
   const [amount, setAmount] = useState('')
   const [remark, setRemark] = useState('')
 
-  const [partyOptions, setPartyOptions] = useState<PartyRecord[]>([])
+  const [accountingHeadOptions, setAccountingHeadOptions] = useState<AccountingHeadRecord[]>([])
   const [supplierOptions, setSupplierOptions] = useState<SupplierRecord[]>([])
 
   useEffect(() => {
@@ -100,22 +106,25 @@ function CashBankPaymentEntryPageContent() {
 
     ;(async () => {
       try {
-        const [partiesResponse, suppliersResponse] = await Promise.all([
-          fetch(`/api/parties?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+        const [accountingHeadsResponse, suppliersResponse] = await Promise.all([
+          fetch(`/api/accounting-heads?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
           fetch(`/api/suppliers?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' })
         ])
 
-        const [partiesPayload, suppliersPayload] = await Promise.all([
-          partiesResponse.json().catch(() => [] as CollectionPayload<PartyRecord>),
+        const [accountingHeadsPayload, suppliersPayload] = await Promise.all([
+          accountingHeadsResponse.json().catch(() => [] as CollectionPayload<AccountingHeadRecord>),
           suppliersResponse.json().catch(() => [] as CollectionPayload<SupplierRecord>)
         ])
 
         if (cancelled) return
 
-        setPartyOptions(
-          normalizeCollection<PartyRecord>(partiesPayload).map((row) => ({
+        setAccountingHeadOptions(
+          normalizeCollection<AccountingHeadRecord>(accountingHeadsPayload).map((row) => ({
             id: String(row.id || ''),
-            name: String(row.name || '').trim()
+            name: String(row.name || '').trim(),
+            category: String(row.category || '').trim(),
+            amount: Number(row.amount || 0),
+            value: Number(row.value || 0)
           })).filter((row) => row.id && row.name)
         )
         setSupplierOptions(
@@ -137,12 +146,15 @@ function CashBankPaymentEntryPageContent() {
   }, [companyId])
 
   const referenceOptions = useMemo<SelectOption[]>(() => {
-    const parties = partyOptions.map((party) => ({
-      value: `party:${party.id}`,
-      entityType: 'party' as const,
-      entityId: party.id,
-      name: party.name,
-      label: `Account Head: ${party.name}`
+    const accountingHeads = accountingHeadOptions.map((head) => ({
+      value: `accounting-head:${head.id}`,
+      entityType: 'accounting-head' as const,
+      entityId: head.id,
+      name: head.name,
+      label: head.category ? `Accounting Head: ${head.name} (${head.category})` : `Accounting Head: ${head.name}`,
+      category: head.category,
+      amount: Number(head.amount || 0),
+      valueAmount: Number(head.value || 0)
     }))
 
     const suppliers = supplierOptions.map((supplier) => ({
@@ -153,8 +165,24 @@ function CashBankPaymentEntryPageContent() {
       label: `Supplier: ${supplier.name}`
     }))
 
-    return [...parties, ...suppliers].sort((left, right) => left.label.localeCompare(right.label))
-  }, [partyOptions, supplierOptions])
+    return [...accountingHeads, ...suppliers].sort((left, right) => left.label.localeCompare(right.label))
+  }, [accountingHeadOptions, supplierOptions])
+
+  const selectedAccountingHead = useMemo(() => {
+    const selectedOption = referenceOptions.find((option) => option.value === selectedReference)
+    if (!selectedOption || selectedOption.entityType !== 'accounting-head') return null
+    return selectedOption
+  }, [referenceOptions, selectedReference])
+
+  useEffect(() => {
+    if (!selectedAccountingHead) return
+    if (amount.trim()) return
+
+    const configuredAmount = Number(selectedAccountingHead.amount || 0)
+    if (configuredAmount > 0) {
+      setAmount(String(configuredAmount))
+    }
+  }, [amount, selectedAccountingHead])
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -193,7 +221,7 @@ function CashBankPaymentEntryPageContent() {
           companyId,
           billType: CASH_BANK_PAYMENT_TYPE,
           billId: buildCashBankPaymentReference(selectedOption.entityType, selectedOption.entityId),
-          partyId: selectedOption.entityType === 'party' ? selectedOption.entityId : null,
+          partyId: null,
           payDate: paymentDate,
           amount: paymentAmount,
           mode,
@@ -234,7 +262,7 @@ function CashBankPaymentEntryPageContent() {
           <div className="mb-6 flex items-center justify-between">
             <div>
               <h1 className="text-3xl font-bold">Record Cash / Bank Payment</h1>
-              <p className="mt-1 text-sm text-slate-600">Store direct outgoing payments to account heads or suppliers.</p>
+              <p className="mt-1 text-sm text-slate-600">Store direct outgoing payments to accounting heads or suppliers.</p>
             </div>
             <Button variant="outline" onClick={() => router.push('/payment/dashboard')}>
               <ArrowLeft className="mr-2 h-4 w-4" />
@@ -279,7 +307,7 @@ function CashBankPaymentEntryPageContent() {
                   <Label htmlFor="reference">Account Head / Supplier</Label>
                   <Select value={selectedReference} onValueChange={setSelectedReference}>
                     <SelectTrigger id="reference">
-                      <SelectValue placeholder="Select account head / supplier" />
+                      <SelectValue placeholder="Select accounting head / supplier" />
                     </SelectTrigger>
                     <SelectContent>
                       {referenceOptions.map((option) => (
@@ -291,9 +319,38 @@ function CashBankPaymentEntryPageContent() {
                   </Select>
                 </div>
 
+                {selectedAccountingHead && (
+                  <div className="grid gap-4 rounded-lg border bg-slate-50 p-4 md:grid-cols-3">
+                    <div className="grid gap-2">
+                      <Label htmlFor="selectedHeadCategory">Category</Label>
+                      <Input
+                        id="selectedHeadCategory"
+                        value={selectedAccountingHead.category || ''}
+                        readOnly
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="selectedHeadAmount">Configured Amount</Label>
+                      <Input
+                        id="selectedHeadAmount"
+                        value={Number(selectedAccountingHead.amount || 0).toFixed(2)}
+                        readOnly
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="selectedHeadValue">Configured Value</Label>
+                      <Input
+                        id="selectedHeadValue"
+                        value={Number(selectedAccountingHead.valueAmount || 0).toFixed(2)}
+                        readOnly
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="grid gap-2">
-                    <Label htmlFor="amount">Amount</Label>
+                    <Label htmlFor="amount">Payment Amount</Label>
                     <Input
                       id="amount"
                       type="number"
@@ -316,6 +373,11 @@ function CashBankPaymentEntryPageContent() {
                 </div>
 
                 <div className="flex justify-end gap-2 pt-2">
+                  {accountingHeadOptions.length === 0 && (
+                    <Button type="button" variant="outline" onClick={() => router.push('/master/accounting-head')}>
+                      Add Accounting Head
+                    </Button>
+                  )}
                   <Button type="button" variant="outline" onClick={() => router.push('/payment/dashboard')}>
                     Cancel
                   </Button>

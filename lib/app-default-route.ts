@@ -23,6 +23,7 @@ const APP_ROUTE_PRIORITY: Array<{ module: PermissionModule; href: string }> = [
   { module: 'MASTER_TRANSPORT', href: '/master/transport' },
   { module: 'MASTER_UNITS', href: '/master/unit' },
   { module: 'MASTER_PAYMENT_MODE', href: '/master/payment-mode' },
+  { module: 'MASTER_ACCOUNTING_HEAD', href: '/master/accounting-head' },
   { module: 'MASTER_BANK', href: '/master/bank' }
 ]
 

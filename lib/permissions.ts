@@ -5,6 +5,7 @@ export const PERMISSION_MODULES = [
   'MASTER_UNITS',
   'MASTER_TRANSPORT',
   'MASTER_BANK',
+  'MASTER_ACCOUNTING_HEAD',
   'MASTER_MARKA',
   'MASTER_PAYMENT_MODE',
   'MASTER_SALES_ITEM',
@@ -33,6 +34,7 @@ export const PERMISSION_MODULE_LABELS: Record<PermissionModule, string> = {
   MASTER_UNITS: 'Master Units',
   MASTER_TRANSPORT: 'Master Transport',
   MASTER_BANK: 'Master Bank',
+  MASTER_ACCOUNTING_HEAD: 'Master Accounting Head',
   MASTER_MARKA: 'Master Marka',
   MASTER_PAYMENT_MODE: 'Master Payment Mode',
   MASTER_SALES_ITEM: 'Master Sales Item',
@@ -85,6 +87,10 @@ export function resolveRoutePermission(pathname: string, method: string): RouteP
 
   if (path.startsWith('/api/banks')) {
     return { module: 'MASTER_BANK', action }
+  }
+
+  if (path.startsWith('/api/accounting-heads')) {
+    return { module: 'MASTER_ACCOUNTING_HEAD', action }
   }
 
   if (path.startsWith('/api/markas')) {
