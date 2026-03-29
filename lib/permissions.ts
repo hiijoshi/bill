@@ -1,4 +1,5 @@
 export const PERMISSION_MODULES = [
+  'DASHBOARD',
   'MASTER_PRODUCTS',
   'MASTER_PARTIES',
   'MASTER_UNITS',
@@ -26,6 +27,7 @@ export type RoutePermission = {
 }
 
 export const PERMISSION_MODULE_LABELS: Record<PermissionModule, string> = {
+  DASHBOARD: 'Dashboard',
   MASTER_PRODUCTS: 'Master Products',
   MASTER_PARTIES: 'Master Parties/Farmers/Suppliers',
   MASTER_UNITS: 'Master Units',
@@ -60,6 +62,10 @@ function getActionFromMethod(method: string): PermissionAction {
 export function resolveRoutePermission(pathname: string, method: string): RoutePermission | null {
   const path = normalizePath(pathname)
   const action = getActionFromMethod(method)
+
+  if (path.startsWith('/api/main-dashboard/overview')) {
+    return { module: 'DASHBOARD', action }
+  }
 
   if (path.startsWith('/api/products')) {
     return { module: 'MASTER_PRODUCTS', action }
