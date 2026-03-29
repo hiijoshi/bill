@@ -93,25 +93,11 @@ type PaymentsApiPayload =
       data?: PaymentApiRecord[]
     }
 
-type OverviewPayload = {
-  purchaseBills?: PurchaseBill[]
-  salesBills?: SalesBill[]
-  payments?: Array<{
-    id: string
-    billType: 'purchase' | 'sales'
-    billId?: string
-    amount?: number
-    payDate?: string
-    billDate?: string
-    mode?: 'cash' | 'online' | 'bank' | string
-    status?: 'pending' | 'paid' | string
-    txnRef?: string | null
-    note?: string | null
-    createdAt?: string
-    party?: { name?: string } | null
-    farmer?: { name?: string } | null
-  }>
-}
+type BillApiPayload<T> =
+  | T[]
+  | {
+      data?: T[]
+    }
 
 const clampNonNegative = (value: number): number => {
   const parsed = Number(value)
@@ -136,6 +122,14 @@ const toDateInputValue = (value: string): string => {
 }
 
 const normalizePaymentsCollection = (payload: PaymentsApiPayload): PaymentApiRecord[] => {
+  if (Array.isArray(payload)) return payload
+  if (payload && typeof payload === 'object' && Array.isArray(payload.data)) {
+    return payload.data
+  }
+  return []
+}
+
+const normalizeBillCollection = <T,>(payload: BillApiPayload<T>): T[] => {
   if (Array.isArray(payload)) return payload
   if (payload && typeof payload === 'object' && Array.isArray(payload.data)) {
     return payload.data
@@ -241,49 +235,50 @@ export default function PaymentDashboardPage() {
         setLoading(false)
       }
 
-      const overviewParams = new URLSearchParams({
-        companyId: companyIdParam,
-        include: 'purchaseBills,salesBills'
-      })
-
-      const [overviewResponse, paymentsResponse] = await Promise.all([
-        fetch(`/api/main-dashboard/overview?${overviewParams.toString()}`),
+      const [purchaseBillsResponse, salesBillsResponse, paymentsResponse] = await Promise.all([
+        fetch(`/api/purchase-bills?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' }),
+        fetch(`/api/sales-bills?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' }),
         fetch(`/api/payments?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' })
       ])
 
-      if (overviewResponse.status === 401 || paymentsResponse.status === 401) {
+      if (
+        purchaseBillsResponse.status === 401 ||
+        salesBillsResponse.status === 401 ||
+        paymentsResponse.status === 401
+      ) {
         setLoading(false)
         router.push('/login')
         return
       }
-      if (overviewResponse.status === 403 || paymentsResponse.status === 403) {
-        setPurchaseBills([])
-        setSalesBills([])
+      if (paymentsResponse.status === 403) {
         setPayments([])
         setLoading(false)
         return
       }
 
-      const [overview, paymentsPayload] = await Promise.all([
-        overviewResponse.json().catch(() => ({} as OverviewPayload)),
+      const [purchaseBillsPayload, salesBillsPayload, paymentsPayload] = await Promise.all([
+        purchaseBillsResponse.ok
+          ? purchaseBillsResponse.json().catch(() => ([] as BillApiPayload<PurchaseBill>))
+          : Promise.resolve([] as BillApiPayload<PurchaseBill>),
+        salesBillsResponse.ok
+          ? salesBillsResponse.json().catch(() => ([] as BillApiPayload<SalesBill>))
+          : Promise.resolve([] as BillApiPayload<SalesBill>),
         paymentsResponse.json().catch(() => ([] as PaymentsApiPayload))
       ])
-      const nextPurchaseBills: PurchaseBill[] = Array.isArray(overview.purchaseBills)
-        ? overview.purchaseBills.map((bill: PurchaseBill) => ({
+      const nextPurchaseBills: PurchaseBill[] = normalizeBillCollection(purchaseBillsPayload)
+        .map((bill: PurchaseBill) => ({
             ...bill,
             totalAmount: clampNonNegative(bill.totalAmount),
             paidAmount: clampNonNegative(bill.paidAmount),
             balanceAmount: clampNonNegative(bill.balanceAmount)
           }))
-        : []
-      const nextSalesBills: SalesBill[] = Array.isArray(overview.salesBills)
-        ? overview.salesBills.map((bill: SalesBill) => ({
+      const nextSalesBills: SalesBill[] = normalizeBillCollection(salesBillsPayload)
+        .map((bill: SalesBill) => ({
             ...bill,
             totalAmount: clampNonNegative(bill.totalAmount),
             receivedAmount: clampNonNegative(bill.receivedAmount),
             balanceAmount: clampNonNegative(bill.balanceAmount)
           }))
-        : []
       setPurchaseBills(nextPurchaseBills)
       setSalesBills(nextSalesBills)
 
