@@ -401,11 +401,13 @@ export async function PUT(request: NextRequest) {
         throw new Error('Special purchase bill not found')
       }
 
+      const specialPurchaseBillId = existingBill.id
+
       const recordedPaymentAggregate = await tx.payment.aggregate({
         where: {
           companyId: body.companyId,
           billType: 'purchase',
-          billId: body.id,
+          billId: specialPurchaseBillId,
           deletedAt: null
         },
         _sum: {
@@ -462,7 +464,7 @@ export async function PUT(request: NextRequest) {
       }
 
       const updatedBill = await tx.specialPurchaseBill.update({
-        where: { id: body.id },
+        where: { id: specialPurchaseBillId },
         data: {
           companyId: body.companyId,
           supplierInvoiceNo: body.supplierInvoiceNo,
@@ -478,7 +480,7 @@ export async function PUT(request: NextRequest) {
       })
 
       const existingItem = await tx.specialPurchaseItem.findFirst({
-        where: { specialPurchaseBillId: body.id },
+        where: { specialPurchaseBillId },
       })
 
       if (existingItem) {
@@ -500,7 +502,7 @@ export async function PUT(request: NextRequest) {
       } else {
         await tx.specialPurchaseItem.create({
           data: {
-            specialPurchaseBillId: body.id,
+            specialPurchaseBillId,
             productId: body.productId,
             noOfBags: body.noOfBags ? parseInt(String(body.noOfBags), 10) : null,
             weight,
@@ -518,7 +520,7 @@ export async function PUT(request: NextRequest) {
       const existingLedger = await tx.stockLedger.findFirst({
         where: {
           refTable: 'special_purchase_bills',
-          refId: body.id,
+          refId: specialPurchaseBillId,
         },
         select: {
           id: true
@@ -543,7 +545,7 @@ export async function PUT(request: NextRequest) {
             type: 'purchase',
             qtyIn: weight,
             refTable: 'special_purchase_bills',
-            refId: body.id,
+            refId: specialPurchaseBillId,
           },
         })
       }
@@ -553,7 +555,7 @@ export async function PUT(request: NextRequest) {
           data: {
             companyId: body.companyId,
             billType: 'purchase',
-            billId: body.id,
+            billId: specialPurchaseBillId,
             billDate: billDateValue,
             payDate: billDateValue,
             amount: paymentDelta,
