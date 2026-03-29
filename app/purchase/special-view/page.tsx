@@ -124,7 +124,24 @@ function SpecialPurchaseViewContent() {
   }, [billId, fetchBill, router])
 
   const handleDelete = async () => {
-    alert('Not authorised to delete this entry.')
+    if (!bill || !companyId) return
+    if (!confirm('Are you sure you want to delete this special purchase bill? This action cannot be undone.')) {
+      return
+    }
+
+    const response = await fetch(
+      `/api/special-purchase-bills?billId=${bill.id}&companyId=${companyId}`,
+      { method: 'DELETE' }
+    )
+
+    const payload = (await response.json().catch(() => ({}))) as { error?: string }
+    if (!response.ok) {
+      alert(payload.error || 'Not authorised to delete this entry.')
+      return
+    }
+
+    alert('Special purchase bill deleted successfully!')
+    router.push('/purchase/list')
   }
 
   const handlePrint = () => {

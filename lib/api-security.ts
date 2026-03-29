@@ -16,6 +16,7 @@ export type RequestAuthContext = {
 }
 
 export const AUTH_CONTEXT_HEADER = 'x-auth-context'
+const EXPLICIT_MATRIX_MODULES = new Set(['PURCHASE_DELETE', 'SALES_DELETE'])
 
 const ROLE_ALIASES: Record<string, AppRole> = {
   super_admin: 'super_admin',
@@ -188,7 +189,13 @@ async function hasModulePermission(
   action: 'read' | 'write',
   module: string
 ): Promise<boolean> {
-  if (isSuperAdmin(auth) || auth.role === 'trader_admin' || auth.role === 'company_admin') {
+  if (isSuperAdmin(auth)) {
+    return true
+  }
+
+  const requiresExplicitMatrix = EXPLICIT_MATRIX_MODULES.has(module)
+
+  if (!requiresExplicitMatrix && (auth.role === 'trader_admin' || auth.role === 'company_admin')) {
     return true
   }
 
@@ -227,17 +234,17 @@ export async function filterCompanyIdsByRoutePermission(
   pathname: string,
   method: string
 ): Promise<string[]> {
-  if (
-    companyIds.length === 0 ||
-    isSuperAdmin(auth) ||
-    auth.role === 'trader_admin' ||
-    auth.role === 'company_admin'
-  ) {
+  if (companyIds.length === 0 || isSuperAdmin(auth)) {
     return companyIds
   }
 
   const routePermission = resolveRoutePermission(pathname, method)
   if (!routePermission) {
+    return companyIds
+  }
+
+  const requiresExplicitMatrix = EXPLICIT_MATRIX_MODULES.has(routePermission.module)
+  if (!requiresExplicitMatrix && (auth.role === 'trader_admin' || auth.role === 'company_admin')) {
     return companyIds
   }
 

@@ -602,9 +602,57 @@ export async function DELETE(request: NextRequest) {
     }
 
     const denied = await ensureCompanyAccess(request, companyId)
-    if (denied) return denied
+    if (denied) {
+      if (denied.status === 403) {
+        return NextResponse.json({ error: 'Not authorised to delete this entry.' }, { status: 403 })
+      }
+      return denied
+    }
 
-    return NextResponse.json({ error: 'Not authorised to delete this entry.' }, { status: 403 })
+    const specialPurchaseBill = await prisma.specialPurchaseBill.findFirst({
+      where: {
+        id: billId,
+        companyId,
+      },
+    })
+
+    if (!specialPurchaseBill) {
+      return NextResponse.json({ error: 'Special purchase bill not found' }, { status: 404 })
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const deletedAt = new Date()
+
+      await tx.specialPurchaseItem.deleteMany({
+        where: { specialPurchaseBillId: billId },
+      })
+
+      await tx.stockLedger.deleteMany({
+        where: {
+          refTable: 'special_purchase_bills',
+          refId: billId,
+        },
+      })
+
+      await tx.payment.updateMany({
+        where: {
+          companyId,
+          billType: 'purchase',
+          billId,
+          deletedAt: null
+        },
+        data: {
+          deletedAt,
+          status: 'pending'
+        }
+      })
+
+      await tx.specialPurchaseBill.delete({
+        where: { id: billId },
+      })
+    })
+
+    return NextResponse.json({ success: true, message: 'Special purchase bill deleted successfully' })
   } catch (error) {
     console.error('Error deleting special purchase bill:', error)
     const errorMessage = error instanceof Error ? error.message : 'Internal server error'

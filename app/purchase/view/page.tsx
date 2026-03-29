@@ -120,7 +120,30 @@ function PurchaseViewPageContent() {
   }
 
   const handleDelete = () => {
-    alert('Not authorised to delete this entry.')
+    if (!billId) return
+    if (!confirm('Are you sure you want to delete this purchase bill? This action cannot be undone.')) {
+      return
+    }
+
+    void (async () => {
+      try {
+        const response = await fetch(`/api/purchase-bills?billId=${billId}&companyId=${companyId}`, {
+          method: 'DELETE'
+        })
+
+        const payload = (await response.json().catch(() => ({}))) as { error?: string }
+        if (!response.ok) {
+          alert(payload.error || 'Not authorised to delete this entry.')
+          return
+        }
+
+        alert('Purchase bill deleted successfully!')
+        router.push('/purchase/list')
+      } catch (error) {
+        console.error('Error deleting purchase bill:', error)
+        alert(error instanceof Error ? error.message : 'Failed to delete purchase bill')
+      }
+    })()
   }
 
   const handlePrint = () => {

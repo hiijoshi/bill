@@ -831,9 +831,55 @@ export async function DELETE(request: NextRequest) {
     }
 
     const denied = await ensureCompanyAccess(request, companyId)
-    if (denied) return denied
+    if (denied) {
+      if (denied.status === 403) {
+        return NextResponse.json({ error: 'Not authorised to delete this entry.' }, { status: 403 })
+      }
+      return denied
+    }
 
-    return NextResponse.json({ error: 'Not authorised to delete this entry.' }, { status: 403 })
+    const existing = await prisma.salesBill.findFirst({
+      where: {
+        id: billId,
+        companyId
+      },
+      select: { id: true }
+    })
+
+    if (!existing) {
+      return NextResponse.json({ error: 'Sales bill not found' }, { status: 404 })
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const deletedAt = new Date()
+
+      await tx.stockLedger.deleteMany({
+        where: {
+          companyId,
+          refTable: 'sales_bills',
+          refId: billId
+        }
+      })
+
+      await tx.payment.updateMany({
+        where: {
+          companyId,
+          billType: 'sales',
+          billId,
+          deletedAt: null
+        },
+        data: {
+          deletedAt,
+          status: 'pending'
+        }
+      })
+
+      await tx.salesBill.delete({
+        where: { id: billId }
+      })
+    })
+
+    return NextResponse.json({ success: true })
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },

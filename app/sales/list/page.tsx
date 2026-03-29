@@ -411,8 +411,28 @@ export default function SalesListPage() {
     router.push(editPath)
   }
 
-  const handleDelete = (_billId: string) => {
-    alert('Not authorised to delete this entry.')
+  const handleDelete = async (billId: string) => {
+    if (!confirm('Are you sure you want to delete this sales bill? This action cannot be undone.')) {
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/sales-bills?billId=${billId}&companyId=${companyId}`, {
+        method: 'DELETE'
+      })
+
+      const payload = (await response.json().catch(() => ({}))) as { error?: string }
+      if (!response.ok) {
+        alert(payload.error || 'Not authorised to delete this entry.')
+        return
+      }
+
+      alert('Sales bill deleted successfully!')
+      void fetchSalesBills()
+    } catch (error) {
+      console.error('Error deleting sales bill:', error)
+      alert(error instanceof Error ? error.message : 'Failed to delete sales bill')
+    }
   }
 
   const handlePrint = (billId: string) => {

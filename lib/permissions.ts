@@ -10,8 +10,10 @@ export const PERMISSION_MODULES = [
   'MASTER_SALES_ITEM',
   'PURCHASE_ENTRY',
   'PURCHASE_LIST',
+  'PURCHASE_DELETE',
   'SALES_ENTRY',
   'SALES_LIST',
+  'SALES_DELETE',
   'STOCK_ADJUSTMENT',
   'STOCK_DASHBOARD',
   'PAYMENTS',
@@ -38,8 +40,10 @@ export const PERMISSION_MODULE_LABELS: Record<PermissionModule, string> = {
   MASTER_SALES_ITEM: 'Master Sales Item',
   PURCHASE_ENTRY: 'Purchase Entry',
   PURCHASE_LIST: 'Purchase List',
+  PURCHASE_DELETE: 'Purchase Delete (Write)',
   SALES_ENTRY: 'Sales Entry',
   SALES_LIST: 'Sales List',
+  SALES_DELETE: 'Sales Delete (Write)',
   STOCK_ADJUSTMENT: 'Stock Adjustment',
   STOCK_DASHBOARD: 'Stock Dashboard',
   PAYMENTS: 'Payments',
@@ -100,6 +104,13 @@ export function resolveRoutePermission(pathname: string, method: string): RouteP
   }
 
   if (path.startsWith('/api/purchase-bills') || path.startsWith('/api/special-purchase-bills')) {
+    if (method.toUpperCase() === 'DELETE') {
+      return {
+        module: 'PURCHASE_DELETE',
+        action: 'write'
+      }
+    }
+
     return {
       module: action === 'read' ? 'PURCHASE_LIST' : 'PURCHASE_ENTRY',
       action
@@ -107,6 +118,13 @@ export function resolveRoutePermission(pathname: string, method: string): RouteP
   }
 
   if (path.startsWith('/api/sales-bills') || path.startsWith('/api/sales-invoices')) {
+    if (method.toUpperCase() === 'DELETE') {
+      return {
+        module: 'SALES_DELETE',
+        action: 'write'
+      }
+    }
+
     return {
       module: action === 'read' ? 'SALES_LIST' : 'SALES_ENTRY',
       action

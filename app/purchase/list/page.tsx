@@ -481,8 +481,30 @@ export default function PurchaseListPage() {
     router.push(path)
   }
 
-  const handleDelete = (_bill: PurchaseBill) => {
-    alert('Not authorised to delete this entry.')
+  const handleDelete = async (bill: PurchaseBill) => {
+    const billTypeLabel = bill.type === 'regular' ? 'purchase' : 'special purchase'
+    if (!confirm(`Are you sure you want to delete this ${billTypeLabel} bill? This action cannot be undone.`)) {
+      return
+    }
+
+    try {
+      const apiUrl = bill.type === 'regular' ? '/api/purchase-bills' : '/api/special-purchase-bills'
+      const response = await fetch(`${apiUrl}?billId=${bill.id}&companyId=${companyId}`, {
+        method: 'DELETE'
+      })
+
+      const payload = (await response.json().catch(() => ({}))) as { error?: string }
+      if (!response.ok) {
+        alert(payload.error || 'Not authorised to delete this entry.')
+        return
+      }
+
+      alert(`${bill.type === 'regular' ? 'Purchase' : 'Special Purchase'} bill deleted successfully!`)
+      void fetchPurchaseBills()
+    } catch (error) {
+      console.error('Error deleting bill:', error)
+      alert(error instanceof Error ? error.message : 'Failed to delete bill')
+    }
   }
 
   const handlePrint = (bill: PurchaseBill) => {
