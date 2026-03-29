@@ -1143,7 +1143,7 @@ export default function OperationsReportWorkspace({
         title: 'Daily Consolidated Report',
         subtitle,
         fileName: `daily-consolidated-${scopeLabel}-${dateFrom}-${dateTo}.csv`,
-        headers: ['Date', 'Total Sales', 'Total Purchase', 'Stock Adjustment (Qt.)', 'Purchase Payment', 'Sales Receipt', 'Net Cashflow', 'Transactions', 'Companies'],
+        headers: ['Date', 'Total Sales', 'Total Purchase', 'Stock Adjustment (Qt.)', 'Outgoing Payment', 'Incoming Receipt', 'Net Cashflow', 'Transactions', 'Companies'],
         rows: filteredDailyConsolidated.map((row) => [
           formatDateLabel(row.date),
           numberText(row.totalSales),
@@ -1606,8 +1606,8 @@ export default function OperationsReportWorkspace({
         {[
           { label: 'Total Sales', value: currencyText(summary.totalSaleAmount), tone: 'text-slate-900', shell: 'bg-white', accent: 'bg-slate-900/80' },
           { label: 'Total Purchase', value: currencyText(summary.totalPurchaseAmount), tone: 'text-slate-900', shell: 'bg-white', accent: 'bg-slate-400' },
-          { label: 'Purchase Payment', value: currencyText(summary.totalPaidAmount), tone: 'text-rose-700', shell: 'bg-rose-50/70', accent: 'bg-rose-500' },
-          { label: 'Sales Receipt', value: currencyText(summary.totalReceivedAmount), tone: 'text-emerald-700', shell: 'bg-emerald-50/70', accent: 'bg-emerald-500' },
+          { label: 'Outgoing Payment', value: currencyText(summary.totalPaidAmount), tone: 'text-rose-700', shell: 'bg-rose-50/70', accent: 'bg-rose-500' },
+          { label: 'Incoming Receipt', value: currencyText(summary.totalReceivedAmount), tone: 'text-emerald-700', shell: 'bg-emerald-50/70', accent: 'bg-emerald-500' },
           { label: 'Sales Outstanding', value: currencyText(summary.salesBalanceTotal), tone: 'text-amber-700', shell: 'bg-amber-50/70', accent: 'bg-amber-500' },
           {
             label: 'Net Outstanding',
@@ -1978,8 +1978,8 @@ export default function OperationsReportWorkspace({
                       <TableHead className="text-right">Total Sales</TableHead>
                       <TableHead className="text-right">Total Purchase</TableHead>
                       <TableHead className="text-right">Stock Adjustment (Qt.)</TableHead>
-                      <TableHead className="text-right">Purchase Payment</TableHead>
-                      <TableHead className="text-right">Sales Receipt</TableHead>
+                      <TableHead className="text-right">Outgoing Payment</TableHead>
+                      <TableHead className="text-right">Incoming Receipt</TableHead>
                       <TableHead className="text-right">Net Cashflow</TableHead>
                       <TableHead className="text-right">Transactions</TableHead>
                       <TableHead className="text-right">Companies</TableHead>

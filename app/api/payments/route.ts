@@ -27,6 +27,7 @@ import {
   getPaymentTypeLabel,
   isBillLinkedPaymentType,
   isCashBankPaymentType,
+  isCashBankReceiptType,
   isPaymentEntryType,
   isPurchasePaymentType,
   isSalesReceiptType,
@@ -465,7 +466,7 @@ export async function GET(request: NextRequest) {
         payment.farmer?.name ||
         purchaseBillMap.get(payment.billId)?.partyName ||
         specialPurchaseBillMap.get(payment.billId)?.partyName ||
-        (isCashBankPaymentType(payment.billType)
+        (isCashBankPaymentType(payment.billType) || isCashBankReceiptType(payment.billType)
           ? String(payment.bankNameSnapshot || '').trim()
           : isSelfTransferPaymentType(payment.billType)
           ? [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')

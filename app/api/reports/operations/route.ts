@@ -19,6 +19,7 @@ import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-sch
 import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
 import {
   getPaymentTypeLabel,
+  isIncomingCashflowPaymentType,
   isOutgoingCashflowPaymentType,
   isSalesReceiptType,
   isSelfTransferPaymentType
@@ -1215,10 +1216,10 @@ export async function GET(request: NextRequest) {
       for (const payment of payments) {
       const key = dateKey(payment.payDate)
       const amount = roundCurrency(normalizeNonNegative(payment.amount))
-      const isSalesReceipt = isSalesReceiptType(payment.billType)
+      const isIncomingReceipt = isIncomingCashflowPaymentType(payment.billType)
       const isOutgoingPayment = isOutgoingCashflowPaymentType(payment.billType)
       const isSelfTransfer = isSelfTransferPaymentType(payment.billType)
-      const refNo = isSalesReceipt
+      const refNo = isIncomingReceipt
         ? String(salesBillNoMap.get(payment.billId) || payment.txnRef || '')
         : payment.billType === 'purchase'
           ? String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || payment.txnRef || '')
@@ -1226,7 +1227,7 @@ export async function GET(request: NextRequest) {
       const bankName = String(payment.bankNameSnapshot || '').trim() || '-'
 
       addDailyMetric(dailySummaryMap, key, payment.companyId, (row) => {
-        if (isSalesReceipt) {
+        if (isIncomingReceipt) {
           row.totalSalesReceipt += amount
         } else if (isOutgoingPayment) {
           row.totalPurchasePayment += amount
@@ -1238,7 +1239,7 @@ export async function GET(request: NextRequest) {
         date: key,
         companyId: payment.companyId,
         companyName: companyNameMap.get(payment.companyId) || payment.companyId,
-        category: isSelfTransfer ? 'transfer' : isSalesReceipt ? 'payment-in' : isOutgoingPayment ? 'payment-out' : 'payment',
+        category: isSelfTransfer ? 'transfer' : isIncomingReceipt ? 'payment-in' : isOutgoingPayment ? 'payment-out' : 'payment',
         type: getPaymentTypeLabel(payment.billType),
         refNo,
         partyName: isSelfTransfer
@@ -1247,7 +1248,7 @@ export async function GET(request: NextRequest) {
         productName: '-',
         amount,
         quantity: 0,
-        direction: isSelfTransfer ? 'TRANSFER' : isSalesReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-',
+        direction: isSelfTransfer ? 'TRANSFER' : isIncomingReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-',
         paymentMode: formatPaymentMode(payment.mode),
         bankName,
         note: String(payment.note || '').trim() || formatPaymentMode(payment.mode)
@@ -1302,11 +1303,11 @@ export async function GET(request: NextRequest) {
       ? payments
           .filter((payment) => isBankLikePayment(payment))
           .map((payment) => {
-            const isSalesReceipt = isSalesReceiptType(payment.billType)
+            const isIncomingReceipt = isIncomingCashflowPaymentType(payment.billType)
             const isOutgoingPayment = isOutgoingCashflowPaymentType(payment.billType)
             const isSelfTransfer = isSelfTransferPaymentType(payment.billType)
             const amount = roundCurrency(normalizeNonNegative(payment.amount))
-            const billNo = isSalesReceipt
+            const billNo = isIncomingReceipt
               ? String(salesBillNoMap.get(payment.billId) || '')
               : payment.billType === 'purchase'
                 ? String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || '')
@@ -1316,7 +1317,7 @@ export async function GET(request: NextRequest) {
               date: dateKey(payment.payDate),
               companyId: payment.companyId,
               companyName: companyNameMap.get(payment.companyId) || payment.companyId,
-              direction: isSelfTransfer ? 'TRANSFER' : isSalesReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-',
+              direction: isSelfTransfer ? 'TRANSFER' : isIncomingReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-',
               billType: getPaymentTypeLabel(payment.billType),
               billNo,
               refNo: billNo || String(payment.txnRef || ''),
@@ -1325,7 +1326,7 @@ export async function GET(request: NextRequest) {
                 : String(payment.party?.name || payment.farmer?.name || payment.bankNameSnapshot || ''),
               bankName: String(payment.bankNameSnapshot || '').trim() || 'Bank / Online',
               mode: formatPaymentMode(payment.mode),
-              amountIn: roundCurrency(isSalesReceipt ? amount : 0),
+              amountIn: roundCurrency(isIncomingReceipt ? amount : 0),
               amountOut: roundCurrency(isOutgoingPayment ? amount : 0),
               txnRef: String(payment.txnRef || ''),
               ifscCode: String(payment.ifscCode || ''),
@@ -1336,16 +1337,23 @@ export async function GET(request: NextRequest) {
           .sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName))
       : []
 
-      const paymentTotalsMap = new Map(
-      paymentTotalsByType.map((row) => [row.billType, normalizeNonNegative(row._sum.amount)])
-      )
       const totalSaleAmount = roundCurrency(normalizeNonNegative(salesTotalAggregate._sum.totalAmount))
       const totalPurchaseAmount = roundCurrency(
       normalizeNonNegative(purchaseTotalAggregate._sum.totalAmount) +
         normalizeNonNegative(specialPurchaseTotalAggregate._sum.totalAmount)
       )
-      const totalPaidAmount = roundCurrency(paymentTotalsMap.get('purchase') || 0)
-      const totalReceivedAmount = roundCurrency(paymentTotalsMap.get('sales') || 0)
+      const totalPaidAmount = roundCurrency(
+        paymentTotalsByType.reduce(
+          (sum, row) => sum + (isOutgoingCashflowPaymentType(row.billType) ? normalizeNonNegative(row._sum.amount) : 0),
+          0
+        )
+      )
+      const totalReceivedAmount = roundCurrency(
+        paymentTotalsByType.reduce(
+          (sum, row) => sum + (isIncomingCashflowPaymentType(row.billType) ? normalizeNonNegative(row._sum.amount) : 0),
+          0
+        )
+      )
       const purchaseBalanceTotal = roundCurrency(
       purchaseBillsAsOf.reduce(
         (sum, bill) => sum + Math.max(0, normalizeNonNegative(bill.totalAmount) - (purchasePaidByBillId.get(bill.id) || 0)),

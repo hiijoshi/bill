@@ -9,9 +9,14 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Plus, Eye } from 'lucide-react'
+import { Plus, Eye, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
-import { getPaymentTypeLabel, isPaymentEntryType } from '@/lib/payment-entry-types'
+import {
+  getPaymentTypeLabel,
+  isIncomingCashflowPaymentType,
+  isOutgoingCashflowPaymentType,
+  isPaymentEntryType
+} from '@/lib/payment-entry-types'
 
 interface PurchaseBill {
   id: string
@@ -212,11 +217,11 @@ export default function PaymentTab({
 
   const paymentStats = useMemo(() => ({
     totalPayments: paymentsData.reduce((sum, payment) => sum + clampNonNegative(payment.amount), 0),
-    purchasePayments: paymentsData
-      .filter((payment) => payment.billType === 'purchase')
+    outgoingPayments: paymentsData
+      .filter((payment) => isOutgoingCashflowPaymentType(payment.billType))
       .reduce((sum, payment) => sum + clampNonNegative(payment.amount), 0),
-    salesReceipts: paymentsData
-      .filter((payment) => payment.billType === 'sales')
+    incomingReceipts: paymentsData
+      .filter((payment) => isIncomingCashflowPaymentType(payment.billType))
       .reduce((sum, payment) => sum + clampNonNegative(payment.amount), 0),
     count: paymentsData.length
   }), [paymentsData])
@@ -241,9 +246,9 @@ export default function PaymentTab({
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <h2 className="text-2xl font-bold">Payment Management</h2>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button onClick={() => router.push('/payment/purchase/entry')}>
             <Plus className="w-4 h-4 mr-2" />
             Record Purchase Payment
@@ -255,6 +260,10 @@ export default function PaymentTab({
           <Button onClick={() => router.push('/payment/cash-bank/entry')}>
             <Plus className="w-4 h-4 mr-2" />
             Cash / Bank Payment
+          </Button>
+          <Button onClick={() => router.push('/payment/bank-statement/upload')}>
+            <Upload className="w-4 h-4 mr-2" />
+            Upload Bank Statement
           </Button>
           <Button onClick={() => router.push('/payment/self-transfer/entry')}>
             <Plus className="w-4 h-4 mr-2" />
@@ -280,16 +289,16 @@ export default function PaymentTab({
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">
-              <p className="text-sm text-gray-600">Purchase Payments</p>
-              <p className="text-2xl font-bold text-red-600">₹{paymentStats.purchasePayments.toFixed(2)}</p>
+              <p className="text-sm text-gray-600">Outgoing Payments</p>
+              <p className="text-2xl font-bold text-red-600">₹{paymentStats.outgoingPayments.toFixed(2)}</p>
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">
-              <p className="text-sm text-gray-600">Sales Receipts</p>
-              <p className="text-2xl font-bold text-green-600">₹{paymentStats.salesReceipts.toFixed(2)}</p>
+              <p className="text-sm text-gray-600">Incoming Receipts</p>
+              <p className="text-2xl font-bold text-green-600">₹{paymentStats.incomingReceipts.toFixed(2)}</p>
             </div>
           </CardContent>
         </Card>
@@ -414,7 +423,7 @@ export default function PaymentTab({
             <div>
               <Label htmlFor="filterBillType">Bill Type</Label>
               <Select value={filterBillType} onValueChange={setFilterBillType}>
-                <SelectTrigger>
+                <SelectTrigger id="filterBillType">
                   <SelectValue placeholder="All Types" />
                 </SelectTrigger>
                 <SelectContent>
@@ -422,6 +431,7 @@ export default function PaymentTab({
                   <SelectItem value="purchase">Purchase</SelectItem>
                   <SelectItem value="sales">Sales</SelectItem>
                   <SelectItem value="cash_bank_payment">Cash / Bank Payment</SelectItem>
+                  <SelectItem value="cash_bank_receipt">Cash / Bank Receipt</SelectItem>
                   <SelectItem value="self_transfer">Self Transfer</SelectItem>
                 </SelectContent>
               </Select>

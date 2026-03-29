@@ -1,12 +1,14 @@
 export const PURCHASE_PAYMENT_TYPE = 'purchase'
 export const SALES_RECEIPT_TYPE = 'sales'
 export const CASH_BANK_PAYMENT_TYPE = 'cash_bank_payment'
+export const CASH_BANK_RECEIPT_TYPE = 'cash_bank_receipt'
 export const SELF_TRANSFER_PAYMENT_TYPE = 'self_transfer'
 
 export const PAYMENT_ENTRY_TYPES = [
   PURCHASE_PAYMENT_TYPE,
   SALES_RECEIPT_TYPE,
   CASH_BANK_PAYMENT_TYPE,
+  CASH_BANK_RECEIPT_TYPE,
   SELF_TRANSFER_PAYMENT_TYPE
 ] as const
 
@@ -36,18 +38,23 @@ export function isSelfTransferPaymentType(value: unknown): value is typeof SELF_
   return value === SELF_TRANSFER_PAYMENT_TYPE
 }
 
+export function isCashBankReceiptType(value: unknown): value is typeof CASH_BANK_RECEIPT_TYPE {
+  return value === CASH_BANK_RECEIPT_TYPE
+}
+
 export function isOutgoingCashflowPaymentType(value: unknown): boolean {
   return isPurchasePaymentType(value) || isCashBankPaymentType(value)
 }
 
 export function isIncomingCashflowPaymentType(value: unknown): boolean {
-  return isSalesReceiptType(value)
+  return isSalesReceiptType(value) || isCashBankReceiptType(value)
 }
 
 export function getPaymentTypeLabel(value: unknown): string {
   if (isPurchasePaymentType(value)) return 'Purchase Payment'
   if (isSalesReceiptType(value)) return 'Sales Receipt'
   if (isCashBankPaymentType(value)) return 'Cash / Bank Payment'
+  if (isCashBankReceiptType(value)) return 'Cash / Bank Receipt'
   if (isSelfTransferPaymentType(value)) return 'Self Transfer'
   return 'Payment'
 }

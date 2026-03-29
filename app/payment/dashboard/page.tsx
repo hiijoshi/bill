@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { Edit, Eye, Plus } from 'lucide-react'
+import { Edit, Eye, Plus, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
@@ -489,12 +489,16 @@ export default function PaymentDashboardPage() {
     <DashboardLayout companyId={companyId}>
       <div className="p-6">
         <div className="max-w-7xl mx-auto">
-          <div className="flex justify-between items-center mb-6">
+          <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <h1 className="text-3xl font-bold">Payment Management</h1>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => router.push('/payment/cash-bank/entry')}>
                 <Plus className="w-4 h-4 mr-1" />
                 Cash / Bank Payment
+              </Button>
+              <Button variant="outline" onClick={() => router.push('/payment/bank-statement/upload')}>
+                <Upload className="w-4 h-4 mr-1" />
+                Upload Bank Statement
               </Button>
               <Button variant="outline" onClick={() => router.push('/payment/self-transfer/entry')}>
                 <Plus className="w-4 h-4 mr-1" />
@@ -666,6 +670,7 @@ export default function PaymentDashboardPage() {
                       <SelectItem value="purchase">Purchase Payment</SelectItem>
                       <SelectItem value="sales">Sales Receipt</SelectItem>
                       <SelectItem value="cash_bank_payment">Cash / Bank Payment</SelectItem>
+                      <SelectItem value="cash_bank_receipt">Cash / Bank Receipt</SelectItem>
                       <SelectItem value="self_transfer">Self Transfer</SelectItem>
                     </SelectContent>
                   </Select>

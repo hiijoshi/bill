@@ -80,6 +80,7 @@ const menuItems: MenuItem[] = [
       { title: 'Record Sales Receipt', href: '/payment/sales/entry', permissionModule: 'PAYMENTS' },
       { title: 'Record Cash / Bank Payment', href: '/payment/cash-bank/entry', permissionModule: 'PAYMENTS' },
       { title: 'Record Self Transfer', href: '/payment/self-transfer/entry', permissionModule: 'PAYMENTS' },
+      { title: 'Upload Bank Statement', href: '/payment/bank-statement/upload', permissionModule: 'PAYMENTS' },
       { title: 'Payment History', href: '/payment/dashboard', permissionModule: 'PAYMENTS' },
     ],
   },
