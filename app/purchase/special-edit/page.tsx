@@ -329,7 +329,7 @@ function SpecialPurchaseEditPageContent() {
       router.push('/purchase/list')
     } catch (error) {
       console.error('Error updating bill:', error)
-      alert('Error updating special purchase bill')
+      alert(error instanceof Error ? error.message : 'Error updating special purchase bill')
     }
   }
 

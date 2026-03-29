@@ -338,7 +338,7 @@ function PurchaseEditPageContent() {
       router.push('/purchase/list')
     } catch (error) {
       console.error('Error updating bill:', error)
-      alert('Error updating purchase bill')
+      alert(error instanceof Error ? error.message : 'Error updating purchase bill')
     }
   }
 

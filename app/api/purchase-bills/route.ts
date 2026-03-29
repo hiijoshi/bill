@@ -860,7 +860,14 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ success: true, id: purchaseBill.id, purchaseBill })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Internal server error'
-    const status = message.includes('cannot exceed') ? 400 : message.includes('not found') ? 404 : 500
+    const status =
+      message.includes('cannot exceed') ||
+      message.includes('cannot be less than') ||
+      message.includes('recorded payment history')
+        ? 400
+        : message.includes('not found')
+          ? 404
+          : 500
     return NextResponse.json(
       {
         error: message
