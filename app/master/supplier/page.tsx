@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Truck, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { getCompanyIdFromSearch } from '@/lib/company-context'
@@ -388,40 +389,43 @@ export default function SupplierMasterPage() {
     <DashboardLayout companyId={companyId}>
       <div className="p-6">
         <div className="mx-auto max-w-6xl">
-          <div className="mb-6 flex items-center justify-between">
+          <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-3">
               <Truck className="h-8 w-8 text-cyan-600" />
               <h1 className="text-3xl font-bold">Supplier Master</h1>
             </div>
-            <div className="flex gap-2">
-              <input
-                ref={importInputRef}
-                type="file"
-                accept=".csv,text/csv"
-                className="hidden"
-                onChange={async (event) => {
-                  const file = event.target.files?.[0]
-                  event.target.value = ''
-                  if (!file) return
-                  await handleImportCsv(file)
-                }}
-              />
-              {canWriteSupplier ? (
-                <Button onClick={() => importInputRef.current?.click()} variant="outline">
-                  <Upload className="mr-2 h-4 w-4" />
-                  Import CSV
-                </Button>
-              ) : null}
-              <Button onClick={handleExportCsv} variant="outline">Export CSV</Button>
-              {canWriteSupplier ? (
-                <Button onClick={handleDeleteAll} variant="destructive">Delete All</Button>
-              ) : null}
-              {canWriteSupplier ? (
-                <Button onClick={() => setIsFormOpen(true)} className="flex items-center gap-2">
-                <Plus className="h-4 w-4" />
-                Add Supplier
-                </Button>
-              ) : null}
+            <div className="flex flex-col gap-2 md:items-end">
+              <div className="flex flex-wrap gap-2 md:justify-end">
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0]
+                    event.target.value = ''
+                    if (!file) return
+                    await handleImportCsv(file)
+                  }}
+                />
+                {canWriteSupplier ? (
+                  <Button onClick={() => importInputRef.current?.click()} variant="outline">
+                    <Upload className="mr-2 h-4 w-4" />
+                    Import CSV
+                  </Button>
+                ) : null}
+                <Button onClick={handleExportCsv} variant="outline">Export CSV</Button>
+                {canWriteSupplier ? (
+                  <Button onClick={handleDeleteAll} variant="destructive">Delete All</Button>
+                ) : null}
+                {canWriteSupplier ? (
+                  <Button onClick={() => setIsFormOpen(true)} className="flex items-center gap-2">
+                  <Plus className="h-4 w-4" />
+                  Add Supplier
+                  </Button>
+                ) : null}
+              </div>
+              <MasterCsvTemplateHint templateKey="supplier" />
             </div>
           </div>
 

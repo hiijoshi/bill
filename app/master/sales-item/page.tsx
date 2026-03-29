@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Package, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { isAbortError } from '@/lib/http'
@@ -398,35 +399,38 @@ export default function SalesItemMasterPage() {
               {errorMessage}
             </div>
           )}
-          <div className="flex justify-between items-center mb-6">
+          <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-3">
               <Package className="h-8 w-8 text-teal-600" />
               <h1 className="text-3xl font-bold">Sales Item Master</h1>
             </div>
-            <div className="flex gap-2">
-              <input
-                ref={importInputRef}
-                type="file"
-                accept=".csv,text/csv"
-                className="hidden"
-                onChange={async (event) => {
-                  const file = event.target.files?.[0]
-                  event.target.value = ''
-                  if (!file) return
-                  await handleImportCsv(file)
-                }}
-              />
-              <Button variant="outline" onClick={() => importInputRef.current?.click()}>
-                <Upload className="mr-2 h-4 w-4" />
-                Import CSV
-              </Button>
-              <Button variant="outline" onClick={handleExportCsv}>
-                Export CSV
-              </Button>
-              <Button onClick={() => setIsFormOpen(true)} className="flex items-center gap-2">
-                <Plus className="h-4 w-4" />
-                Add Sales Item
-              </Button>
+            <div className="flex flex-col gap-2 md:items-end">
+              <div className="flex flex-wrap gap-2 md:justify-end">
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0]
+                    event.target.value = ''
+                    if (!file) return
+                    await handleImportCsv(file)
+                  }}
+                />
+                <Button variant="outline" onClick={() => importInputRef.current?.click()}>
+                  <Upload className="mr-2 h-4 w-4" />
+                  Import CSV
+                </Button>
+                <Button variant="outline" onClick={handleExportCsv}>
+                  Export CSV
+                </Button>
+                <Button onClick={() => setIsFormOpen(true)} className="flex items-center gap-2">
+                  <Plus className="h-4 w-4" />
+                  Add Sales Item
+                </Button>
+              </div>
+              <MasterCsvTemplateHint templateKey="sales-item" />
             </div>
           </div>
 

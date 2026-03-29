@@ -9,24 +9,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, LayoutDashboard, ShoppingCart, 
 import { useCallback, useEffect, useState } from 'react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { APP_COMPANY_CHANGED_EVENT, notifyAppCompanyChanged } from '@/lib/company-context'
-
-type MenuPermissionModule =
-  | 'MASTER_PRODUCTS'
-  | 'MASTER_SALES_ITEM'
-  | 'MASTER_MARKA'
-  | 'MASTER_PARTIES'
-  | 'MASTER_TRANSPORT'
-  | 'MASTER_UNITS'
-  | 'MASTER_PAYMENT_MODE'
-  | 'MASTER_BANK'
-  | 'PURCHASE_ENTRY'
-  | 'PURCHASE_LIST'
-  | 'SALES_ENTRY'
-  | 'SALES_LIST'
-  | 'STOCK_ADJUSTMENT'
-  | 'STOCK_DASHBOARD'
-  | 'PAYMENTS'
-  | 'REPORTS'
+import type { PermissionModule as MenuPermissionModule } from '@/lib/permissions'
 
 type MenuChild = {
   title: string
@@ -38,6 +21,7 @@ type MenuItem = {
   title: string
   href?: string
   icon: LucideIcon
+  permissionModule?: MenuPermissionModule
   children: MenuChild[]
 }
 
@@ -46,6 +30,7 @@ const menuItems: MenuItem[] = [
     title: 'Dashboard',
     href: '/main/dashboard',
     icon: LayoutDashboard,
+    permissionModule: 'DASHBOARD',
     children: [],
   },
   {
@@ -104,6 +89,11 @@ const menuItems: MenuItem[] = [
       { title: 'Purchase Report', href: '/reports/main?reportType=purchase', permissionModule: 'REPORTS' },
       { title: 'Sales Report', href: '/reports/main?reportType=sales', permissionModule: 'REPORTS' },
       { title: 'Stock Report', href: '/reports/main?reportType=stock', permissionModule: 'REPORTS' },
+      { title: 'Outstanding Report', href: '/reports/main?reportType=operations&view=outstanding', permissionModule: 'REPORTS' },
+      { title: 'Party Ledger', href: '/reports/main?reportType=operations&view=ledger', permissionModule: 'REPORTS' },
+      { title: 'Daily Transaction', href: '/reports/main?reportType=operations&view=daily-transaction', permissionModule: 'REPORTS' },
+      { title: 'Daily Consolidated', href: '/reports/main?reportType=operations&view=daily-consolidated', permissionModule: 'REPORTS' },
+      { title: 'Bank Ledger', href: '/reports/main?reportType=operations&view=bank-ledger', permissionModule: 'REPORTS' },
     ],
   },
 ]
@@ -246,6 +236,12 @@ export default function Sidebar({
     return allowedModules.has(child.permissionModule)
   }, [allowedModules])
 
+  const hasItemAccess = useCallback((item: MenuItem) => {
+    if (!item.permissionModule) return true
+    if (!allowedModules) return true
+    return allowedModules.has(item.permissionModule)
+  }, [allowedModules])
+
   const toggleItem = (title: string) => {
     setOpenItems(prev =>
       prev.includes(title)
@@ -330,6 +326,31 @@ export default function Sidebar({
           const active = isParentActive(item)
 
           if (!hasChildren) {
+            if (!hasItemAccess(item)) {
+              return (
+                <Button
+                  key={item.title}
+                  variant="ghost"
+                  disabled
+                  className={cn(
+                    'mb-2 h-12 w-full justify-between rounded-xl px-4 text-[15px] font-medium opacity-60 cursor-not-allowed',
+                    isCollapsed && 'h-11 justify-center px-0'
+                  )}
+                >
+                  <div className="flex items-center">
+                    {item.icon && <item.icon className={cn("h-4 w-4", isCollapsed ? "md:mr-0" : "mr-3")} />}
+                    <span className={cn(isCollapsed && 'md:hidden')}>{item.title}</span>
+                  </div>
+                  {!isCollapsed ? (
+                    <span className="inline-flex items-center gap-1 text-[10px]">
+                      <Lock className="h-3 w-3" />
+                      No Access
+                    </span>
+                  ) : null}
+                </Button>
+              )
+            }
+
             return (
               <Link key={item.title} href={withCompany(item.href)} onClick={handleNavigate}>
                 <Button

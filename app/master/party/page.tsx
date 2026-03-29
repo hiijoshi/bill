@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Upload, Users } from 'lucide-react'
 import { getCompanyIdFromSearch } from '@/lib/company-context'
 import { useRouter } from 'next/navigation'
@@ -445,38 +446,41 @@ export default function PartyMasterPage() {
     <DashboardLayout companyId={companyId}>
       <div className="p-6">
         <div className="max-w-6xl mx-auto">
-          <div className="flex justify-between items-center mb-6">
+          <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-3">
               <Users className="h-8 w-8 text-purple-600" />
               <h1 className="text-3xl font-bold">Party Master</h1>
             </div>
-            <div className="flex gap-2">
-              <input
-                ref={importInputRef}
-                type="file"
-                accept=".csv,text/csv"
-                className="hidden"
-                onChange={async (event) => {
-                  const file = event.target.files?.[0]
-                  if (!file) return
-                  await handleImportCsv(file)
-                  event.target.value = ''
-                }}
-              />
-              <Button
-                onClick={() => importInputRef.current?.click()}
-                variant="outline"
-                className="flex items-center gap-2"
-              >
-                <Upload className="h-4 w-4" />
-                Import CSV
-              </Button>
-              <Button onClick={handleExportCsv} variant="outline">Export CSV</Button>
-              <Button onClick={handleDeleteAll} variant="destructive">Delete All</Button>
-              <Button onClick={() => setIsFormOpen(true)} className="flex items-center gap-2">
-                <Plus className="h-4 w-4" />
-                Add Party
-              </Button>
+            <div className="flex flex-col gap-2 md:items-end">
+              <div className="flex flex-wrap gap-2 md:justify-end">
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0]
+                    if (!file) return
+                    await handleImportCsv(file)
+                    event.target.value = ''
+                  }}
+                />
+                <Button
+                  onClick={() => importInputRef.current?.click()}
+                  variant="outline"
+                  className="flex items-center gap-2"
+                >
+                  <Upload className="h-4 w-4" />
+                  Import CSV
+                </Button>
+                <Button onClick={handleExportCsv} variant="outline">Export CSV</Button>
+                <Button onClick={handleDeleteAll} variant="destructive">Delete All</Button>
+                <Button onClick={() => setIsFormOpen(true)} className="flex items-center gap-2">
+                  <Plus className="h-4 w-4" />
+                  Add Party
+                </Button>
+              </div>
+              <MasterCsvTemplateHint templateKey="party" />
             </div>
           </div>
 
