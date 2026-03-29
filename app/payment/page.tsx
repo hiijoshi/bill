@@ -435,7 +435,7 @@ function PaymentPageContent() {
                 <div>
                   <Label htmlFor="filterBillType">Bill Type</Label>
                   <Select value={filterBillType} onValueChange={setFilterBillType}>
-                    <SelectTrigger>
+                    <SelectTrigger id="filterBillType">
                       <SelectValue placeholder="All Types" />
                     </SelectTrigger>
                     <SelectContent>

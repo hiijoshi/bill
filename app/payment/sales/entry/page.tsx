@@ -696,7 +696,7 @@ function SalesPaymentEntryPageContent() {
                     <div>
                       <Label htmlFor="bill">Select Bill</Label>
                       <Select value={selectedBill} onValueChange={setSelectedBill}>
-                        <SelectTrigger>
+                        <SelectTrigger id="bill">
                           <SelectValue placeholder={selectedPartyName ? 'Select unpaid bill' : 'Select party first'} />
                         </SelectTrigger>
                         <SelectContent>
@@ -804,7 +804,7 @@ function SalesPaymentEntryPageContent() {
                   <div>
                     <Label htmlFor="paymentMode">Payment Mode</Label>
                     <Select value={selectedPaymentMode} onValueChange={setSelectedPaymentMode}>
-                      <SelectTrigger>
+                      <SelectTrigger id="paymentMode">
                         <SelectValue placeholder="Select payment mode" />
                       </SelectTrigger>
                       <SelectContent>
@@ -849,7 +849,7 @@ function SalesPaymentEntryPageContent() {
                           <div>
                             <Label htmlFor="bank">Bank</Label>
                             <Select value={selectedBank} onValueChange={setSelectedBank}>
-                              <SelectTrigger>
+                              <SelectTrigger id="bank">
                                 <SelectValue placeholder="Select bank for online receipt" />
                               </SelectTrigger>
                               <SelectContent>

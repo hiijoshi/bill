@@ -60,7 +60,7 @@ export default function CompanySelector({ companies }: CompanySelectorProps) {
       <div>
         <Label htmlFor="company">Select Company</Label>
         <Select value={selectedCompany} onValueChange={setSelectedCompany}>
-          <SelectTrigger>
+          <SelectTrigger id="company">
             <SelectValue placeholder="Choose a company" />
           </SelectTrigger>
           <SelectContent>
