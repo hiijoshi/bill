@@ -130,15 +130,8 @@ export default function Sidebar({
   const permissionsCacheKey = `permissions:${companyId || 'none'}`
 
   const withCompany = useCallback((href?: string) => {
-    const base = href || '/main/dashboard'
-    if (!companyId || base.includes('companyId=') || base.includes('companyIds=')) return base
-
-    const [pathWithQuery, hashPart = ''] = base.split('#')
-    const [pathnamePart, queryPart = ''] = pathWithQuery.split('?')
-    const params = new URLSearchParams(queryPart)
-    params.set('companyId', companyId)
-    const query = params.toString()
-    return `${pathnamePart}${query ? `?${query}` : ''}${hashPart ? `#${hashPart}` : ''}`
+    void companyId
+    return href || '/main/dashboard'
   }, [companyId])
 
   const syncActiveCompany = () => {

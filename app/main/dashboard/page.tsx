@@ -749,6 +749,12 @@ export default function MainDashboardPage() {
 
   useEffect(() => {
     if (!dashboardAccessResolved || !hasDashboardAccess) return
+    if (selectedCompanyIds.length === 0 && !primaryCompanyId) return
+    stripCompanyParamsFromUrl()
+  }, [dashboardAccessResolved, hasDashboardAccess, primaryCompanyId, selectedCompanyIds])
+
+  useEffect(() => {
+    if (!dashboardAccessResolved || !hasDashboardAccess) return
     if (selectedCompanyIds.length === 0) return
 
     const primary = selectedCompanyIds.includes(primaryCompanyId) ? primaryCompanyId : selectedCompanyIds[0]
@@ -763,8 +769,6 @@ export default function MainDashboardPage() {
       setData(cached)
       setLoading(false)
     }
-
-    stripCompanyParamsFromUrl()
 
     let cancelled = false
     ;(async () => {

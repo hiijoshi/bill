@@ -33,17 +33,10 @@ function isPermissionModule(value: string): value is PermissionModule {
 }
 
 export function withCompanyId(path: string, companyId?: string | null): string {
-  const normalizedCompanyId = String(companyId || '').trim()
-  if (!normalizedCompanyId || path.includes('companyId=') || path.includes('companyIds=')) {
-    return path
-  }
-
-  const [pathWithQuery, hashPart = ''] = path.split('#')
-  const [pathname, queryPart = ''] = pathWithQuery.split('?')
-  const params = new URLSearchParams(queryPart)
-  params.set('companyId', normalizedCompanyId)
-  const query = params.toString()
-  return `${pathname}${query ? `?${query}` : ''}${hashPart ? `#${hashPart}` : ''}`
+  void companyId
+  // Active company context is persisted in the session cookie/cache, so we keep
+  // internal app URLs clean instead of exposing stale company ids in the address bar.
+  return path
 }
 
 export function getReadablePermissionModules(rows: PermissionAccessRow[]): PermissionModule[] {
