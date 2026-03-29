@@ -10,7 +10,7 @@ import DashboardLayout from '@/app/components/DashboardLayout'
 import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Truck, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
-import { getCompanyIdFromSearch } from '@/lib/company-context'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
 import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
@@ -170,23 +170,50 @@ export default function SupplierMasterPage() {
   }, [applySuppliers, companyId])
 
   useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = getCompanyIdFromSearch(window.location.search)
+    let cancelled = false
+
+    const loadSupplierScope = async () => {
+      setLoading(true)
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (cancelled) return
+
       if (!resolvedCompanyId) {
+        setCompanyId('')
+        setSuppliers([])
+        setCanReadSupplier(false)
+        setCanWriteSupplier(false)
         setLoading(false)
         setMessage({ type: 'error', text: 'Company not selected. Please select company once.' })
         return
       }
+
       setCompanyId(resolvedCompanyId)
       const permission = await fetchSupplierPermissions(resolvedCompanyId)
+      if (cancelled) return
+
       if (!permission.canRead) {
-        setLoading(false)
         setSuppliers([])
+        setLoading(false)
         setMessage({ type: 'error', text: 'No access to supplier master for this user.' })
         return
       }
+
+      setMessage(null)
       await fetchSuppliers(resolvedCompanyId)
-    })()
+    }
+
+    void loadSupplierScope()
+
+    const onCompanyChanged = () => {
+      void loadSupplierScope()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
   }, [fetchSupplierPermissions, fetchSuppliers])
 
   const filteredSuppliers = useMemo(() => {
@@ -379,7 +406,7 @@ export default function SupplierMasterPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId="">
+      <DashboardLayout companyId={companyId}>
         <div className="flex h-screen items-center justify-center">Loading...</div>
       </DashboardLayout>
     )

@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId } from '@/lib/company-context'
 
 type AccountingHead = {
   id: string
@@ -21,9 +22,12 @@ type AccountingHead = {
 }
 
 export default function AccountingHeadMasterPage() {
+  const [companyId, setCompanyId] = useState('')
   const [rows, setRows] = useState<AccountingHead[]>([])
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
+  const [canReadAccountingHead, setCanReadAccountingHead] = useState(false)
+  const [canWriteAccountingHead, setCanWriteAccountingHead] = useState(false)
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [editingRow, setEditingRow] = useState<AccountingHead | null>(null)
   const [search, setSearch] = useState('')
@@ -34,9 +38,38 @@ export default function AccountingHeadMasterPage() {
     value: '0'
   })
 
-  const fetchAccountingHeads = useCallback(async () => {
+  const fetchAccountingHeadPermissions = useCallback(async (resolvedCompanyId: string) => {
+    const denied = { canRead: false, canWrite: false }
     try {
-      const response = await fetch('/api/accounting-heads', { cache: 'no-store' })
+      const response = await fetch(`/api/auth/permissions?companyId=${encodeURIComponent(resolvedCompanyId)}&includeMeta=true`, {
+        cache: 'no-store'
+      })
+      if (!response.ok) {
+        setCanReadAccountingHead(false)
+        setCanWriteAccountingHead(false)
+        return denied
+      }
+
+      const payload = await response.json().catch(() => ({}))
+      const permissions = Array.isArray(payload?.permissions) ? payload.permissions : []
+      const accountingHeadPermission = permissions.find((row: { module?: string }) => row.module === 'MASTER_ACCOUNTING_HEAD')
+      const canRead = Boolean(accountingHeadPermission?.canRead || accountingHeadPermission?.canWrite)
+      const canWrite = Boolean(accountingHeadPermission?.canWrite)
+
+      setCanReadAccountingHead(canRead)
+      setCanWriteAccountingHead(canWrite)
+      return { canRead, canWrite }
+    } catch {
+      setCanReadAccountingHead(false)
+      setCanWriteAccountingHead(false)
+      return denied
+    }
+  }, [])
+
+  const fetchAccountingHeads = useCallback(async (targetCompanyId = companyId) => {
+    if (!targetCompanyId) return
+    try {
+      const response = await fetch(`/api/accounting-heads?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' })
       const payload = await response.json().catch(() => [] as AccountingHead[])
       if (!response.ok) {
         throw new Error((payload as { error?: string }).error || 'Failed to load accounting heads')
@@ -49,11 +82,53 @@ export default function AccountingHeadMasterPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [companyId])
 
   useEffect(() => {
-    void fetchAccountingHeads()
-  }, [fetchAccountingHeads])
+    let cancelled = false
+
+    const loadAccountingHeadScope = async () => {
+      setLoading(true)
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (cancelled) return
+
+      if (!resolvedCompanyId) {
+        setCompanyId('')
+        setRows([])
+        setCanReadAccountingHead(false)
+        setCanWriteAccountingHead(false)
+        setErrorMessage('Company not selected. Please select company once.')
+        setLoading(false)
+        return
+      }
+
+      setCompanyId(resolvedCompanyId)
+      const permission = await fetchAccountingHeadPermissions(resolvedCompanyId)
+      if (cancelled) return
+
+      if (!permission.canRead) {
+        setRows([])
+        setErrorMessage('No access to accounting head master for this user.')
+        setLoading(false)
+        return
+      }
+
+      await fetchAccountingHeads(resolvedCompanyId)
+    }
+
+    void loadAccountingHeadScope()
+
+    const onCompanyChanged = () => {
+      void loadAccountingHeadScope()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
+  }, [fetchAccountingHeadPermissions, fetchAccountingHeads])
 
   const resetForm = () => {
     setFormData({
@@ -104,8 +179,20 @@ export default function AccountingHeadMasterPage() {
       return
     }
 
+    if (!companyId) {
+      alert('Company not selected. Please select company once.')
+      return
+    }
+
+    if (!canWriteAccountingHead) {
+      alert('You do not have write access for Accounting Head master')
+      return
+    }
+
     try {
-      const url = editingRow ? `/api/accounting-heads?id=${editingRow.id}` : '/api/accounting-heads'
+      const url = editingRow
+        ? `/api/accounting-heads?id=${editingRow.id}&companyId=${encodeURIComponent(companyId)}`
+        : `/api/accounting-heads?companyId=${encodeURIComponent(companyId)}`
       const method = editingRow ? 'PUT' : 'POST'
 
       const response = await fetch(url, {
@@ -135,6 +222,11 @@ export default function AccountingHeadMasterPage() {
   }
 
   const handleEdit = (row: AccountingHead) => {
+    if (!canWriteAccountingHead) {
+      alert('You do not have write access for Accounting Head master')
+      return
+    }
+
     setEditingRow(row)
     setFormData({
       name: row.name,
@@ -146,10 +238,20 @@ export default function AccountingHeadMasterPage() {
   }
 
   const handleDelete = async (id: string) => {
+    if (!companyId) {
+      alert('Company not selected. Please select company once.')
+      return
+    }
+
+    if (!canWriteAccountingHead) {
+      alert('You do not have write access for Accounting Head master')
+      return
+    }
+
     if (!confirm('Are you sure you want to delete this accounting head?')) return
 
     try {
-      const response = await fetch(`/api/accounting-heads?id=${id}`, { method: 'DELETE' })
+      const response = await fetch(`/api/accounting-heads?id=${id}&companyId=${encodeURIComponent(companyId)}`, { method: 'DELETE' })
       const payload = await response.json().catch(() => ({} as { error?: string }))
       if (!response.ok) {
         throw new Error(payload.error || 'Failed to delete accounting head')
@@ -163,9 +265,19 @@ export default function AccountingHeadMasterPage() {
   }
 
   const handleDeleteAll = async () => {
+    if (!companyId) {
+      alert('Company not selected. Please select company once.')
+      return
+    }
+
+    if (!canWriteAccountingHead) {
+      alert('You do not have write access for Accounting Head master')
+      return
+    }
+
     if (!confirm('Delete all accounting heads for this company?')) return
 
-    const response = await fetch('/api/accounting-heads?all=true', { method: 'DELETE' })
+    const response = await fetch(`/api/accounting-heads?companyId=${encodeURIComponent(companyId)}&all=true`, { method: 'DELETE' })
     const payload = await response.json().catch(() => ({} as { error?: string; message?: string }))
     alert(payload.message || payload.error || 'Operation completed')
     if (response.ok) {
@@ -193,14 +305,14 @@ export default function AccountingHeadMasterPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId="">
+      <DashboardLayout companyId={companyId}>
         <div className="flex h-screen items-center justify-center">Loading...</div>
       </DashboardLayout>
     )
   }
 
   return (
-    <DashboardLayout companyId="">
+    <DashboardLayout companyId={companyId}>
       <div className="p-6">
         <div className="mx-auto max-w-6xl">
           {errorMessage && (
@@ -221,13 +333,23 @@ export default function AccountingHeadMasterPage() {
             </div>
             <div className="flex flex-wrap gap-2 md:justify-end">
               <Button variant="outline" onClick={handleExportCsv}>Export CSV</Button>
-              <Button variant="destructive" onClick={handleDeleteAll}>Delete All</Button>
-              <Button onClick={openCreate}>
-                <Plus className="mr-2 h-4 w-4" />
-                Add Accounting Head
-              </Button>
+              {canWriteAccountingHead ? (
+                <Button variant="destructive" onClick={handleDeleteAll}>Delete All</Button>
+              ) : null}
+              {canWriteAccountingHead ? (
+                <Button onClick={openCreate}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add Accounting Head
+                </Button>
+              ) : null}
             </div>
           </div>
+
+          {canReadAccountingHead && !canWriteAccountingHead ? (
+            <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Read-only access: you can view accounting heads but cannot add, edit, or delete.
+            </div>
+          ) : null}
 
           {isFormOpen && (
             <Card className="mb-6">
@@ -322,7 +444,13 @@ export default function AccountingHeadMasterPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredRows.length === 0 ? (
+                    {!canReadAccountingHead ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center text-slate-500">
+                          No access to view accounting heads.
+                        </TableCell>
+                      </TableRow>
+                    ) : filteredRows.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={6} className="text-center text-slate-500">
                           No accounting heads found.
@@ -337,14 +465,18 @@ export default function AccountingHeadMasterPage() {
                           <TableCell className="text-right">{Number(row.value || 0).toFixed(2)}</TableCell>
                           <TableCell>{new Date(row.updatedAt).toLocaleDateString()}</TableCell>
                           <TableCell>
-                            <div className="flex gap-2">
-                              <Button size="sm" variant="outline" onClick={() => handleEdit(row)}>
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                              <Button size="sm" variant="destructive" onClick={() => handleDelete(row.id)}>
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
+                            {canWriteAccountingHead ? (
+                              <div className="flex gap-2">
+                                <Button size="sm" variant="outline" onClick={() => handleEdit(row)}>
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                                <Button size="sm" variant="destructive" onClick={() => handleDelete(row.id)}>
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-slate-500">Read only</span>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))

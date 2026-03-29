@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Upload, Users } from 'lucide-react'
-import { getCompanyIdFromSearch } from '@/lib/company-context'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId } from '@/lib/company-context'
 import { useRouter } from 'next/navigation'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { isAbortError } from '@/lib/http'
@@ -191,9 +191,17 @@ export default function PartyMasterPage() {
   }, [applyParties, companyId])
 
   useEffect(() => {
-    ;(async () => {
-      const resolvedCompanyId = getCompanyIdFromSearch(window.location.search)
+    let cancelled = false
+
+    const loadPartyScope = async () => {
+      setLoading(true)
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (cancelled) return
+
       if (!resolvedCompanyId) {
+        setCompanyId('')
+        setParties([])
+        setFilteredParties([])
         setLoading(false)
         setMessage({ type: 'error', text: 'Company not selected. Please select company once.' })
         router.push('/company/select')
@@ -201,8 +209,22 @@ export default function PartyMasterPage() {
       }
 
       setCompanyId(resolvedCompanyId)
+      setMessage(null)
       await fetchParties(resolvedCompanyId)
-    })()
+    }
+
+    void loadPartyScope()
+
+    const onCompanyChanged = () => {
+      void loadPartyScope()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
   }, [fetchParties, router])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -436,7 +458,7 @@ export default function PartyMasterPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId="">
+      <DashboardLayout companyId={companyId}>
         <div className="flex justify-center items-center h-screen">Loading...</div>
       </DashboardLayout>
     )
