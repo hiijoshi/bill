@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { ArrowLeft, Edit, Trash2, Printer, FileText } from 'lucide-react'
+import { ArrowLeft, Edit, Ban, Printer, FileText } from 'lucide-react'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
 
@@ -75,7 +75,7 @@ function PurchaseViewPageContent() {
 
     const fetchPurchaseBill = async (targetCompanyId: string) => {
       try {
-        const response = await fetch(`/api/purchase-bills?companyId=${targetCompanyId}&billId=${billId}`)
+        const response = await fetch(`/api/purchase-bills?companyId=${targetCompanyId}&billId=${billId}&includeCancelled=true`)
         if (cancelled) return
         if (!response.ok) {
           throw new Error('Purchase bill not found')
@@ -119,29 +119,36 @@ function PurchaseViewPageContent() {
     router.push(editPath)
   }
 
-  const handleDelete = () => {
+  const handleCancel = () => {
     if (!billId) return
-    if (!confirm('Are you sure you want to delete this purchase bill? This action cannot be undone.')) {
+    if (!confirm('Are you sure you want to cancel this purchase bill?')) {
       return
     }
 
     void (async () => {
       try {
-        const response = await fetch(`/api/purchase-bills?billId=${billId}&companyId=${companyId}`, {
-          method: 'DELETE'
+        const response = await fetch('/api/purchase-bills/cancel', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            billId,
+            companyId
+          })
         })
 
         const payload = (await response.json().catch(() => ({}))) as { error?: string }
         if (!response.ok) {
-          alert(payload.error || 'Not authorised to delete this entry.')
+          alert(payload.error || 'Failed to cancel purchase bill.')
           return
         }
 
-        alert('Purchase bill deleted successfully!')
+        alert('Purchase bill cancelled successfully!')
         router.push('/purchase/list')
       } catch (error) {
-        console.error('Error deleting purchase bill:', error)
-        alert(error instanceof Error ? error.message : 'Failed to delete purchase bill')
+        console.error('Error cancelling purchase bill:', error)
+        alert(error instanceof Error ? error.message : 'Failed to cancel purchase bill')
       }
     })()
   }
@@ -202,14 +209,18 @@ function PurchaseViewPageContent() {
               <h1 className="text-3xl font-bold">Purchase Bill Details</h1>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={handleEdit}>
-                <Edit className="w-4 h-4 mr-2" />
-                Edit
-              </Button>
-              <Button variant="outline" onClick={handleDelete}>
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete
-              </Button>
+              {purchaseBill.status !== 'cancelled' ? (
+                <Button variant="outline" onClick={handleEdit}>
+                  <Edit className="w-4 h-4 mr-2" />
+                  Edit
+                </Button>
+              ) : null}
+              {purchaseBill.status !== 'cancelled' ? (
+                <Button variant="outline" onClick={handleCancel}>
+                  <Ban className="w-4 h-4 mr-2" />
+                  Cancel
+                </Button>
+              ) : null}
               <Button variant="outline" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
                 Print
@@ -244,7 +255,8 @@ function PurchaseViewPageContent() {
                   <p className="text-sm text-gray-600">Status</p>
                   <Badge variant={
                     purchaseBill.status === 'paid' ? 'default' :
-                    purchaseBill.status === 'partial' ? 'secondary' : 'destructive'
+                    purchaseBill.status === 'partial' ? 'secondary' :
+                    purchaseBill.status === 'cancelled' ? 'outline' : 'destructive'
                   }>
                     {purchaseBill.status}
                   </Badge>

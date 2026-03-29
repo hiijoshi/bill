@@ -7,6 +7,7 @@ import {
   getRequestAuthContext,
   hasCompanyAccess,
   isSuperAdmin,
+  parseBooleanParam,
   parseJsonWithSchema,
   requireAuthContext,
   unauthorized
@@ -79,14 +80,18 @@ function sanitizePurchaseBill<T extends {
 }>(bill: T): T {
   const safeTotalAmount = clampNonNegative(bill.totalAmount)
   const safePaidAmount = clampNonNegative(bill.paidAmount)
-  const safeBalanceAmount = Math.max(0, safeTotalAmount - safePaidAmount)
+  const rawStatus = String(bill.status || '').trim().toLowerCase()
+  const safeBalanceAmount =
+    rawStatus === 'cancelled'
+      ? clampNonNegative(bill.balanceAmount)
+      : Math.max(0, safeTotalAmount - safePaidAmount)
 
   return {
     ...bill,
     totalAmount: safeTotalAmount,
     paidAmount: safePaidAmount,
     balanceAmount: safeBalanceAmount,
-    status: deriveStatus(safePaidAmount, safeTotalAmount),
+    status: rawStatus === 'cancelled' ? 'cancelled' : deriveStatus(safePaidAmount, safeTotalAmount),
     purchaseItems: Array.isArray(bill.purchaseItems)
       ? bill.purchaseItems.map((item) => ({
           ...item,
@@ -377,7 +382,8 @@ export async function POST(request: NextRequest) {
     const status =
       message.includes('cannot exceed') ||
       message.includes('cannot be less than') ||
-      message.includes('recorded payment history')
+      message.includes('recorded payment history') ||
+      message.includes('cancelled')
         ? 400
         : message.includes('not found')
           ? 404
@@ -399,6 +405,7 @@ export async function GET(request: NextRequest) {
     const billId = searchParams.get('billId')
     const dateFrom = searchParams.get('dateFrom')
     const dateTo = searchParams.get('dateTo')
+    const includeCancelled = parseBooleanParam(searchParams.get('includeCancelled'))
 
     if (billId) {
       let targetCompanyId = companyId
@@ -420,7 +427,11 @@ export async function GET(request: NextRequest) {
       if (denied) return denied
 
       const purchaseBill = await prisma.purchaseBill.findFirst({
-        where: { id: billId, companyId: targetCompanyId },
+        where: {
+          id: billId,
+          companyId: targetCompanyId,
+          ...(includeCancelled ? {} : { status: { not: 'cancelled' } })
+        },
         include: {
           company: {
             select: {
@@ -465,9 +476,13 @@ export async function GET(request: NextRequest) {
 
     const whereClause: {
       companyId: string
+      status?: { not: string }
       billDate?: { gte?: Date; lte?: Date }
       OR?: Array<{ billNo: { contains: string } } | { status: { contains: string } }>
-    } = { companyId }
+    } = {
+      companyId,
+      ...(includeCancelled ? {} : { status: { not: 'cancelled' } })
+    }
 
     if (dateFrom || dateTo) {
       whereClause.billDate = {}
@@ -528,58 +543,7 @@ export async function DELETE(request: NextRequest) {
     if (!billId || !companyId) {
       return NextResponse.json({ error: 'Bill ID and Company ID are required' }, { status: 400 })
     }
-    const denied = await ensureCompanyAccess(request, companyId)
-    if (denied) {
-      if (denied.status === 403) {
-        return NextResponse.json({ error: 'Not authorised to delete this entry.' }, { status: 403 })
-      }
-      return denied
-    }
-
-    const purchaseBill = await prisma.purchaseBill.findFirst({
-      where: { id: billId, companyId },
-      include: {
-        purchaseItems: true
-      }
-    })
-
-    if (!purchaseBill) {
-      return NextResponse.json({ error: 'Purchase bill not found' }, { status: 404 })
-    }
-
-    await prisma.$transaction(async (tx) => {
-      const deletedAt = new Date()
-
-      await tx.stockLedger.deleteMany({
-        where: {
-          refTable: 'purchase_bills',
-          refId: billId
-        }
-      })
-
-      await tx.purchaseItem.deleteMany({
-        where: { purchaseBillId: billId }
-      })
-
-      await tx.payment.updateMany({
-        where: {
-          companyId,
-          billType: 'purchase',
-          billId,
-          deletedAt: null
-        },
-        data: {
-          deletedAt,
-          status: 'pending'
-        }
-      })
-
-      await tx.purchaseBill.delete({
-        where: { id: billId }
-      })
-    })
-
-    return NextResponse.json({ success: true, message: 'Purchase bill deleted successfully' })
+    return NextResponse.json({ error: 'Not authorised to delete this entry.' }, { status: 403 })
   } catch (error) {
     return NextResponse.json(
       {
@@ -657,6 +621,10 @@ export async function PUT(request: NextRequest) {
 
       if (!existingBill) {
         throw new Error('Purchase bill not found')
+      }
+
+      if (String(existingBill.status || '').toLowerCase() === 'cancelled') {
+        throw new Error('Cancelled purchase bill cannot be updated')
       }
 
       const recordedPaymentAggregate = await tx.payment.aggregate({

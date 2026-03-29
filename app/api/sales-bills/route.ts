@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { validateStockBeforeSale } from '@/lib/stock-automation'
 import { z } from 'zod'
-import { ensureCompanyAccess, normalizeId, parseJsonWithSchema, requireAuthContext } from '@/lib/api-security'
+import { ensureCompanyAccess, normalizeId, parseBooleanParam, parseJsonWithSchema, requireAuthContext } from '@/lib/api-security'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 import { calculateTaxBreakdown, calculateTotalsBreakdown, normalizeNonNegative } from '@/lib/billing-calculations'
 import { getPartyCreditSnapshot } from '@/lib/party-credit'
@@ -207,8 +207,12 @@ function sanitizeSalesBill<T extends {
 }>(bill: T): T {
   const safeTotalAmount = toNonNegativeNumber(bill.totalAmount, 0)
   const safeReceivedAmount = toNonNegativeNumber(bill.receivedAmount, 0)
-  const safeBalanceAmount = Math.max(0, safeTotalAmount - safeReceivedAmount)
-  const safeStatus = deriveStatus(safeBalanceAmount, safeReceivedAmount)
+  const rawStatus = String(bill.status || '').trim().toLowerCase()
+  const safeBalanceAmount =
+    rawStatus === 'cancelled'
+      ? toNonNegativeNumber(bill.balanceAmount, 0)
+      : Math.max(0, safeTotalAmount - safeReceivedAmount)
+  const safeStatus = rawStatus === 'cancelled' ? 'cancelled' : deriveStatus(safeBalanceAmount, safeReceivedAmount)
 
   return {
     ...bill,
@@ -511,6 +515,7 @@ export async function GET(request: NextRequest) {
     const last = searchParams.get('last')
     const dateFrom = searchParams.get('dateFrom')
     const dateTo = searchParams.get('dateTo')
+    const includeCancelled = parseBooleanParam(searchParams.get('includeCancelled'))
 
     if (!companyId) {
       return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
@@ -535,7 +540,8 @@ export async function GET(request: NextRequest) {
       const bill = await prisma.salesBill.findFirst({
         where: {
           id: billId,
-          companyId
+          companyId,
+          ...(includeCancelled ? {} : { status: { not: 'cancelled' } })
         },
         include: {
           party: true,
@@ -559,9 +565,13 @@ export async function GET(request: NextRequest) {
 
     const whereClause: {
       companyId: string
+      status?: { not: string }
       billDate?: { gte?: Date; lte?: Date }
       OR?: Array<{ billNo: { contains: string } } | { status: { contains: string } }>
-    } = { companyId }
+    } = {
+      companyId,
+      ...(includeCancelled ? {} : { status: { not: 'cancelled' } })
+    }
 
     if (dateFrom || dateTo) {
       whereClause.billDate = {}
@@ -636,6 +646,10 @@ export async function PUT(request: NextRequest) {
 
     if (!existing) {
       return NextResponse.json({ error: 'Sales bill not found' }, { status: 404 })
+    }
+
+    if (String(existing.status || '').toLowerCase() === 'cancelled') {
+      return NextResponse.json({ error: 'Cancelled sales bill cannot be updated' }, { status: 400 })
     }
 
     const hasSalesItems = Array.isArray(body.salesItems) && body.salesItems.length > 0
@@ -829,57 +843,7 @@ export async function DELETE(request: NextRequest) {
     if (!companyId || !billId) {
       return NextResponse.json({ error: 'Company ID and bill ID are required' }, { status: 400 })
     }
-
-    const denied = await ensureCompanyAccess(request, companyId)
-    if (denied) {
-      if (denied.status === 403) {
-        return NextResponse.json({ error: 'Not authorised to delete this entry.' }, { status: 403 })
-      }
-      return denied
-    }
-
-    const existing = await prisma.salesBill.findFirst({
-      where: {
-        id: billId,
-        companyId
-      },
-      select: { id: true }
-    })
-
-    if (!existing) {
-      return NextResponse.json({ error: 'Sales bill not found' }, { status: 404 })
-    }
-
-    await prisma.$transaction(async (tx) => {
-      const deletedAt = new Date()
-
-      await tx.stockLedger.deleteMany({
-        where: {
-          companyId,
-          refTable: 'sales_bills',
-          refId: billId
-        }
-      })
-
-      await tx.payment.updateMany({
-        where: {
-          companyId,
-          billType: 'sales',
-          billId,
-          deletedAt: null
-        },
-        data: {
-          deletedAt,
-          status: 'pending'
-        }
-      })
-
-      await tx.salesBill.delete({
-        where: { id: billId }
-      })
-    })
-
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ error: 'Not authorised to delete this entry.' }, { status: 403 })
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },

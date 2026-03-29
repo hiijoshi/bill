@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { Eye, Edit, Trash2, Printer, FileText, Download, CreditCard } from 'lucide-react'
+import { Eye, Edit, Ban, Printer, FileText, Download, CreditCard } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
@@ -96,6 +96,8 @@ interface RawRegularPurchaseBill {
   billDate?: unknown
   totalAmount?: unknown
   paidAmount?: unknown
+  balanceAmount?: unknown
+  status?: unknown
   farmer?: Farmer | null
   farmerNameSnapshot?: string | null
   farmerAddressSnapshot?: string | null
@@ -109,12 +111,14 @@ interface RawSpecialPurchaseBill {
   billDate?: unknown
   totalAmount?: unknown
   paidAmount?: unknown
+  balanceAmount?: unknown
+  status?: unknown
   supplier?: Supplier
   specialPurchaseItems?: RawSpecialPurchaseItem[]
 }
 
 type PurchaseBill = RegularPurchaseBill | SpecialPurchaseBill
-type BillViewTab = 'active' | 'paid' | 'all'
+type BillViewTab = 'active' | 'paid' | 'cancelled' | 'all'
 type PurchaseTypeFilter = 'all' | 'regular' | 'special'
 
 const clampNonNegative = (value: number): number => {
@@ -123,11 +127,21 @@ const clampNonNegative = (value: number): number => {
   return Math.max(0, parsed)
 }
 
-const normalizeBillFinancials = (totalRaw: unknown, paidRaw: unknown) => {
+const normalizeBillFinancials = (totalRaw: unknown, paidRaw: unknown, balanceRaw: unknown, statusRaw: unknown) => {
   const totalAmount = clampNonNegative(Number(totalRaw || 0))
   const paidAmount = clampNonNegative(Number(paidRaw || 0))
-  const balanceAmount = Math.max(0, totalAmount - paidAmount)
-  const status = balanceAmount === 0 ? 'paid' : paidAmount <= 0 ? 'unpaid' : 'partial'
+  const normalizedStatus = String(statusRaw || '').trim().toLowerCase()
+  const balanceAmount =
+    normalizedStatus === 'cancelled'
+      ? clampNonNegative(Number(balanceRaw || 0))
+      : Math.max(0, totalAmount - paidAmount)
+  const status = normalizedStatus === 'cancelled'
+    ? 'cancelled'
+    : balanceAmount === 0
+      ? 'paid'
+      : paidAmount <= 0
+        ? 'unpaid'
+        : 'partial'
 
   return { totalAmount, paidAmount, balanceAmount, status }
 }
@@ -220,8 +234,8 @@ export default function PurchaseListPage() {
 
       // Fetch both regular and special purchase bills
       const [regularResponse, specialResponse] = await Promise.all([
-        fetch(`/api/purchase-bills?companyId=${companyIdParam}`),
-        fetch(`/api/special-purchase-bills?companyId=${companyIdParam}`)
+        fetch(`/api/purchase-bills?companyId=${companyIdParam}&includeCancelled=true`),
+        fetch(`/api/special-purchase-bills?companyId=${companyIdParam}&includeCancelled=true`)
       ])
       if (isCancelled()) return
 
@@ -245,7 +259,12 @@ export default function PurchaseListPage() {
 
       // Add type field to distinguish between regular and special purchases
       const regularBills: RegularPurchaseBill[] = regularData.map((bill) => {
-        const normalized = normalizeBillFinancials(bill?.totalAmount, bill?.paidAmount)
+        const normalized = normalizeBillFinancials(
+          bill?.totalAmount,
+          bill?.paidAmount,
+          bill?.balanceAmount,
+          bill?.status
+        )
         return {
           id: String(bill.id || ''),
           billNo: String(bill.billNo || ''),
@@ -267,7 +286,12 @@ export default function PurchaseListPage() {
         }
       })
       const specialBills: SpecialPurchaseBill[] = specialData.map((bill) => {
-        const normalized = normalizeBillFinancials(bill?.totalAmount, bill?.paidAmount)
+        const normalized = normalizeBillFinancials(
+          bill?.totalAmount,
+          bill?.paidAmount,
+          bill?.balanceAmount,
+          bill?.status
+        )
         return {
           id: String(bill.id || ''),
           supplierInvoiceNo: String(bill.supplierInvoiceNo || ''),
@@ -413,8 +437,16 @@ export default function PurchaseListPage() {
   })()
 
   const paidBills = filteredBills.filter((bill) => bill.status === 'paid')
-  const activeBills = filteredBills.filter((bill) => bill.status !== 'paid')
-  const visibleBills = billView === 'paid' ? paidBills : billView === 'all' ? filteredBills : activeBills
+  const cancelledBills = filteredBills.filter((bill) => bill.status === 'cancelled')
+  const activeBills = filteredBills.filter((bill) => bill.status !== 'paid' && bill.status !== 'cancelled')
+  const visibleBills =
+    billView === 'paid'
+      ? paidBills
+      : billView === 'cancelled'
+        ? cancelledBills
+        : billView === 'all'
+          ? filteredBills
+          : activeBills
 
   const clearFilters = () => {
     setBillNumber('')
@@ -481,29 +513,41 @@ export default function PurchaseListPage() {
     router.push(path)
   }
 
-  const handleDelete = async (bill: PurchaseBill) => {
+  const handleCancel = async (bill: PurchaseBill) => {
+    if (bill.status === 'cancelled') {
+      alert('This bill is already cancelled.')
+      return
+    }
+
     const billTypeLabel = bill.type === 'regular' ? 'purchase' : 'special purchase'
-    if (!confirm(`Are you sure you want to delete this ${billTypeLabel} bill? This action cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to cancel this ${billTypeLabel} bill?`)) {
       return
     }
 
     try {
-      const apiUrl = bill.type === 'regular' ? '/api/purchase-bills' : '/api/special-purchase-bills'
-      const response = await fetch(`${apiUrl}?billId=${bill.id}&companyId=${companyId}`, {
-        method: 'DELETE'
+      const apiUrl = bill.type === 'regular' ? '/api/purchase-bills/cancel' : '/api/special-purchase-bills/cancel'
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          billId: bill.id,
+          companyId
+        })
       })
 
       const payload = (await response.json().catch(() => ({}))) as { error?: string }
       if (!response.ok) {
-        alert(payload.error || 'Not authorised to delete this entry.')
+        alert(payload.error || 'Failed to cancel bill.')
         return
       }
 
-      alert(`${bill.type === 'regular' ? 'Purchase' : 'Special Purchase'} bill deleted successfully!`)
+      alert(`${bill.type === 'regular' ? 'Purchase' : 'Special Purchase'} bill cancelled successfully!`)
       void fetchPurchaseBills()
     } catch (error) {
-      console.error('Error deleting bill:', error)
-      alert(error instanceof Error ? error.message : 'Failed to delete bill')
+      console.error('Error cancelling bill:', error)
+      alert(error instanceof Error ? error.message : 'Failed to cancel bill')
     }
   }
 
@@ -811,6 +855,9 @@ export default function PurchaseListPage() {
                   <TabsTrigger value="paid" onClick={() => setBillView('paid')}>
                     Paid ({paidBills.length})
                   </TabsTrigger>
+                  <TabsTrigger value="cancelled" onClick={() => setBillView('cancelled')}>
+                    Cancelled ({cancelledBills.length})
+                  </TabsTrigger>
                   <TabsTrigger value="all" onClick={() => setBillView('all')}>
                     All ({filteredBills.length})
                   </TabsTrigger>
@@ -881,7 +928,8 @@ export default function PurchaseListPage() {
                         <TableCell>
                           <Badge variant={
                             bill.status === 'paid' ? 'default' :
-                            (bill.status === 'partial' || bill.status === 'partially_paid') ? 'secondary' : 'destructive'
+                            (bill.status === 'partial' || bill.status === 'partially_paid') ? 'secondary' :
+                            bill.status === 'cancelled' ? 'outline' : 'destructive'
                           }>
                             {bill.status}
                           </Badge>
@@ -895,20 +943,25 @@ export default function PurchaseListPage() {
                             >
                               <Eye className="w-4 h-4" />
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleEdit(bill)}
-                            >
-                              <Edit className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleDelete(bill)}
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
+                            {bill.status !== 'cancelled' ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleEdit(bill)}
+                              >
+                                <Edit className="w-4 h-4" />
+                              </Button>
+                            ) : null}
+                            {bill.status !== 'cancelled' ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleCancel(bill)}
+                                title="Mark Cancelled"
+                              >
+                                <Ban className="w-4 h-4" />
+                              </Button>
+                            ) : null}
                             <Button
                               size="sm"
                               variant="outline"
@@ -916,7 +969,7 @@ export default function PurchaseListPage() {
                             >
                               <Printer className="w-4 h-4" />
                             </Button>
-                            {bill.balanceAmount > 0 && (
+                            {bill.status !== 'cancelled' && bill.balanceAmount > 0 && (
                               <Button
                                 size="sm"
                                 variant="outline"

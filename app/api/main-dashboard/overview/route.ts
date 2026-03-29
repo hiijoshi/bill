@@ -312,8 +312,14 @@ async function loadOverviewPayload(params: {
     stockCompanyIds
   } = params.scopes
 
-  const purchaseWhere = purchaseCompanyIds.length > 0 ? { companyId: { in: purchaseCompanyIds } } : null
-  const salesWhere = salesCompanyIds.length > 0 ? { companyId: { in: salesCompanyIds } } : null
+  const purchaseWhere =
+    purchaseCompanyIds.length > 0
+      ? { companyId: { in: purchaseCompanyIds }, status: { not: 'cancelled' as const } }
+      : null
+  const salesWhere =
+    salesCompanyIds.length > 0
+      ? { companyId: { in: salesCompanyIds }, status: { not: 'cancelled' as const } }
+      : null
   const paymentWhere =
     paymentCompanyIds.length > 0 ? { companyId: { in: paymentCompanyIds }, deletedAt: null } : null
 

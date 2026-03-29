@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { ArrowLeft, Edit, FileText, Printer, Trash2 } from 'lucide-react'
+import { ArrowLeft, Edit, FileText, Printer, Ban } from 'lucide-react'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
 
@@ -73,7 +73,7 @@ function SpecialPurchaseViewContent() {
   const fetchBill = useCallback(async (targetCompanyId: string, targetBillId: string, isCancelled: () => boolean) => {
     try {
       const response = await fetch(
-        `/api/special-purchase-bills?companyId=${targetCompanyId}&billId=${targetBillId}`
+        `/api/special-purchase-bills?companyId=${targetCompanyId}&billId=${targetBillId}&includeCancelled=true`
       )
       if (isCancelled()) return
       if (!response.ok) {
@@ -123,24 +123,30 @@ function SpecialPurchaseViewContent() {
     }
   }, [billId, fetchBill, router])
 
-  const handleDelete = async () => {
+  const handleCancel = async () => {
     if (!bill || !companyId) return
-    if (!confirm('Are you sure you want to delete this special purchase bill? This action cannot be undone.')) {
+    if (!confirm('Are you sure you want to cancel this special purchase bill?')) {
       return
     }
 
-    const response = await fetch(
-      `/api/special-purchase-bills?billId=${bill.id}&companyId=${companyId}`,
-      { method: 'DELETE' }
-    )
+    const response = await fetch('/api/special-purchase-bills/cancel', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        billId: bill.id,
+        companyId
+      })
+    })
 
     const payload = (await response.json().catch(() => ({}))) as { error?: string }
     if (!response.ok) {
-      alert(payload.error || 'Not authorised to delete this entry.')
+      alert(payload.error || 'Failed to cancel special purchase bill.')
       return
     }
 
-    alert('Special purchase bill deleted successfully!')
+    alert('Special purchase bill cancelled successfully!')
     router.push('/purchase/list')
   }
 
@@ -186,14 +192,18 @@ function SpecialPurchaseViewContent() {
               <h1 className="text-3xl font-bold">Special Purchase Bill Details</h1>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => router.push(`/purchase/special-edit?billId=${bill.id}`)}>
-                <Edit className="w-4 h-4 mr-2" />
-                Edit
-              </Button>
-              <Button variant="outline" onClick={handleDelete}>
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete
-              </Button>
+              {bill.status !== 'cancelled' ? (
+                <Button variant="outline" onClick={() => router.push(`/purchase/special-edit?billId=${bill.id}`)}>
+                  <Edit className="w-4 h-4 mr-2" />
+                  Edit
+                </Button>
+              ) : null}
+              {bill.status !== 'cancelled' ? (
+                <Button variant="outline" onClick={handleCancel}>
+                  <Ban className="w-4 h-4 mr-2" />
+                  Cancel
+                </Button>
+              ) : null}
               <Button variant="outline" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
                 Print
@@ -235,6 +245,8 @@ function SpecialPurchaseViewContent() {
                         ? 'default'
                         : bill.status === 'partial'
                           ? 'secondary'
+                          : bill.status === 'cancelled'
+                            ? 'outline'
                           : 'destructive'
                     }
                   >

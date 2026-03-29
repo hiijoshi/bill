@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
-import { ensureCompanyAccess, parseJsonWithSchema, requireAuthContext } from '@/lib/api-security'
+import { ensureCompanyAccess, parseBooleanParam, parseJsonWithSchema, requireAuthContext } from '@/lib/api-security'
 import { cleanString, normalizeTenDigitPhone, parseNonNegativeNumber } from '@/lib/field-validation'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { buildPurchasePaymentSyncNote } from '@/lib/purchase-payment-sync'
@@ -62,14 +62,18 @@ function sanitizeSpecialPurchaseBill<T extends {
 }>(bill: T): T {
   const safeTotalAmount = clampNonNegative(bill.totalAmount)
   const safePaidAmount = clampNonNegative(bill.paidAmount)
-  const safeBalanceAmount = Math.max(0, safeTotalAmount - safePaidAmount)
+  const rawStatus = String(bill.status || '').trim().toLowerCase()
+  const safeBalanceAmount =
+    rawStatus === 'cancelled'
+      ? clampNonNegative(bill.balanceAmount)
+      : Math.max(0, safeTotalAmount - safePaidAmount)
 
   return {
     ...bill,
     totalAmount: safeTotalAmount,
     paidAmount: safePaidAmount,
     balanceAmount: safeBalanceAmount,
-    status: deriveStatus(safePaidAmount, safeTotalAmount),
+    status: rawStatus === 'cancelled' ? 'cancelled' : deriveStatus(safePaidAmount, safeTotalAmount),
     specialPurchaseItems: Array.isArray(bill.specialPurchaseItems)
       ? bill.specialPurchaseItems.map((item) => ({
           ...item,
@@ -261,6 +265,7 @@ export async function GET(request: NextRequest) {
     const billId = searchParams.get('billId')
     const dateFrom = searchParams.get('dateFrom')
     const dateTo = searchParams.get('dateTo')
+    const includeCancelled = parseBooleanParam(searchParams.get('includeCancelled'))
 
     if (!companyId) {
       return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
@@ -273,7 +278,8 @@ export async function GET(request: NextRequest) {
       const specialPurchaseBill = await prisma.specialPurchaseBill.findFirst({
         where: {
           id: billId,
-          companyId
+          companyId,
+          ...(includeCancelled ? {} : { status: { not: 'cancelled' } })
         },
         include: {
           supplier: true,
@@ -294,11 +300,15 @@ export async function GET(request: NextRequest) {
 
     const whereClause: {
       companyId: string
+      status?: { not: string }
       billDate?: {
         gte?: Date
         lte?: Date
       }
-    } = { companyId }
+    } = {
+      companyId,
+      ...(includeCancelled ? {} : { status: { not: 'cancelled' } })
+    }
 
     if (dateFrom || dateTo) {
       whereClause.billDate = {}
@@ -393,12 +403,17 @@ export async function PUT(request: NextRequest) {
           companyId: body.companyId
         },
         select: {
-          id: true
+          id: true,
+          status: true
         }
       })
 
       if (!existingBill) {
         throw new Error('Special purchase bill not found')
+      }
+
+      if (String(existingBill.status || '').toLowerCase() === 'cancelled') {
+        throw new Error('Cancelled special purchase bill cannot be updated')
       }
 
       const specialPurchaseBillId = existingBill.id
@@ -582,7 +597,8 @@ export async function PUT(request: NextRequest) {
     const status =
       errorMessage.includes('cannot exceed') ||
       errorMessage.includes('cannot be less than') ||
-      errorMessage.includes('recorded payment history')
+      errorMessage.includes('recorded payment history') ||
+      errorMessage.includes('cancelled')
         ? 400
         : errorMessage.includes('not found')
           ? 404
@@ -600,59 +616,7 @@ export async function DELETE(request: NextRequest) {
     if (!billId || !companyId) {
       return NextResponse.json({ error: 'Bill ID and Company ID are required' }, { status: 400 })
     }
-
-    const denied = await ensureCompanyAccess(request, companyId)
-    if (denied) {
-      if (denied.status === 403) {
-        return NextResponse.json({ error: 'Not authorised to delete this entry.' }, { status: 403 })
-      }
-      return denied
-    }
-
-    const specialPurchaseBill = await prisma.specialPurchaseBill.findFirst({
-      where: {
-        id: billId,
-        companyId,
-      },
-    })
-
-    if (!specialPurchaseBill) {
-      return NextResponse.json({ error: 'Special purchase bill not found' }, { status: 404 })
-    }
-
-    await prisma.$transaction(async (tx) => {
-      const deletedAt = new Date()
-
-      await tx.specialPurchaseItem.deleteMany({
-        where: { specialPurchaseBillId: billId },
-      })
-
-      await tx.stockLedger.deleteMany({
-        where: {
-          refTable: 'special_purchase_bills',
-          refId: billId,
-        },
-      })
-
-      await tx.payment.updateMany({
-        where: {
-          companyId,
-          billType: 'purchase',
-          billId,
-          deletedAt: null
-        },
-        data: {
-          deletedAt,
-          status: 'pending'
-        }
-      })
-
-      await tx.specialPurchaseBill.delete({
-        where: { id: billId },
-      })
-    })
-
-    return NextResponse.json({ success: true, message: 'Special purchase bill deleted successfully' })
+    return NextResponse.json({ error: 'Not authorised to delete this entry.' }, { status: 403 })
   } catch (error) {
     console.error('Error deleting special purchase bill:', error)
     const errorMessage = error instanceof Error ? error.message : 'Internal server error'

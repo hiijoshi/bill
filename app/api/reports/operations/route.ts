@@ -286,6 +286,7 @@ export async function GET(request: NextRequest) {
 
       const salesWhere = {
       companyId: { in: targetCompanyIds },
+      status: { not: 'cancelled' as const },
       ...(dateFrom || dateTo
         ? {
             billDate: {
@@ -298,6 +299,7 @@ export async function GET(request: NextRequest) {
 
       const purchaseWhere = {
       companyId: { in: targetCompanyIds },
+      status: { not: 'cancelled' as const },
       ...(dateFrom || dateTo
         ? {
             billDate: {
@@ -336,6 +338,7 @@ export async function GET(request: NextRequest) {
 
       const salesOutstandingWhere = {
       companyId: { in: targetCompanyIds },
+      status: { not: 'cancelled' as const },
       ...(dateTo
         ? {
             billDate: {
@@ -347,6 +350,7 @@ export async function GET(request: NextRequest) {
 
       const purchaseOutstandingWhere = {
       companyId: { in: targetCompanyIds },
+      status: { not: 'cancelled' as const },
       ...(dateTo
         ? {
             billDate: {
@@ -882,6 +886,7 @@ export async function GET(request: NextRequest) {
             where: {
               companyId: { in: targetCompanyIds },
               partyId: selectedPartyId,
+              status: { not: 'cancelled' },
               ...(dateFrom || dateTo
                 ? {
                     billDate: {
@@ -945,6 +950,7 @@ export async function GET(request: NextRequest) {
                 where: {
                   companyId: { in: targetCompanyIds },
                   partyId: selectedPartyId,
+                  status: { not: 'cancelled' },
                   billDate: { lt: dateFrom }
                 },
                 _sum: {

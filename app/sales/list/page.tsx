@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { Eye, Edit, Trash2, Printer, FileText, Download, MessageCircle } from 'lucide-react'
+import { Eye, Edit, Ban, Printer, FileText, Download, MessageCircle } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
@@ -75,6 +75,8 @@ interface RawSalesBill {
   billDate?: unknown
   totalAmount?: unknown
   receivedAmount?: unknown
+  balanceAmount?: unknown
+  status?: unknown
   party?: {
     name?: unknown
     address?: unknown
@@ -84,7 +86,7 @@ interface RawSalesBill {
   transportBills?: RawTransportBill[]
 }
 
-type BillViewTab = 'active' | 'paid' | 'all'
+type BillViewTab = 'active' | 'paid' | 'cancelled' | 'all'
 
 const clampNonNegative = (value: number): number => {
   const parsed = Number(value)
@@ -92,8 +94,15 @@ const clampNonNegative = (value: number): number => {
   return Math.max(0, parsed)
 }
 
-function normalizeBillStatus(totalAmount: number, receivedAmount: number): 'paid' | 'partial' | 'unpaid' {
-  if (totalAmount > 0 && receivedAmount >= totalAmount) return 'paid'
+function normalizeBillStatus(
+  totalAmount: number,
+  receivedAmount: number,
+  balanceAmount: number,
+  statusRaw: unknown
+): 'paid' | 'partial' | 'unpaid' | 'cancelled' {
+  const normalizedStatus = String(statusRaw || '').trim().toLowerCase()
+  if (normalizedStatus === 'cancelled') return 'cancelled'
+  if (balanceAmount <= 0 && totalAmount > 0) return 'paid'
   if (receivedAmount > 0) return 'partial'
   return 'unpaid'
 }
@@ -101,8 +110,9 @@ function normalizeBillStatus(totalAmount: number, receivedAmount: number): 'paid
 function normalizeSalesBill(raw: RawSalesBill): SalesBill {
   const totalAmount = clampNonNegative(Number(raw?.totalAmount || 0))
   const receivedAmount = clampNonNegative(Number(raw?.receivedAmount || 0))
-  const balanceAmount = Math.max(0, totalAmount - receivedAmount)
-  const status = normalizeBillStatus(totalAmount, receivedAmount)
+  const explicitBalance = clampNonNegative(Number(raw?.balanceAmount || 0))
+  const status = normalizeBillStatus(totalAmount, receivedAmount, explicitBalance, raw?.status)
+  const balanceAmount = status === 'cancelled' ? explicitBalance : Math.max(0, totalAmount - receivedAmount)
 
   return {
     id: String(raw?.id || ''),
@@ -262,7 +272,7 @@ export default function SalesListPage() {
         setLoading(false)
       }
 
-      const response = await fetch(`/api/sales-bills?companyId=${companyIdParam}`)
+      const response = await fetch(`/api/sales-bills?companyId=${companyIdParam}&includeCancelled=true`)
       if (response.status === 401) {
         setLoading(false)
         router.push('/login')
@@ -356,16 +366,22 @@ export default function SalesListPage() {
     [filteredBills]
   )
 
+  const cancelledBills = useMemo(
+    () => filteredBills.filter((bill) => bill.status === 'cancelled'),
+    [filteredBills]
+  )
+
   const activeBills = useMemo(
-    () => filteredBills.filter((bill) => bill.status !== 'paid'),
+    () => filteredBills.filter((bill) => bill.status !== 'paid' && bill.status !== 'cancelled'),
     [filteredBills]
   )
 
   const visibleBills = useMemo(() => {
     if (billView === 'paid') return paidBills
+    if (billView === 'cancelled') return cancelledBills
     if (billView === 'all') return filteredBills
     return activeBills
-  }, [activeBills, billView, filteredBills, paidBills])
+  }, [activeBills, billView, cancelledBills, filteredBills, paidBills])
 
   const clearFilters = () => {
     setInvoiceNumber('')
@@ -411,27 +427,41 @@ export default function SalesListPage() {
     router.push(editPath)
   }
 
-  const handleDelete = async (billId: string) => {
-    if (!confirm('Are you sure you want to delete this sales bill? This action cannot be undone.')) {
+  const handleCancel = async (billId: string) => {
+    const bill = salesBills.find((row) => row.id === billId)
+    if (!bill) return
+    if (bill.status === 'cancelled') {
+      alert('This bill is already cancelled.')
+      return
+    }
+
+    if (!confirm('Are you sure you want to cancel this sales bill?')) {
       return
     }
 
     try {
-      const response = await fetch(`/api/sales-bills?billId=${billId}&companyId=${companyId}`, {
-        method: 'DELETE'
+      const response = await fetch('/api/sales-bills/cancel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          billId,
+          companyId
+        })
       })
 
       const payload = (await response.json().catch(() => ({}))) as { error?: string }
       if (!response.ok) {
-        alert(payload.error || 'Not authorised to delete this entry.')
+        alert(payload.error || 'Failed to cancel sales bill.')
         return
       }
 
-      alert('Sales bill deleted successfully!')
+      alert('Sales bill cancelled successfully!')
       void fetchSalesBills()
     } catch (error) {
-      console.error('Error deleting sales bill:', error)
-      alert(error instanceof Error ? error.message : 'Failed to delete sales bill')
+      console.error('Error cancelling sales bill:', error)
+      alert(error instanceof Error ? error.message : 'Failed to cancel sales bill')
     }
   }
 
@@ -724,6 +754,9 @@ export default function SalesListPage() {
                   <TabsTrigger value="paid" onClick={() => setBillView('paid')}>
                     Paid ({paidBills.length})
                   </TabsTrigger>
+                  <TabsTrigger value="cancelled" onClick={() => setBillView('cancelled')}>
+                    Cancelled ({cancelledBills.length})
+                  </TabsTrigger>
                   <TabsTrigger value="all" onClick={() => setBillView('all')}>
                     All ({filteredBills.length})
                   </TabsTrigger>
@@ -794,7 +827,8 @@ export default function SalesListPage() {
                         <TableCell>
                           <Badge variant={
                             bill.status === 'paid' ? 'default' :
-                            bill.status === 'partial' ? 'secondary' : 'destructive'
+                            bill.status === 'partial' ? 'secondary' :
+                            bill.status === 'cancelled' ? 'outline' : 'destructive'
                           }>
                             {bill.status}
                           </Badge>
@@ -808,20 +842,25 @@ export default function SalesListPage() {
                             >
                               <Eye className="w-4 h-4" />
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleEdit(bill.id)}
-                            >
-                              <Edit className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleDelete(bill.id)}
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
+                            {bill.status !== 'cancelled' ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleEdit(bill.id)}
+                              >
+                                <Edit className="w-4 h-4" />
+                              </Button>
+                            ) : null}
+                            {bill.status !== 'cancelled' ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleCancel(bill.id)}
+                                title="Mark Cancelled"
+                              >
+                                <Ban className="w-4 h-4" />
+                              </Button>
+                            ) : null}
                             <Button
                               size="sm"
                               variant="outline"

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
-import { ArrowLeft, Edit, Trash2, Printer, FileText } from 'lucide-react'
+import { ArrowLeft, Edit, Ban, Printer, FileText } from 'lucide-react'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
 
@@ -177,7 +177,7 @@ function SalesViewPageContent() {
 
     const fetchSalesBill = async (targetCompanyId: string) => {
       try {
-        const response = await fetch(`/api/sales-bills?companyId=${targetCompanyId}&billId=${billId}`)
+        const response = await fetch(`/api/sales-bills?companyId=${targetCompanyId}&billId=${billId}&includeCancelled=true`)
         if (cancelled) return
         if (!response.ok) {
           throw new Error('Sales bill not found')
@@ -221,29 +221,36 @@ function SalesViewPageContent() {
     router.push(editPath)
   }
 
-  const handleDelete = () => {
+  const handleCancel = () => {
     if (!billId) return
-    if (!confirm('Are you sure you want to delete this sales bill? This action cannot be undone.')) {
+    if (!confirm('Are you sure you want to cancel this sales bill?')) {
       return
     }
 
     void (async () => {
       try {
-        const response = await fetch(`/api/sales-bills?billId=${billId}&companyId=${companyId}`, {
-          method: 'DELETE'
+        const response = await fetch('/api/sales-bills/cancel', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            billId,
+            companyId
+          })
         })
 
         const payload = (await response.json().catch(() => ({}))) as { error?: string }
         if (!response.ok) {
-          alert(payload.error || 'Not authorised to delete this entry.')
+          alert(payload.error || 'Failed to cancel sales bill.')
           return
         }
 
-        alert('Sales bill deleted successfully!')
+        alert('Sales bill cancelled successfully!')
         router.push('/sales/list')
       } catch (error) {
-        console.error('Error deleting sales bill:', error)
-        alert(error instanceof Error ? error.message : 'Failed to delete sales bill')
+        console.error('Error cancelling sales bill:', error)
+        alert(error instanceof Error ? error.message : 'Failed to cancel sales bill')
       }
     })()
   }
@@ -304,14 +311,18 @@ function SalesViewPageContent() {
               <h1 className="text-3xl font-bold">Sales Bill Details</h1>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={handleEdit}>
-                <Edit className="w-4 h-4 mr-2" />
-                Edit
-              </Button>
-              <Button variant="outline" onClick={handleDelete}>
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete
-              </Button>
+              {salesBill.status !== 'cancelled' ? (
+                <Button variant="outline" onClick={handleEdit}>
+                  <Edit className="w-4 h-4 mr-2" />
+                  Edit
+                </Button>
+              ) : null}
+              {salesBill.status !== 'cancelled' ? (
+                <Button variant="outline" onClick={handleCancel}>
+                  <Ban className="w-4 h-4 mr-2" />
+                  Cancel
+                </Button>
+              ) : null}
               <Button variant="outline" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
                 Print
@@ -342,7 +353,8 @@ function SalesViewPageContent() {
                   <p className="text-sm text-gray-600">Status</p>
                   <Badge variant={
                     salesBill.status === 'paid' ? 'default' :
-                    salesBill.status === 'partial' ? 'secondary' : 'destructive'
+                    salesBill.status === 'partial' ? 'secondary' :
+                    salesBill.status === 'cancelled' ? 'outline' : 'destructive'
                   }>
                     {salesBill.status}
                   </Badge>
