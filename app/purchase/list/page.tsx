@@ -481,42 +481,8 @@ export default function PurchaseListPage() {
     router.push(path)
   }
 
-  const handleDelete = (bill: PurchaseBill) => {
-    // Find the bill to check its date
-    const billDate = new Date(bill.billDate)
-    const currentDate = new Date()
-    const daysDifference = Math.floor((currentDate.getTime() - billDate.getTime()) / (1000 * 60 * 60 * 24))
-
-    if (daysDifference > 15) {
-      alert(`Cannot delete bill. Bill is older than 15 days. Bill age: ${daysDifference} days. Only bills within 15 days can be deleted.`)
-      return
-    }
-
-    const billType = bill.type === 'regular' ? 'purchase' : 'special purchase'
-    if (confirm(`Are you sure you want to delete this ${billType} bill? This action cannot be undone.`)) {
-      deleteBill(bill)
-    }
-  }
-
-  const deleteBill = async (bill: PurchaseBill) => {
-    try {
-      const apiUrl = bill.type === 'regular' ? '/api/purchase-bills' : '/api/special-purchase-bills'
-      const response = await fetch(`${apiUrl}?billId=${bill.id}&companyId=${companyId}`, {
-        method: 'DELETE'
-      })
-
-      if (response.ok) {
-        const billType = bill.type === 'regular' ? 'Purchase' : 'Special Purchase'
-        alert(`${billType} bill deleted successfully!`)
-        void fetchPurchaseBills() // Refresh the list
-      } else {
-        const errorData = await response.json()
-        alert('Error deleting bill: ' + (errorData.error || 'Unknown error'))
-      }
-    } catch (error) {
-      console.error('Error deleting bill:', error)
-      alert('Error deleting bill: ' + (error instanceof Error ? error.message : 'Unknown error'))
-    }
+  const handleDelete = (_bill: PurchaseBill) => {
+    alert('Not authorised to delete this entry.')
   }
 
   const handlePrint = (bill: PurchaseBill) => {

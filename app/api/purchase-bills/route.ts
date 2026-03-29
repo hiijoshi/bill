@@ -531,50 +531,7 @@ export async function DELETE(request: NextRequest) {
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
-    const purchaseBill = await prisma.purchaseBill.findFirst({
-      where: { id: billId, companyId },
-      include: {
-        purchaseItems: true
-      }
-    })
-
-    if (!purchaseBill) {
-      return NextResponse.json({ error: 'Purchase bill not found' }, { status: 404 })
-    }
-
-    await prisma.$transaction(async (tx) => {
-      const deletedAt = new Date()
-
-      await tx.stockLedger.deleteMany({
-        where: {
-          refTable: 'purchase_bills',
-          refId: billId
-        }
-      })
-
-      await tx.purchaseItem.deleteMany({
-        where: { purchaseBillId: billId }
-      })
-
-      await tx.payment.updateMany({
-        where: {
-          companyId,
-          billType: 'purchase',
-          billId,
-          deletedAt: null
-        },
-        data: {
-          deletedAt,
-          status: 'pending'
-        }
-      })
-
-      await tx.purchaseBill.delete({
-        where: { id: billId }
-      })
-    })
-
-    return NextResponse.json({ success: true, message: 'Purchase bill deleted successfully' })
+    return NextResponse.json({ error: 'Not authorised to delete this entry.' }, { status: 403 })
   } catch (error) {
     return NextResponse.json(
       {

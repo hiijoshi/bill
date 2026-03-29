@@ -411,47 +411,8 @@ export default function SalesListPage() {
     router.push(editPath)
   }
 
-  const handleDelete = (billId: string) => {
-    // Find the bill to check its date
-    const bill = salesBills.find(b => b.id === billId)
-    if (!bill) return
-
-    // Check if bill is within 15 days from today
-    if (!isValidDateValue(bill.invoiceDate)) {
-      alert('Invalid bill date. Please edit and save this bill first.')
-      return
-    }
-    const billDate = new Date(bill.invoiceDate)
-    const currentDate = new Date()
-    const daysDifference = Math.floor((currentDate.getTime() - billDate.getTime()) / (1000 * 60 * 60 * 24))
-
-    if (daysDifference > 15) {
-      alert(`Cannot delete bill. Bill is older than 15 days. Bill age: ${daysDifference} days. Only bills within 15 days can be deleted.`)
-      return
-    }
-
-    if (confirm('Are you sure you want to delete this bill? This action cannot be undone.')) {
-      deleteBill(billId)
-    }
-  }
-
-  const deleteBill = async (billId: string) => {
-    try {
-      const response = await fetch(`/api/sales-bills?billId=${billId}&companyId=${companyId}`, {
-        method: 'DELETE'
-      })
-
-      if (response.ok) {
-        alert('Sales bill deleted successfully!')
-        void fetchSalesBills() // Refresh the list
-      } else {
-        const errorData = await response.json()
-        alert('Error deleting sales bill: ' + (errorData.error || 'Unknown error'))
-      }
-    } catch (error) {
-      console.error('Error deleting sales bill:', error)
-      alert('Error deleting sales bill: ' + (error instanceof Error ? error.message : 'Unknown error'))
-    }
+  const handleDelete = (_billId: string) => {
+    alert('Not authorised to delete this entry.')
   }
 
   const handlePrint = (billId: string) => {

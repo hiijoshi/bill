@@ -124,30 +124,7 @@ function SpecialPurchaseViewContent() {
   }, [billId, fetchBill, router])
 
   const handleDelete = async () => {
-    if (!bill || !companyId) return
-
-    const billDate = new Date(bill.billDate)
-    const daysDifference = Math.floor((Date.now() - billDate.getTime()) / (1000 * 60 * 60 * 24))
-    if (daysDifference > 15) {
-      alert(`Cannot delete bill older than 15 days. Bill age: ${daysDifference} days.`)
-      return
-    }
-
-    if (!confirm('Are you sure you want to delete this special purchase bill?')) return
-
-    const response = await fetch(
-      `/api/special-purchase-bills?billId=${bill.id}&companyId=${companyId}`,
-      { method: 'DELETE' }
-    )
-
-    if (response.ok) {
-      alert('Special purchase bill deleted successfully!')
-      router.push('/purchase/list')
-      return
-    }
-
-    const payload = (await response.json().catch(() => ({}))) as { error?: string }
-    alert(payload.error || 'Failed to delete special purchase bill')
+    alert('Not authorised to delete this entry.')
   }
 
   const handlePrint = () => {

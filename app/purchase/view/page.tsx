@@ -120,40 +120,7 @@ function PurchaseViewPageContent() {
   }
 
   const handleDelete = () => {
-    if (!purchaseBill) return
-
-    // Check if bill is within 15 days from today
-    const billDate = new Date(purchaseBill.billDate)
-    const currentDate = new Date()
-    const daysDifference = Math.floor((currentDate.getTime() - billDate.getTime()) / (1000 * 60 * 60 * 24))
-
-    if (daysDifference > 15) {
-      alert(`Cannot delete bill. Bill is older than 15 days. Bill age: ${daysDifference} days. Only bills within 15 days can be deleted.`)
-      return
-    }
-
-    if (confirm('Are you sure you want to delete this bill? This action cannot be undone.')) {
-      deleteBill()
-    }
-  }
-
-  const deleteBill = async () => {
-    try {
-      const response = await fetch(`/api/purchase-bills?billId=${billId}&companyId=${companyId}`, {
-        method: 'DELETE'
-      })
-
-      if (response.ok) {
-        alert('Purchase bill deleted successfully!')
-        router.push('/purchase/list')
-      } else {
-        const errorData = await response.json()
-        alert('Error deleting purchase bill: ' + (errorData.error || 'Unknown error'))
-      }
-    } catch (error) {
-      console.error('Error deleting purchase bill:', error)
-      alert('Error deleting purchase bill: ' + (error instanceof Error ? error.message : 'Unknown error'))
-    }
+    alert('Not authorised to delete this entry.')
   }
 
   const handlePrint = () => {
