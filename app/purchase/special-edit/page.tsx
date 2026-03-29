@@ -76,6 +76,7 @@ function SpecialPurchaseEditPageContent() {
   const [supplierGst, setSupplierGst] = useState('')
   const [totalAmount, setTotalAmount] = useState('')
   const [paidAmount, setPaidAmount] = useState('')
+  const [recordedPaidAmount, setRecordedPaidAmount] = useState(0)
   const [balanceAmount, setBalanceAmount] = useState('')
 
   // Single item state (API expects single item)
@@ -136,6 +137,7 @@ function SpecialPurchaseEditPageContent() {
 
         setTotalAmount(billData.totalAmount.toString())
         setPaidAmount(billData.paidAmount.toString())
+        setRecordedPaidAmount(Math.max(0, Number(billData.paidAmount || 0)))
         setBalanceAmount(billData.balanceAmount.toString())
 
         if (billData.specialPurchaseItems && billData.specialPurchaseItems.length > 0) {
@@ -287,6 +289,10 @@ function SpecialPurchaseEditPageContent() {
       const paid = parseFloat(paidAmount) || 0
       if (paid > finalTotal) {
         alert('Paid amount cannot be more than final invoice total')
+        return
+      }
+      if (recordedPaidAmount > 0 && paid < recordedPaidAmount) {
+        alert(`Paid amount cannot be less than recorded payment history (₹${recordedPaidAmount.toFixed(2)}). Adjust payment history first.`)
         return
       }
       const finalBalance = roundCurrency(Math.max(0, finalTotal - paid))

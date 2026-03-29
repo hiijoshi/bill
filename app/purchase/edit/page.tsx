@@ -111,10 +111,19 @@ function PurchaseEditPageContent() {
     const nextPaid = Number(normalized)
     const maxPayable = getCurrentFinalTotalValue()
     const hasPayable = maxPayable > 0
+    const recordedPaid = Math.max(0, purchaseBill?.paidAmount || 0)
 
     if (hasPayable && nextPaid > maxPayable) {
       setPaidAmount(String(maxPayable))
       setPaidAmountError('Paid amount cannot be greater than final invoice total')
+      return
+    }
+
+    if (recordedPaid > 0 && nextPaid < recordedPaid) {
+      setPaidAmount(normalized)
+      setPaidAmountError(
+        `Paid amount cannot be less than recorded payment history (${currencyText(recordedPaid)})`
+      )
       return
     }
 
@@ -275,6 +284,7 @@ function PurchaseEditPageContent() {
     // Payment validation
     const payable = getCurrentFinalTotalValue()
     const paid = parseFloat(paidAmount) || 0
+    const recordedPaid = Math.max(0, purchaseBill?.paidAmount || 0)
     if (payable < 0 || paid < 0) {
       alert('Amounts cannot be negative')
       return
@@ -283,6 +293,11 @@ function PurchaseEditPageContent() {
     // Check if paid amount exceeds payable amount
     if (paid > payable) {
       alert('Paid amount cannot be more than final invoice total!')
+      return
+    }
+
+    if (recordedPaid > 0 && paid < recordedPaid) {
+      alert(`Paid amount cannot be less than recorded payment history (${currencyText(recordedPaid)}). Adjust payment history first.`)
       return
     }
 
