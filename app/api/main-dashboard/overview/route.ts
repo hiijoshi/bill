@@ -21,6 +21,7 @@ type OverviewSection =
   | 'stockLedger'
 
 type OverviewScopedCompanyIds = {
+  dashboardCompanyIds: string[]
   purchaseCompanyIds: string[]
   salesCompanyIds: string[]
   paymentCompanyIds: string[]
@@ -207,6 +208,7 @@ async function getOverviewScopedCompanyIds(
   targetCompanyIds: string[]
 ): Promise<OverviewScopedCompanyIds> {
   const emptyScopes: OverviewScopedCompanyIds = {
+    dashboardCompanyIds: [],
     purchaseCompanyIds: [],
     salesCompanyIds: [],
     paymentCompanyIds: [],
@@ -220,6 +222,7 @@ async function getOverviewScopedCompanyIds(
 
   if (auth.role === 'super_admin') {
     return {
+      dashboardCompanyIds: targetCompanyIds,
       purchaseCompanyIds: targetCompanyIds,
       salesCompanyIds: targetCompanyIds,
       paymentCompanyIds: targetCompanyIds,
@@ -240,6 +243,7 @@ async function getOverviewScopedCompanyIds(
       companyId: { in: targetCompanyIds },
       module: {
         in: [
+          'DASHBOARD',
           'PURCHASE_LIST',
           'SALES_LIST',
           'PAYMENTS',
@@ -264,14 +268,32 @@ async function getOverviewScopedCompanyIds(
     companyIdsByModule.set(row.module, set)
   }
 
+  const dashboardCompanyIds = Array.from(companyIdsByModule.get('DASHBOARD') || [])
+  const dashboardCompanyIdSet = new Set(dashboardCompanyIds)
+
   return {
-    purchaseCompanyIds: Array.from(companyIdsByModule.get('PURCHASE_LIST') || []),
-    salesCompanyIds: Array.from(companyIdsByModule.get('SALES_LIST') || []),
-    paymentCompanyIds: Array.from(companyIdsByModule.get('PAYMENTS') || []),
-    productCompanyIds: Array.from(companyIdsByModule.get('MASTER_PRODUCTS') || []),
-    partyCompanyIds: Array.from(companyIdsByModule.get('MASTER_PARTIES') || []),
-    unitCompanyIds: Array.from(companyIdsByModule.get('MASTER_UNITS') || []),
-    stockCompanyIds: Array.from(companyIdsByModule.get('STOCK_DASHBOARD') || [])
+    dashboardCompanyIds,
+    purchaseCompanyIds: Array.from(companyIdsByModule.get('PURCHASE_LIST') || []).filter((companyId) =>
+      dashboardCompanyIdSet.has(companyId)
+    ),
+    salesCompanyIds: Array.from(companyIdsByModule.get('SALES_LIST') || []).filter((companyId) =>
+      dashboardCompanyIdSet.has(companyId)
+    ),
+    paymentCompanyIds: Array.from(companyIdsByModule.get('PAYMENTS') || []).filter((companyId) =>
+      dashboardCompanyIdSet.has(companyId)
+    ),
+    productCompanyIds: Array.from(companyIdsByModule.get('MASTER_PRODUCTS') || []).filter((companyId) =>
+      dashboardCompanyIdSet.has(companyId)
+    ),
+    partyCompanyIds: Array.from(companyIdsByModule.get('MASTER_PARTIES') || []).filter((companyId) =>
+      dashboardCompanyIdSet.has(companyId)
+    ),
+    unitCompanyIds: Array.from(companyIdsByModule.get('MASTER_UNITS') || []).filter((companyId) =>
+      dashboardCompanyIdSet.has(companyId)
+    ),
+    stockCompanyIds: Array.from(companyIdsByModule.get('STOCK_DASHBOARD') || []).filter((companyId) =>
+      dashboardCompanyIdSet.has(companyId)
+    )
   }
 }
 
@@ -656,8 +678,14 @@ export async function GET(request: NextRequest) {
       }
 
       const scopes = await getOverviewScopedCompanyIds(auth, targetCompanyIds)
+      if (scopes.dashboardCompanyIds.length === 0) {
+        return supabaseSession.applyCookies(
+          NextResponse.json({ error: 'Missing privilege: DASHBOARD (read)' }, { status: 403 })
+        )
+      }
+
       const companies = unlockedCompanies
-        .filter((company) => targetCompanyIds.includes(company.id))
+        .filter((company) => scopes.dashboardCompanyIds.includes(company.id))
         .map((company) => ({ id: company.id, name: company.name }))
 
       const cacheKey = makeServerCacheKey('overview', [Array.from(includes).sort(), scopes, companies])
@@ -686,7 +714,11 @@ export async function GET(request: NextRequest) {
     }
 
     const scopes = await getOverviewScopedCompanyIds(authResult.auth, targetCompanyIds)
-    const companies = unlockedCompanies.filter((company) => targetCompanyIds.includes(company.id))
+    if (scopes.dashboardCompanyIds.length === 0) {
+      return NextResponse.json({ error: 'Missing privilege: DASHBOARD (read)' }, { status: 403 })
+    }
+
+    const companies = unlockedCompanies.filter((company) => scopes.dashboardCompanyIds.includes(company.id))
     const cacheKey = makeServerCacheKey('overview', [Array.from(includes).sort(), scopes, companies])
 
     const payload = await getOrSetServerCache(cacheKey, OVERVIEW_CACHE_TTL_MS, () =>

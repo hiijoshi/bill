@@ -1,11 +1,10 @@
 import { redirect } from 'next/navigation'
-import { getSession } from '@/lib/session'
+import { resolveServerDefaultAppRoute } from '@/lib/server-app-default-route'
 
 export default async function Home() {
-  // Keep app-user shortcut, but do not auto-jump into the developer-only super-admin area.
-  const appSession = await getSession()
-  if (appSession) {
-    redirect('/main/dashboard')
+  const nextRoute = await resolveServerDefaultAppRoute()
+  if (nextRoute) {
+    redirect(nextRoute)
   }
 
   return (

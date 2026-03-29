@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess, parseJsonWithSchema, requireAuthContext } from '@/lib/api-security'
 import { cleanString, normalizeTenDigitPhone, parseNonNegativeNumber } from '@/lib/field-validation'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
+import { buildPurchasePaymentSyncNote } from '@/lib/purchase-payment-sync'
 
 const writeSchema = z.object({
   id: z.string().optional(),
@@ -137,84 +138,112 @@ export async function POST(request: NextRequest) {
     const balanceAmount = Math.max(0, grossAmount - paidAmount)
     const normalizedStatus = deriveStatus(paidAmount, grossAmount)
 
-    let supplier = await prisma.supplier.findFirst({
-      where: {
-        companyId: body.companyId,
-        name: body.supplierName,
-      },
-    })
+    const billDateValue = new Date(body.billDate)
 
-    if (!supplier) {
-      supplier = await prisma.supplier.create({
-        data: {
+    const specialPurchaseBill = await prisma.$transaction(async (tx) => {
+      let supplier = await tx.supplier.findFirst({
+        where: {
           companyId: body.companyId,
           name: body.supplierName,
-          address: cleanString(body.supplierAddress),
-          phone1: supplierPhone,
-          phone2: supplierPhone2,
-          gstNumber: cleanString(body.supplierGstNumber),
-          ifscCode: cleanString(body.supplierIfscCode)?.toUpperCase() || null,
-          bankName: cleanString(body.supplierBankName),
-          accountNo: cleanString(body.supplierAccountNo),
         },
       })
-    } else {
-      supplier = await prisma.supplier.update({
-        where: { id: supplier.id },
+
+      if (!supplier) {
+        supplier = await tx.supplier.create({
+          data: {
+            companyId: body.companyId,
+            name: body.supplierName,
+            address: cleanString(body.supplierAddress),
+            phone1: supplierPhone,
+            phone2: supplierPhone2,
+            gstNumber: cleanString(body.supplierGstNumber),
+            ifscCode: cleanString(body.supplierIfscCode)?.toUpperCase() || null,
+            bankName: cleanString(body.supplierBankName),
+            accountNo: cleanString(body.supplierAccountNo),
+          },
+        })
+      } else {
+        supplier = await tx.supplier.update({
+          where: { id: supplier.id },
+          data: {
+            address: cleanString(body.supplierAddress) ?? supplier.address,
+            phone1: supplierPhone || supplier.phone1,
+            phone2: supplierPhone2 || supplier.phone2,
+            gstNumber: cleanString(body.supplierGstNumber) ?? supplier.gstNumber,
+            ifscCode: cleanString(body.supplierIfscCode)?.toUpperCase() ?? supplier.ifscCode,
+            bankName: cleanString(body.supplierBankName) ?? supplier.bankName,
+            accountNo: cleanString(body.supplierAccountNo) ?? supplier.accountNo,
+          },
+        })
+      }
+
+      const createdBill = await tx.specialPurchaseBill.create({
         data: {
-          address: cleanString(body.supplierAddress) ?? supplier.address,
-          phone1: supplierPhone || supplier.phone1,
-          phone2: supplierPhone2 || supplier.phone2,
-          gstNumber: cleanString(body.supplierGstNumber) ?? supplier.gstNumber,
-          ifscCode: cleanString(body.supplierIfscCode)?.toUpperCase() ?? supplier.ifscCode,
-          bankName: cleanString(body.supplierBankName) ?? supplier.bankName,
-          accountNo: cleanString(body.supplierAccountNo) ?? supplier.accountNo,
+          companyId: body.companyId,
+          supplierInvoiceNo: body.supplierInvoiceNo,
+          billDate: billDateValue,
+          supplierId: supplier.id,
+          subTotalAmount: tax.taxableAmount,
+          gstAmount: tax.gstAmount,
+          totalAmount: grossAmount,
+          paidAmount,
+          balanceAmount,
+          status: normalizedStatus,
+          createdBy: userId,
         },
       })
-    }
 
-    const specialPurchaseBill = await prisma.specialPurchaseBill.create({
-      data: {
-        companyId: body.companyId,
-        supplierInvoiceNo: body.supplierInvoiceNo,
-        billDate: new Date(body.billDate),
-        supplierId: supplier.id,
-        subTotalAmount: tax.taxableAmount,
-        gstAmount: tax.gstAmount,
-        totalAmount: grossAmount,
-        paidAmount,
-        balanceAmount,
-        status: normalizedStatus,
-        createdBy: userId,
-      },
-    })
+      await tx.specialPurchaseItem.create({
+        data: {
+          specialPurchaseBillId: createdBill.id,
+          productId: body.productId,
+          noOfBags: body.noOfBags ? parseInt(String(body.noOfBags), 10) : null,
+          weight,
+          rate,
+          taxableAmount: tax.taxableAmount,
+          gstRateSnapshot: tax.gstRate,
+          gstAmount: tax.gstAmount,
+          netAmount: tax.taxableAmount,
+          otherAmount,
+          grossAmount,
+        },
+      })
 
-    await prisma.specialPurchaseItem.create({
-      data: {
-        specialPurchaseBillId: specialPurchaseBill.id,
-        productId: body.productId,
-        noOfBags: body.noOfBags ? parseInt(String(body.noOfBags), 10) : null,
-        weight,
-        rate,
-        taxableAmount: tax.taxableAmount,
-        gstRateSnapshot: tax.gstRate,
-        gstAmount: tax.gstAmount,
-        netAmount: tax.taxableAmount,
-        otherAmount,
-        grossAmount,
-      },
-    })
+      await tx.stockLedger.create({
+        data: {
+          companyId: body.companyId,
+          entryDate: billDateValue,
+          productId: body.productId,
+          type: 'purchase',
+          qtyIn: weight,
+          refTable: 'special_purchase_bills',
+          refId: createdBill.id,
+        },
+      })
 
-    await prisma.stockLedger.create({
-      data: {
-        companyId: body.companyId,
-        entryDate: new Date(body.billDate),
-        productId: body.productId,
-        type: 'purchase',
-        qtyIn: weight,
-        refTable: 'special_purchase_bills',
-        refId: specialPurchaseBill.id,
-      },
+      if (paidAmount > 0) {
+        await tx.payment.create({
+          data: {
+            companyId: body.companyId,
+            billType: 'purchase',
+            billId: createdBill.id,
+            billDate: billDateValue,
+            payDate: billDateValue,
+            amount: paidAmount,
+            mode: 'cash',
+            cashAmount: paidAmount,
+            cashPaymentDate: billDateValue,
+            onlinePayAmount: null,
+            onlinePaymentDate: null,
+            status: 'paid',
+            note: buildPurchasePaymentSyncNote('special'),
+            farmerId: null,
+            partyId: null
+          }
+        })
+      }
+
+      return createdBill
     })
 
     return NextResponse.json({ success: true, specialPurchaseBill })
@@ -355,113 +384,208 @@ export async function PUT(request: NextRequest) {
     const balanceAmount = Math.max(0, grossAmount - paidAmount)
     const normalizedStatus = deriveStatus(paidAmount, grossAmount)
 
-    let supplier = await prisma.supplier.findFirst({
-      where: {
-        companyId: body.companyId,
-        name: body.supplierName,
-      },
-    })
+    const billDateValue = new Date(body.billDate)
 
-    if (!supplier) {
-      supplier = await prisma.supplier.create({
-        data: {
+    const specialPurchaseBill = await prisma.$transaction(async (tx) => {
+      const existingBill = await tx.specialPurchaseBill.findFirst({
+        where: {
+          id: body.id,
+          companyId: body.companyId
+        },
+        select: {
+          id: true
+        }
+      })
+
+      if (!existingBill) {
+        throw new Error('Special purchase bill not found')
+      }
+
+      const recordedPaymentAggregate = await tx.payment.aggregate({
+        where: {
+          companyId: body.companyId,
+          billType: 'purchase',
+          billId: body.id,
+          deletedAt: null
+        },
+        _sum: {
+          amount: true
+        }
+      })
+
+      const recordedPaidAmount = clampNonNegative(recordedPaymentAggregate._sum.amount)
+
+      if (recordedPaidAmount > grossAmount) {
+        throw new Error('Final total cannot be less than recorded payment history')
+      }
+
+      if (paidAmount < recordedPaidAmount) {
+        throw new Error('Paid amount cannot be less than recorded payment history')
+      }
+
+      const paymentDelta = Math.max(0, paidAmount - recordedPaidAmount)
+
+      let supplier = await tx.supplier.findFirst({
+        where: {
           companyId: body.companyId,
           name: body.supplierName,
-          address: cleanString(body.supplierAddress),
-          phone1: supplierPhone,
-          phone2: supplierPhone2,
-          gstNumber: cleanString(body.supplierGstNumber),
-          ifscCode: cleanString(body.supplierIfscCode)?.toUpperCase() || null,
-          bankName: cleanString(body.supplierBankName),
-          accountNo: cleanString(body.supplierAccountNo),
         },
       })
-    } else {
-      supplier = await prisma.supplier.update({
-        where: { id: supplier.id },
+
+      if (!supplier) {
+        supplier = await tx.supplier.create({
+          data: {
+            companyId: body.companyId,
+            name: body.supplierName,
+            address: cleanString(body.supplierAddress),
+            phone1: supplierPhone,
+            phone2: supplierPhone2,
+            gstNumber: cleanString(body.supplierGstNumber),
+            ifscCode: cleanString(body.supplierIfscCode)?.toUpperCase() || null,
+            bankName: cleanString(body.supplierBankName),
+            accountNo: cleanString(body.supplierAccountNo),
+          },
+        })
+      } else {
+        supplier = await tx.supplier.update({
+          where: { id: supplier.id },
+          data: {
+            address: cleanString(body.supplierAddress) ?? supplier.address,
+            phone1: supplierPhone || supplier.phone1,
+            phone2: supplierPhone2 || supplier.phone2,
+            gstNumber: cleanString(body.supplierGstNumber) ?? supplier.gstNumber,
+            ifscCode: cleanString(body.supplierIfscCode)?.toUpperCase() ?? supplier.ifscCode,
+            bankName: cleanString(body.supplierBankName) ?? supplier.bankName,
+            accountNo: cleanString(body.supplierAccountNo) ?? supplier.accountNo,
+          },
+        })
+      }
+
+      const updatedBill = await tx.specialPurchaseBill.update({
+        where: { id: body.id },
         data: {
-          address: cleanString(body.supplierAddress) ?? supplier.address,
-          phone1: supplierPhone || supplier.phone1,
-          phone2: supplierPhone2 || supplier.phone2,
-          gstNumber: cleanString(body.supplierGstNumber) ?? supplier.gstNumber,
-          ifscCode: cleanString(body.supplierIfscCode)?.toUpperCase() ?? supplier.ifscCode,
-          bankName: cleanString(body.supplierBankName) ?? supplier.bankName,
-          accountNo: cleanString(body.supplierAccountNo) ?? supplier.accountNo,
-        },
-      })
-    }
-
-    const specialPurchaseBill = await prisma.specialPurchaseBill.update({
-      where: { id: body.id },
-      data: {
-        companyId: body.companyId,
-        supplierInvoiceNo: body.supplierInvoiceNo,
-        billDate: new Date(body.billDate),
-        supplierId: supplier.id,
-        subTotalAmount: tax.taxableAmount,
-        gstAmount: tax.gstAmount,
-        totalAmount: grossAmount,
-        paidAmount,
-        balanceAmount,
-        status: normalizedStatus,
-      },
-    })
-
-    const existingItem = await prisma.specialPurchaseItem.findFirst({
-      where: { specialPurchaseBillId: body.id },
-    })
-
-    if (existingItem) {
-      await prisma.specialPurchaseItem.update({
-        where: { id: existingItem.id },
-        data: {
-          productId: body.productId,
-          noOfBags: body.noOfBags ? parseInt(String(body.noOfBags), 10) : null,
-          weight,
-          rate,
-          taxableAmount: tax.taxableAmount,
-          gstRateSnapshot: tax.gstRate,
+          companyId: body.companyId,
+          supplierInvoiceNo: body.supplierInvoiceNo,
+          billDate: billDateValue,
+          supplierId: supplier.id,
+          subTotalAmount: tax.taxableAmount,
           gstAmount: tax.gstAmount,
-          netAmount: tax.taxableAmount,
-          otherAmount,
-          grossAmount,
+          totalAmount: grossAmount,
+          paidAmount,
+          balanceAmount,
+          status: normalizedStatus,
         },
       })
-    } else {
-      await prisma.specialPurchaseItem.create({
-        data: {
-          specialPurchaseBillId: body.id,
-          productId: body.productId,
-          noOfBags: body.noOfBags ? parseInt(String(body.noOfBags), 10) : null,
-          weight,
-          rate,
-          taxableAmount: tax.taxableAmount,
-          gstRateSnapshot: tax.gstRate,
-          gstAmount: tax.gstAmount,
-          netAmount: tax.taxableAmount,
-          otherAmount,
-          grossAmount,
-        },
-      })
-    }
 
-    await prisma.stockLedger.updateMany({
-      where: {
-        refTable: 'special_purchase_bills',
-        refId: body.id,
-      },
-      data: {
-        entryDate: new Date(body.billDate),
-        productId: body.productId,
-        qtyIn: weight,
-      },
+      const existingItem = await tx.specialPurchaseItem.findFirst({
+        where: { specialPurchaseBillId: body.id },
+      })
+
+      if (existingItem) {
+        await tx.specialPurchaseItem.update({
+          where: { id: existingItem.id },
+          data: {
+            productId: body.productId,
+            noOfBags: body.noOfBags ? parseInt(String(body.noOfBags), 10) : null,
+            weight,
+            rate,
+            taxableAmount: tax.taxableAmount,
+            gstRateSnapshot: tax.gstRate,
+            gstAmount: tax.gstAmount,
+            netAmount: tax.taxableAmount,
+            otherAmount,
+            grossAmount,
+          },
+        })
+      } else {
+        await tx.specialPurchaseItem.create({
+          data: {
+            specialPurchaseBillId: body.id,
+            productId: body.productId,
+            noOfBags: body.noOfBags ? parseInt(String(body.noOfBags), 10) : null,
+            weight,
+            rate,
+            taxableAmount: tax.taxableAmount,
+            gstRateSnapshot: tax.gstRate,
+            gstAmount: tax.gstAmount,
+            netAmount: tax.taxableAmount,
+            otherAmount,
+            grossAmount,
+          },
+        })
+      }
+
+      const existingLedger = await tx.stockLedger.findFirst({
+        where: {
+          refTable: 'special_purchase_bills',
+          refId: body.id,
+        },
+        select: {
+          id: true
+        }
+      })
+
+      if (existingLedger) {
+        await tx.stockLedger.update({
+          where: { id: existingLedger.id },
+          data: {
+            entryDate: billDateValue,
+            productId: body.productId,
+            qtyIn: weight,
+          },
+        })
+      } else {
+        await tx.stockLedger.create({
+          data: {
+            companyId: body.companyId,
+            entryDate: billDateValue,
+            productId: body.productId,
+            type: 'purchase',
+            qtyIn: weight,
+            refTable: 'special_purchase_bills',
+            refId: body.id,
+          },
+        })
+      }
+
+      if (paymentDelta > 0) {
+        await tx.payment.create({
+          data: {
+            companyId: body.companyId,
+            billType: 'purchase',
+            billId: body.id,
+            billDate: billDateValue,
+            payDate: billDateValue,
+            amount: paymentDelta,
+            mode: 'cash',
+            cashAmount: paymentDelta,
+            cashPaymentDate: billDateValue,
+            onlinePayAmount: null,
+            onlinePaymentDate: null,
+            status: 'paid',
+            note: buildPurchasePaymentSyncNote('special'),
+            farmerId: null,
+            partyId: null
+          }
+        })
+      }
+
+      return updatedBill
     })
 
     return NextResponse.json({ success: true, specialPurchaseBill })
   } catch (error) {
     console.error('Error updating special purchase bill:', error)
     const errorMessage = error instanceof Error ? error.message : 'Internal server error'
-    return NextResponse.json({ error: errorMessage }, { status: 500 })
+    const status =
+      errorMessage.includes('cannot exceed') ||
+      errorMessage.includes('cannot be less than') ||
+      errorMessage.includes('recorded payment history')
+        ? 400
+        : errorMessage.includes('not found')
+          ? 404
+          : 500
+    return NextResponse.json({ error: errorMessage }, { status })
   }
 }
 
@@ -489,19 +613,36 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Special purchase bill not found' }, { status: 404 })
     }
 
-    await prisma.specialPurchaseItem.deleteMany({
-      where: { specialPurchaseBillId: billId },
-    })
+    await prisma.$transaction(async (tx) => {
+      const deletedAt = new Date()
 
-    await prisma.stockLedger.deleteMany({
-      where: {
-        refTable: 'special_purchase_bills',
-        refId: billId,
-      },
-    })
+      await tx.specialPurchaseItem.deleteMany({
+        where: { specialPurchaseBillId: billId },
+      })
 
-    await prisma.specialPurchaseBill.delete({
-      where: { id: billId },
+      await tx.stockLedger.deleteMany({
+        where: {
+          refTable: 'special_purchase_bills',
+          refId: billId,
+        },
+      })
+
+      await tx.payment.updateMany({
+        where: {
+          companyId,
+          billType: 'purchase',
+          billId,
+          deletedAt: null
+        },
+        data: {
+          deletedAt,
+          status: 'pending'
+        }
+      })
+
+      await tx.specialPurchaseBill.delete({
+        where: { id: billId },
+      })
     })
 
     return NextResponse.json({ success: true, message: 'Special purchase bill deleted successfully' })

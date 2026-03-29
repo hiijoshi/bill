@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { notifyAppCompanyChanged } from '@/lib/company-context'
+import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
 
 interface Company {
   id: string
@@ -40,7 +41,13 @@ export default function CompanySelector({ companies }: CompanySelectorProps) {
         }
 
         notifyAppCompanyChanged(selectedCompany)
-        router.push('/main/dashboard')
+        const permissionsResponse = await fetch(
+          `/api/auth/permissions?companyId=${encodeURIComponent(selectedCompany)}&includeMeta=true`,
+          { cache: 'no-store' }
+        )
+        const permissionsPayload = await permissionsResponse.json().catch(() => ({} as { permissions?: [] }))
+        const permissions = Array.isArray(permissionsPayload.permissions) ? permissionsPayload.permissions : []
+        router.push(resolveFirstAccessibleAppRoute(permissions, selectedCompany))
       } catch (error) {
         console.error('Failed to set company context:', error)
         alert('Failed to select company')

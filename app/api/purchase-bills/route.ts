@@ -14,6 +14,7 @@ import {
 import { normalizeTenDigitPhone, parseNonNegativeNumber } from '@/lib/field-validation'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 import { calculateTaxBreakdown } from '@/lib/billing-calculations'
+import { buildPurchasePaymentSyncNote } from '@/lib/purchase-payment-sync'
 
 type PaymentStatus = 'unpaid' | 'partial' | 'paid'
 
@@ -345,13 +346,42 @@ export async function POST(request: NextRequest) {
         }
       })
 
+      if (parsedPaid > 0) {
+        await tx.payment.create({
+          data: {
+            companyId,
+            billType: 'purchase',
+            billId: createdBill.id,
+            billDate: normalizedBillDate,
+            payDate: normalizedBillDate,
+            amount: parsedPaid,
+            mode: 'cash',
+            cashAmount: parsedPaid,
+            cashPaymentDate: normalizedBillDate,
+            onlinePayAmount: null,
+            onlinePaymentDate: null,
+            status: 'paid',
+            note: buildPurchasePaymentSyncNote('regular'),
+            farmerId: farmer.id,
+            partyId: null
+          }
+        })
+      }
+
       return createdBill
     })
 
     return NextResponse.json({ success: true, id: purchaseBill.id, purchaseBill })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Internal server error'
-    const status = message.includes('cannot exceed') ? 400 : message.includes('not found') ? 404 : 500
+    const status =
+      message.includes('cannot exceed') ||
+      message.includes('cannot be less than') ||
+      message.includes('recorded payment history')
+        ? 400
+        : message.includes('not found')
+          ? 404
+          : 500
     return NextResponse.json(
       {
         error: message
@@ -513,6 +543,8 @@ export async function DELETE(request: NextRequest) {
     }
 
     await prisma.$transaction(async (tx) => {
+      const deletedAt = new Date()
+
       await tx.stockLedger.deleteMany({
         where: {
           refTable: 'purchase_bills',
@@ -522,6 +554,19 @@ export async function DELETE(request: NextRequest) {
 
       await tx.purchaseItem.deleteMany({
         where: { purchaseBillId: billId }
+      })
+
+      await tx.payment.updateMany({
+        where: {
+          companyId,
+          billType: 'purchase',
+          billId,
+          deletedAt: null
+        },
+        data: {
+          deletedAt,
+          status: 'pending'
+        }
       })
 
       await tx.purchaseBill.delete({
@@ -609,6 +654,18 @@ export async function PUT(request: NextRequest) {
         throw new Error('Purchase bill not found')
       }
 
+      const recordedPaymentAggregate = await tx.payment.aggregate({
+        where: {
+          companyId,
+          billType: 'purchase',
+          billId: id,
+          deletedAt: null
+        },
+        _sum: {
+          amount: true
+        }
+      })
+
       const [company, product] = await Promise.all([
         tx.company.findFirst({
           where: { id: companyId, deletedAt: null },
@@ -656,15 +713,26 @@ export async function PUT(request: NextRequest) {
         })
       }
 
-    const tax = calculateTaxBreakdown(parsedPayable, product.gstRate)
-    const parsedFinalTotal = parseNonNegativeNumber(body.totalAmount) ?? tax.lineTotal
-    const parsedPaid = parseNonNegativeNumber(paidAmount) ?? 0
-    if (parsedPaid > parsedFinalTotal) {
-      throw new Error('Paid amount cannot exceed total amount')
-    }
+      const tax = calculateTaxBreakdown(parsedPayable, product.gstRate)
+      const parsedFinalTotal = parseNonNegativeNumber(body.totalAmount) ?? tax.lineTotal
+      const parsedPaid = parseNonNegativeNumber(paidAmount) ?? 0
+      const recordedPaidAmount = clampNonNegative(recordedPaymentAggregate._sum.amount)
 
-    const parsedBalance = Math.max(0, parsedFinalTotal - parsedPaid)
-    const finalStatus = deriveStatus(parsedPaid, parsedFinalTotal)
+      if (parsedPaid > parsedFinalTotal) {
+        throw new Error('Paid amount cannot exceed total amount')
+      }
+
+      if (recordedPaidAmount > parsedFinalTotal) {
+        throw new Error('Final total cannot be less than recorded payment history')
+      }
+
+      if (parsedPaid < recordedPaidAmount) {
+        throw new Error('Paid amount cannot be less than recorded payment history')
+      }
+
+      const paymentDelta = Math.max(0, parsedPaid - recordedPaidAmount)
+      const parsedBalance = Math.max(0, parsedFinalTotal - parsedPaid)
+      const finalStatus = deriveStatus(parsedPaid, parsedFinalTotal)
 
       const updatedBill = await tx.purchaseBill.update({
         where: { id },
@@ -760,6 +828,28 @@ export async function PUT(request: NextRequest) {
             qtyIn: parsedWeight,
             refTable: 'purchase_bills',
             refId: id
+          }
+        })
+      }
+
+      if (paymentDelta > 0) {
+        await tx.payment.create({
+          data: {
+            companyId,
+            billType: 'purchase',
+            billId: id,
+            billDate: normalizedBillDate,
+            payDate: normalizedBillDate,
+            amount: paymentDelta,
+            mode: 'cash',
+            cashAmount: paymentDelta,
+            cashPaymentDate: normalizedBillDate,
+            onlinePayAmount: null,
+            onlinePaymentDate: null,
+            status: 'paid',
+            note: buildPurchasePaymentSyncNote('regular'),
+            farmerId: farmer.id,
+            partyId: null
           }
         })
       }

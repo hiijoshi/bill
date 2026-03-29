@@ -35,6 +35,7 @@ import PaymentTab from './components/PaymentTab'
 import ReportsTab from './components/ReportsTab'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { notifyAppCompanyChanged, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { getReadablePermissionModules, resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
 
 type ActiveTab = 'purchase' | 'sales' | 'stock' | 'payment' | 'report'
 const DASHBOARD_CACHE_AGE_MS = 15_000
@@ -260,6 +261,8 @@ export default function MainDashboardPage() {
   const [companies, setCompanies] = useState<CompanyOption[]>([])
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([])
   const [primaryCompanyId, setPrimaryCompanyId] = useState<string>('')
+  const [dashboardAccessResolved, setDashboardAccessResolved] = useState(false)
+  const [hasDashboardAccess, setHasDashboardAccess] = useState(false)
   const [uiMessage, setUiMessage] = useState<string | null>(null)
   const [uiError, setUiError] = useState<string | null>(null)
   const [fetchFailures, setFetchFailures] = useState<string[]>([])
@@ -277,6 +280,57 @@ export default function MainDashboardPage() {
       return fallback
     }
   }
+
+  const redirectToAccessibleRoute = useCallback(async (companyId?: string) => {
+    const normalizedCompanyId = String(companyId || '').trim()
+    if (!normalizedCompanyId) {
+      router.replace('/company/select')
+      return
+    }
+
+    try {
+      const response = await fetch(
+        `/api/auth/permissions?companyId=${encodeURIComponent(normalizedCompanyId)}&includeMeta=true`,
+        { cache: 'no-store' }
+      )
+      const payload = await response.json().catch(() => ({} as {
+        permissions?: Array<{ module?: string; canRead?: boolean; canWrite?: boolean }>
+      }))
+      const permissions = Array.isArray(payload.permissions) ? payload.permissions : []
+      const nextRoute = resolveFirstAccessibleAppRoute(permissions, normalizedCompanyId)
+      router.replace(nextRoute.startsWith('/main/dashboard') ? '/company/select' : nextRoute)
+    } catch {
+      router.replace('/company/select')
+    }
+  }, [router])
+
+  const checkDashboardAccess = useCallback(async (companyId?: string) => {
+    const normalizedCompanyId = String(companyId || '').trim()
+    if (!normalizedCompanyId) {
+      setHasDashboardAccess(false)
+      setDashboardAccessResolved(true)
+      return false
+    }
+
+    try {
+      const response = await fetch(
+        `/api/auth/permissions?companyId=${encodeURIComponent(normalizedCompanyId)}&includeMeta=true`,
+        { cache: 'no-store' }
+      )
+      const payload = await response.json().catch(() => ({} as {
+        permissions?: Array<{ module?: string; canRead?: boolean; canWrite?: boolean }>
+      }))
+      const permissions = Array.isArray(payload.permissions) ? payload.permissions : []
+      const allowed = new Set(getReadablePermissionModules(permissions)).has('DASHBOARD')
+      setHasDashboardAccess(allowed)
+      setDashboardAccessResolved(true)
+      return allowed
+    } catch {
+      setHasDashboardAccess(false)
+      setDashboardAccessResolved(true)
+      return false
+    }
+  }, [])
 
   useEffect(() => {
     stripCompanyParamsFromUrl()
@@ -459,6 +513,10 @@ export default function MainDashboardPage() {
   }, [getCachedCurrentCompanyOption, router])
 
   useIsomorphicLayoutEffect(() => {
+    if (!dashboardAccessResolved || !hasDashboardAccess) {
+      return
+    }
+
     const queryParams = new URLSearchParams(window.location.search)
     const queryCompanyId = queryParams.get('companyId') || ''
     const queryCompanyIds = (queryParams.get('companyIds') || '')
@@ -482,7 +540,7 @@ export default function MainDashboardPage() {
     if (primeDashboardFromCache(cachedSelection.selectedCompanyIds)) {
       setLoading(false)
     }
-  }, [applyCompanySelection, getCachedCurrentCompanyOption, primeDashboardFromCache])
+  }, [applyCompanySelection, dashboardAccessResolved, getCachedCurrentCompanyOption, hasDashboardAccess, primeDashboardFromCache])
 
   const fetchDashboardData = useCallback(async (companyIds: string[]) => {
     if (companyIds.length === 0) {
@@ -503,6 +561,14 @@ export default function MainDashboardPage() {
       const response = await fetch(`/api/main-dashboard/overview?${params.toString()}`, { cache: 'no-store' })
       const payload = await parseApiJson<Partial<DashboardPayload> & { error?: string }>(response, {})
       if (!response.ok) {
+        if (response.status === 403) {
+          setHasDashboardAccess(false)
+          setDashboardAccessResolved(true)
+          setData(emptyDashboardPayload)
+          setFetchFailures([])
+          await redirectToAccessibleRoute(companyIds[0] || primaryCompanyId)
+          return
+        }
         setFetchFailures([payload.error || 'dashboard overview'])
         setData(emptyDashboardPayload)
         return
@@ -584,7 +650,7 @@ export default function MainDashboardPage() {
       setData(emptyDashboardPayload)
       setFetchFailures(['dashboard overview'])
     }
-  }, [])
+  }, [primaryCompanyId, redirectToAccessibleRoute])
 
   useEffect(() => {
     let cancelled = false
@@ -607,6 +673,20 @@ export default function MainDashboardPage() {
           queryCompanyId,
           queryCompanyIds
         })
+        if (selection.selectedCompanyIds.length === 0) {
+          setDashboardAccessResolved(true)
+          setHasDashboardAccess(true)
+          return
+        }
+        const allowed = await checkDashboardAccess(selection.primaryCompanyId || selection.selectedCompanyIds[0])
+        if (cancelled) return
+        if (!allowed) {
+          setData(emptyDashboardPayload)
+          setFetchFailures([])
+          setLoading(false)
+          await redirectToAccessibleRoute(selection.primaryCompanyId || selection.selectedCompanyIds[0])
+          return
+        }
         if (selection.selectedCompanyIds.length > 0) {
           primeDashboardFromCache(selection.selectedCompanyIds)
         }
@@ -615,6 +695,15 @@ export default function MainDashboardPage() {
         void error
         const fallbackCompany = cachedCurrentCompany || await loadCurrentCompanyOption()
         if (fallbackCompany?.id) {
+          const allowed = await checkDashboardAccess(fallbackCompany.id)
+          if (cancelled) return
+          if (!allowed) {
+            setData(emptyDashboardPayload)
+            setFetchFailures([])
+            setLoading(false)
+            await redirectToAccessibleRoute(fallbackCompany.id)
+            return
+          }
           setCompanies([fallbackCompany])
           setSelectedCompanyIds([fallbackCompany.id])
           setPrimaryCompanyId(fallbackCompany.id)
@@ -624,12 +713,23 @@ export default function MainDashboardPage() {
           return
         }
         if (queryCompanyId) {
+          const allowed = await checkDashboardAccess(queryCompanyId)
+          if (cancelled) return
+          if (!allowed) {
+            setData(emptyDashboardPayload)
+            setFetchFailures([])
+            setLoading(false)
+            await redirectToAccessibleRoute(queryCompanyId)
+            return
+          }
           setCompanies([buildFallbackCompanyOption(queryCompanyId)])
           setSelectedCompanyIds([queryCompanyId])
           setPrimaryCompanyId(queryCompanyId)
           setUiError(null)
           primeDashboardFromCache([queryCompanyId])
         } else {
+          setDashboardAccessResolved(true)
+          setHasDashboardAccess(true)
           setUiError('Failed to load company list')
           setUiMessage(null)
         }
@@ -645,9 +745,10 @@ export default function MainDashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [applyCompanySelection, getCachedCurrentCompanyOption, loadCompanies, loadCurrentCompanyOption, primeDashboardFromCache])
+  }, [applyCompanySelection, checkDashboardAccess, getCachedCurrentCompanyOption, loadCompanies, loadCurrentCompanyOption, primeDashboardFromCache, redirectToAccessibleRoute])
 
   useEffect(() => {
+    if (!dashboardAccessResolved || !hasDashboardAccess) return
     if (selectedCompanyIds.length === 0) return
 
     const primary = selectedCompanyIds.includes(primaryCompanyId) ? primaryCompanyId : selectedCompanyIds[0]
@@ -681,9 +782,10 @@ export default function MainDashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [fetchDashboardData, primaryCompanyId, selectedCompanyIds])
+  }, [dashboardAccessResolved, fetchDashboardData, hasDashboardAccess, primaryCompanyId, selectedCompanyIds])
 
   useEffect(() => {
+    if (!dashboardAccessResolved || !hasDashboardAccess) return
     if (!primaryCompanyId) return
     const activeCompanyId = getClientCache<string>(ACTIVE_COMPANY_CACHE_KEY, ACTIVE_COMPANY_CACHE_AGE_MS)
     if (activeCompanyId === primaryCompanyId) {
@@ -699,7 +801,7 @@ export default function MainDashboardPage() {
         notifyAppCompanyChanged(primaryCompanyId)
       }
     }).catch(() => undefined)
-  }, [primaryCompanyId])
+  }, [dashboardAccessResolved, hasDashboardAccess, primaryCompanyId])
 
   const handleNavigation = async (path: string) => {
     if (!primaryCompanyId) return
@@ -929,11 +1031,21 @@ export default function MainDashboardPage() {
     }
   }
 
-  if (loading) {
+  if (loading || !dashboardAccessResolved) {
     return (
       <DashboardLayout companyId={primaryCompanyId}>
         <div className="flex justify-center items-center h-64">
           <div className="text-lg">Loading...</div>
+        </div>
+      </DashboardLayout>
+    )
+  }
+
+  if (!hasDashboardAccess) {
+    return (
+      <DashboardLayout companyId={primaryCompanyId}>
+        <div className="flex justify-center items-center h-64">
+          <div className="text-lg">Checking access...</div>
         </div>
       </DashboardLayout>
     )

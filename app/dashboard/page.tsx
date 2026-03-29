@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation'
+import { resolveServerDefaultAppRoute } from '@/lib/server-app-default-route'
 
 interface DashboardPageProps {
   searchParams: Promise<{ companyId?: string }>
@@ -6,10 +7,5 @@ interface DashboardPageProps {
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const { companyId } = await searchParams
-
-  if (!companyId) {
-    redirect('/main/dashboard')
-  }
-
-  redirect('/main/dashboard')
+  redirect((await resolveServerDefaultAppRoute(companyId)) || '/login')
 }

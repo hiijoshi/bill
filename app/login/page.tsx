@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Building2, User, Lock, AlertCircle } from 'lucide-react'
 import { clearClientCache } from '@/lib/client-fetch-cache'
+import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
 
 const LOGIN_CLEANUP_KEY = 'login-page-cleanup:app'
 const LOGIN_CLEANUP_THROTTLE_MS = 15_000
@@ -118,12 +119,35 @@ function LoginPageContent() {
       }
       
       await response.json()
+
+      const authMeResponse = await fetch('/api/auth/me', { cache: 'no-store' })
+      const authMePayload = await authMeResponse.json().catch(() => ({} as {
+        company?: { id?: string | null } | null
+        user?: { companyId?: string | null; assignedCompanyId?: string | null } | null
+      }))
+      const companyId = String(
+        authMePayload.company?.id ||
+        authMePayload.user?.companyId ||
+        authMePayload.user?.assignedCompanyId ||
+        ''
+      ).trim()
+
+      if (!companyId) {
+        router.push('/company/select')
+        return
+      }
+
+      const permissionsResponse = await fetch(
+        `/api/auth/permissions?companyId=${encodeURIComponent(companyId)}&includeMeta=true`,
+        { cache: 'no-store' }
+      )
+      const permissionsPayload = await permissionsResponse.json().catch(() => ({} as { permissions?: [] }))
+      const permissions = Array.isArray(permissionsPayload.permissions) ? permissionsPayload.permissions : []
       
       // Note: HttpOnly cookies are set automatically by the server
       // No need to store tokens client-side anymore for security
       
-      // Redirect to dashboard (multi-company ready)
-      router.push('/main/dashboard')
+      router.push(resolveFirstAccessibleAppRoute(permissions, companyId))
     } catch (error) {
       
       setError(error instanceof Error ? error.message : 'Login failed. Please try again.')

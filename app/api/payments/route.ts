@@ -18,6 +18,11 @@ import {
   isPartyOpeningBalanceReference
 } from '@/lib/party-opening-balance'
 import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-schema'
+import {
+  findPurchasePaymentTarget,
+  type PurchasePaymentTarget,
+  updatePurchasePaymentTargetTotals
+} from '@/lib/purchase-payment-sync'
 
 const paymentCreateSchema = z
   .object({
@@ -98,6 +103,7 @@ export async function POST(request: NextRequest) {
     let billDateValue = new Date(data.payDate)
     let salesPartyId: string | null = null
     let farmerId: string | null = null
+    let purchaseTarget: PurchasePaymentTarget | null = null
 
     if (isOpeningBalancePayment) {
       const openingPartyId =
@@ -146,34 +152,34 @@ export async function POST(request: NextRequest) {
       billDateValue = party.openingBalanceDate || billDateValue
       salesPartyId = party.id
     } else {
-      const bill =
-        data.billType === 'purchase'
-          ? await prisma.purchaseBill.findFirst({
-              where: { id: data.billId, companyId: data.companyId },
-              include: { farmer: true }
-            })
-          : await prisma.salesBill.findFirst({
-              where: { id: data.billId, companyId: data.companyId },
-              include: { party: true }
-            })
+      if (data.billType === 'purchase') {
+        purchaseTarget = await findPurchasePaymentTarget(prisma, data.companyId, data.billId)
 
-      if (!bill) {
-        return NextResponse.json({ error: 'Bill not found' }, { status: 404 })
+        if (!purchaseTarget) {
+          return NextResponse.json({ error: 'Bill not found' }, { status: 404 })
+        }
+
+        totalAmount = purchaseTarget.totalAmount
+        paidAmount = purchaseTarget.paidAmount
+        outstanding = Math.max(0, totalAmount - paidAmount)
+        billDateValue = purchaseTarget.billDate
+        farmerId = purchaseTarget.farmerId
+      } else {
+        const bill = await prisma.salesBill.findFirst({
+          where: { id: data.billId, companyId: data.companyId },
+          include: { party: true }
+        })
+
+        if (!bill) {
+          return NextResponse.json({ error: 'Bill not found' }, { status: 404 })
+        }
+
+        totalAmount = bill.totalAmount
+        paidAmount = 'receivedAmount' in bill ? bill.receivedAmount : 0
+        outstanding = Math.max(0, totalAmount - paidAmount)
+        billDateValue = bill.billDate
+        salesPartyId = 'partyId' in bill ? bill.partyId || null : null
       }
-
-      totalAmount = bill.totalAmount
-      paidAmount =
-        data.billType === 'purchase'
-          ? 'paidAmount' in bill
-            ? bill.paidAmount
-            : 0
-          : 'receivedAmount' in bill
-            ? bill.receivedAmount
-            : 0
-      outstanding = Math.max(0, totalAmount - paidAmount)
-      billDateValue = bill.billDate
-      salesPartyId = data.billType === 'sales' && 'partyId' in bill ? bill.partyId || null : null
-      farmerId = data.billType === 'purchase' && 'farmerId' in bill ? bill.farmerId || null : null
     }
 
     if (data.amount > outstanding) {
@@ -222,14 +228,19 @@ export async function POST(request: NextRequest) {
       }
 
       if (data.billType === 'purchase') {
-        await tx.purchaseBill.update({
-          where: { id: data.billId },
-          data: {
-            paidAmount: newPaid,
-            balanceAmount: newBalance,
-            status: billStatus
-          }
-        })
+        if (!purchaseTarget) {
+          throw new Error('Bill not found')
+        }
+
+        await updatePurchasePaymentTargetTotals(
+          tx,
+          {
+            kind: purchaseTarget.kind,
+            id: data.billId,
+            totalAmount
+          },
+          newPaid
+        )
       } else {
         await tx.salesBill.update({
           where: { id: data.billId },
@@ -351,18 +362,40 @@ export async function GET(request: NextRequest) {
       pagination.enabled ? prisma.payment.count({ where }) : Promise.resolve(0)
     ])
 
-    const purchaseBillIds = payments
+    const purchaseBillIds = [...new Set(payments
       .filter((payment) => payment.billType === 'purchase')
-      .map((payment) => payment.billId)
-    const salesBillIds = payments
+      .map((payment) => payment.billId))]
+    const salesBillIds = [...new Set(payments
       .filter((payment) => payment.billType === 'sales')
-      .map((payment) => payment.billId)
+      .map((payment) => payment.billId))]
 
-    const [purchaseBills, salesBills] = await Promise.all([
+    const [purchaseBills, specialPurchaseBills, salesBills] = await Promise.all([
       purchaseBillIds.length > 0
         ? prisma.purchaseBill.findMany({
             where: { id: { in: purchaseBillIds } },
-            select: { id: true, billNo: true }
+            select: {
+              id: true,
+              billNo: true,
+              farmer: {
+                select: {
+                  name: true
+                }
+              }
+            }
+          })
+        : Promise.resolve([]),
+      purchaseBillIds.length > 0
+        ? prisma.specialPurchaseBill.findMany({
+            where: { id: { in: purchaseBillIds } },
+            select: {
+              id: true,
+              supplierInvoiceNo: true,
+              supplier: {
+                select: {
+                  name: true
+                }
+              }
+            }
           })
         : Promise.resolve([]),
       salesBillIds.length > 0
@@ -373,7 +406,24 @@ export async function GET(request: NextRequest) {
         : Promise.resolve([])
     ])
 
-    const purchaseBillMap = new Map(purchaseBills.map((bill) => [bill.id, bill.billNo]))
+    const purchaseBillMap = new Map(
+      purchaseBills.map((bill) => [
+        bill.id,
+        {
+          billNo: bill.billNo,
+          partyName: bill.farmer?.name || ''
+        }
+      ])
+    )
+    const specialPurchaseBillMap = new Map(
+      specialPurchaseBills.map((bill) => [
+        bill.id,
+        {
+          billNo: bill.supplierInvoiceNo,
+          partyName: bill.supplier?.name || ''
+        }
+      ])
+    )
     const salesBillMap = new Map(salesBills.map((bill) => [bill.id, bill.billNo]))
 
     const enhancedPayments = payments.map((payment) => ({
@@ -383,9 +433,14 @@ export async function GET(request: NextRequest) {
         payment.billType === 'sales' && isPartyOpeningBalanceReference(payment.billId)
           ? 'Opening Balance'
           : payment.billType === 'purchase'
-          ? purchaseBillMap.get(payment.billId) || ''
+          ? purchaseBillMap.get(payment.billId)?.billNo || specialPurchaseBillMap.get(payment.billId)?.billNo || ''
           : salesBillMap.get(payment.billId) || '',
-      partyName: payment.party?.name || payment.farmer?.name || ''
+      partyName:
+        payment.party?.name ||
+        payment.farmer?.name ||
+        purchaseBillMap.get(payment.billId)?.partyName ||
+        specialPurchaseBillMap.get(payment.billId)?.partyName ||
+        ''
     }))
 
     if (pagination.enabled) {

@@ -9,6 +9,10 @@ import {
   requireRoles
 } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
+import {
+  findPurchasePaymentTarget,
+  updatePurchasePaymentTargetTotals
+} from '@/lib/purchase-payment-sync'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'Payment ID is required') })
 
@@ -60,7 +64,7 @@ const parseOptionalDate = (value: unknown): Date | null => {
 
 async function recalculateBillTotals(
   tx: Prisma.TransactionClient,
-  payment: { id: string; billType: string; billId: string }
+  payment: { id: string; companyId: string; billType: string; billId: string }
 ) {
   const aggregate = await tx.payment.aggregate({
     where: {
@@ -76,24 +80,18 @@ async function recalculateBillTotals(
   const paid = aggregate._sum.amount || 0
 
   if (payment.billType === 'purchase') {
-    const bill = await tx.purchaseBill.findUnique({
-      where: { id: payment.billId },
-      select: { id: true, totalAmount: true }
-    })
-
+    const bill = await findPurchasePaymentTarget(tx, payment.companyId, payment.billId)
     if (!bill) return
 
-    const balance = Math.max(0, bill.totalAmount - paid)
-    const status = balance === 0 ? 'paid' : paid === 0 ? 'unpaid' : 'partial'
-
-    await tx.purchaseBill.update({
-      where: { id: payment.billId },
-      data: {
-        paidAmount: paid,
-        balanceAmount: balance,
-        status
-      }
-    })
+    await updatePurchasePaymentTargetTotals(
+      tx,
+      {
+        kind: bill.kind,
+        id: bill.id,
+        totalAmount: bill.totalAmount
+      },
+      paid
+    )
     return
   }
 
@@ -183,10 +181,7 @@ export async function PUT(
         const otherPaymentsTotal = aggregate._sum.amount || 0
 
         if (existingPayment.billType === 'purchase') {
-          const bill = await tx.purchaseBill.findUnique({
-            where: { id: existingPayment.billId },
-            select: { totalAmount: true }
-          })
+          const bill = await findPurchasePaymentTarget(tx, existingPayment.companyId, existingPayment.billId)
           if (!bill || otherPaymentsTotal + nextAmount > bill.totalAmount) {
             throw new Error('Payment amount exceeds pending balance')
           }
@@ -240,6 +235,7 @@ export async function PUT(
 
       await recalculateBillTotals(tx, {
         id: updatedPayment.id,
+        companyId: updatedPayment.companyId,
         billType: updatedPayment.billType,
         billId: updatedPayment.billId
       })
@@ -326,6 +322,7 @@ export async function DELETE(
 
       await recalculateBillTotals(tx, {
         id: updated.id,
+        companyId: updated.companyId,
         billType: updated.billType,
         billId: updated.billId
       })
