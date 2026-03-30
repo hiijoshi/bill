@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
@@ -32,8 +33,16 @@ interface Party {
   ifscCode?: string
   bankName?: string
   accountNo?: string
+  mandiTypeId?: string | null
+  mandiTypeName?: string | null
   createdAt: string
   updatedAt: string
+}
+
+type MandiType = {
+  id: string
+  name: string
+  isActive?: boolean
 }
 
 type PartyResponsePayload = Party[] | {
@@ -66,6 +75,7 @@ export default function PartyMasterPage() {
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [editingParty, setEditingParty] = useState<Party | null>(null)
   const [companyId, setCompanyId] = useState('')
+  const [mandiTypes, setMandiTypes] = useState<MandiType[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
@@ -82,7 +92,8 @@ export default function PartyMasterPage() {
     creditDays: '',
     ifscCode: '',
     bankName: '',
-    accountNo: ''
+    accountNo: '',
+    mandiTypeId: ''
   })
 
   const applyParties = useCallback((rows: Party[], cacheKey: string) => {
@@ -98,7 +109,7 @@ export default function PartyMasterPage() {
     }
 
     const filtered = parties.filter((party) =>
-      [party.name, party.type, party.phone1 || '', party.bankName || '', party.address || '']
+      [party.name, party.type, party.phone1 || '', party.bankName || '', party.address || '', party.mandiTypeName || '']
         .join(' ')
         .toLowerCase()
         .includes(term)
@@ -190,6 +201,21 @@ export default function PartyMasterPage() {
     }
   }, [applyParties, companyId])
 
+  const fetchMandiTypes = useCallback(async (id = companyId) => {
+    if (!id) return
+    try {
+      const response = await fetch(`/api/mandi-types?companyId=${id}`, { cache: 'no-store' })
+      const payload = await response.json().catch(() => [] as MandiType[])
+      if (!response.ok) {
+        throw new Error((payload as { error?: string }).error || 'Failed to load mandi types')
+      }
+      setMandiTypes(Array.isArray(payload) ? payload.filter((row) => row.isActive !== false) : [])
+    } catch (error) {
+      console.error('Error fetching mandi types:', error)
+      setMandiTypes([])
+    }
+  }, [companyId])
+
   useEffect(() => {
     let cancelled = false
 
@@ -210,7 +236,7 @@ export default function PartyMasterPage() {
 
       setCompanyId(resolvedCompanyId)
       setMessage(null)
-      await fetchParties(resolvedCompanyId)
+      await Promise.all([fetchParties(resolvedCompanyId), fetchMandiTypes(resolvedCompanyId)])
     }
 
     void loadPartyScope()
@@ -225,7 +251,7 @@ export default function PartyMasterPage() {
       cancelled = true
       window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
-  }, [fetchParties, router])
+  }, [fetchMandiTypes, fetchParties, router])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -253,6 +279,7 @@ export default function PartyMasterPage() {
         },
         body: JSON.stringify({
           ...formData,
+          mandiTypeId: formData.mandiTypeId || null,
           type: 'buyer'
         }),
       })
@@ -289,7 +316,8 @@ export default function PartyMasterPage() {
       creditDays: party.creditDays != null ? String(party.creditDays) : '',
       ifscCode: party.ifscCode || '',
       bankName: party.bankName || '',
-      accountNo: party.accountNo || ''
+      accountNo: party.accountNo || '',
+      mandiTypeId: party.mandiTypeId || ''
     })
     setIsFormOpen(true)
   }
@@ -355,6 +383,7 @@ export default function PartyMasterPage() {
       'OpeningBalanceDate',
       'CreditLimit',
       'CreditDays',
+      'MandiType',
       'BankName',
       'AccountNo',
       'IFSCCode',
@@ -371,6 +400,7 @@ export default function PartyMasterPage() {
       party.openingBalanceDate ? String(party.openingBalanceDate).slice(0, 10) : '',
       party.creditLimit ?? '',
       party.creditDays ?? '',
+      party.mandiTypeName || '',
       party.bankName || '',
       party.accountNo || '',
       party.ifscCode || '',
@@ -450,7 +480,8 @@ export default function PartyMasterPage() {
       creditDays: '',
       ifscCode: '',
       bankName: '',
-      accountNo: ''
+      accountNo: '',
+      mandiTypeId: ''
     })
     setEditingParty(null)
     setIsFormOpen(false)
@@ -564,6 +595,25 @@ export default function PartyMasterPage() {
                         onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                         placeholder="Enter address"
                       />
+                    </div>
+                    <div>
+                      <Label htmlFor="partyMandiType">Mandi Type</Label>
+                      <Select
+                        value={formData.mandiTypeId || '__none__'}
+                        onValueChange={(value) => setFormData({ ...formData, mandiTypeId: value === '__none__' ? '' : value })}
+                      >
+                        <SelectTrigger id="partyMandiType">
+                          <SelectValue placeholder="Select mandi type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">No Mandi Type</SelectItem>
+                          {mandiTypes.map((mandiType) => (
+                            <SelectItem key={mandiType.id} value={mandiType.id}>
+                              {mandiType.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div>
                       <Label htmlFor="phone1">Primary Phone</Label>
@@ -692,6 +742,7 @@ export default function PartyMasterPage() {
                     <TableRow>
                       <TableHead>Party Name</TableHead>
                       <TableHead>Type</TableHead>
+                      <TableHead>Mandi Type</TableHead>
                       <TableHead>Address</TableHead>
                       <TableHead>Phone</TableHead>
                       <TableHead>Opening Receivable</TableHead>
@@ -711,6 +762,7 @@ export default function PartyMasterPage() {
                             🛒 Buyer
                           </Badge>
                         </TableCell>
+                        <TableCell>{party.mandiTypeName || '-'}</TableCell>
                         <TableCell>{party.address || '-'}</TableCell>
                         <TableCell>
                           <div>

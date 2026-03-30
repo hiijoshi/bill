@@ -15,6 +15,8 @@ import {
 import { normalizeTenDigitPhone, parseNonNegativeNumber } from '@/lib/field-validation'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 import { calculateTaxBreakdown } from '@/lib/billing-calculations'
+import { calculateBillMandiCharges, syncBillChargesAndLedger } from '@/lib/mandi-billing'
+import { ensureMandiSchema } from '@/lib/mandi-schema'
 import { buildPurchasePaymentSyncNote } from '@/lib/purchase-payment-sync'
 
 type PaymentStatus = 'unpaid' | 'partial' | 'paid'
@@ -25,6 +27,7 @@ const purchaseCreateSchema = z.object({
   billNo: z.union([z.string(), z.number()]).optional(),
   billDate: z.string().min(1),
   farmerName: z.string().min(1),
+  mandiTypeId: z.string().optional().nullable(),
   farmerAddress: z.string().optional(),
   farmerContact: z.string().optional(),
   krashakAnubandhNumber: z.string().optional(),
@@ -62,6 +65,13 @@ function clampNonNegative(value: unknown): number {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return 0
   return Math.max(0, parsed)
+}
+
+function normalizeOptionalId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim()
+  if (!normalized || normalized === 'null' || normalized === 'undefined') return null
+  return normalized
 }
 
 function sanitizePurchaseBill<T extends {

@@ -12,6 +12,7 @@ import {
   normalizePartyOpeningBalanceType
 } from '@/lib/party-opening-balance'
 import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-schema'
+import { ensureMandiSchema } from '@/lib/mandi-schema'
 
 function normalizeCompanyId(raw: string | null): string | null {
   if (!raw) return null
@@ -62,7 +63,8 @@ const postSchema = z.object({
   creditDays: z.union([z.number(), z.string()]).optional().nullable(),
   ifscCode: z.string().optional().nullable(),
   bankName: z.string().optional().nullable(),
-  accountNo: z.string().optional().nullable()
+  accountNo: z.string().optional().nullable(),
+  mandiTypeId: z.string().optional().nullable()
 }).strict()
 
 const putSchema = z.object({
@@ -78,7 +80,8 @@ const putSchema = z.object({
   creditDays: z.union([z.number(), z.string()]).optional().nullable(),
   ifscCode: z.string().optional().nullable(),
   bankName: z.string().optional().nullable(),
-  accountNo: z.string().optional().nullable()
+  accountNo: z.string().optional().nullable(),
+  mandiTypeId: z.string().optional().nullable()
 }).strict()
 
 function normalizeOptionalNonNegativeNumber(value: unknown): number | null {
@@ -97,6 +100,7 @@ function parseOptionalDateValue(value: unknown): Date | null {
 export async function GET(request: NextRequest) {
   try {
     await ensurePartyOpeningBalanceSchema(prisma)
+    await ensureMandiSchema(prisma)
 
     const { searchParams } = new URL(request.url)
     const companyId = normalizeCompanyId(searchParams.get('companyId')) || getCompanyIdFromAuthenticatedRequest(request)
@@ -124,6 +128,18 @@ export async function GET(request: NextRequest) {
     const [parties, total] = await Promise.all([
       prisma.party.findMany({
         where,
+        include: {
+          mandiProfile: {
+            include: {
+              mandiType: {
+                select: {
+                  id: true,
+                  name: true
+                }
+              }
+            }
+          }
+        },
         orderBy: { name: 'asc' },
         ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
       }),
@@ -189,6 +205,8 @@ export async function GET(request: NextRequest) {
         ...party,
         openingBalance: normalizePartyOpeningBalanceAmount(party.openingBalance),
         openingBalanceType: 'receivable' as const,
+        mandiTypeId: party.mandiProfile?.mandiTypeId || null,
+        mandiTypeName: party.mandiProfile?.mandiType?.name || null,
         openingOutstandingAmount,
         currentBalanceAmount
       }
@@ -211,6 +229,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     await ensurePartyOpeningBalanceSchema(prisma)
+    await ensureMandiSchema(prisma)
 
     const parsed = await parseJsonWithSchema(request, postSchema)
     if (!parsed.ok) return parsed.response
@@ -233,23 +252,51 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Secondary phone must be exactly 10 digits' }, { status: 400 })
     }
 
-    const party = await prisma.party.create({
-      data: {
-        companyId,
-        type: parsed.data.type,
-        name: parsed.data.name,
-        address: cleanString(parsed.data.address),
-        phone1,
-        phone2,
-        openingBalance: normalizePartyOpeningBalanceAmount(parsed.data.openingBalance),
-        openingBalanceType: normalizePartyOpeningBalanceType(parsed.data.openingBalanceType),
-        openingBalanceDate: parseOptionalDateValue(parsed.data.openingBalanceDate),
-        creditLimit: normalizeOptionalNonNegativeNumber(parsed.data.creditLimit),
-        creditDays: normalizeOptionalNonNegativeNumber(parsed.data.creditDays),
-        ifscCode: cleanString(parsed.data.ifscCode)?.toUpperCase(),
-        bankName: cleanString(parsed.data.bankName),
-        accountNo: cleanString(parsed.data.accountNo)
+    const party = await prisma.$transaction(async (tx) => {
+      const createdParty = await tx.party.create({
+        data: {
+          companyId,
+          type: parsed.data.type,
+          name: parsed.data.name,
+          address: cleanString(parsed.data.address),
+          phone1,
+          phone2,
+          openingBalance: normalizePartyOpeningBalanceAmount(parsed.data.openingBalance),
+          openingBalanceType: normalizePartyOpeningBalanceType(parsed.data.openingBalanceType),
+          openingBalanceDate: parseOptionalDateValue(parsed.data.openingBalanceDate),
+          creditLimit: normalizeOptionalNonNegativeNumber(parsed.data.creditLimit),
+          creditDays: normalizeOptionalNonNegativeNumber(parsed.data.creditDays),
+          ifscCode: cleanString(parsed.data.ifscCode)?.toUpperCase(),
+          bankName: cleanString(parsed.data.bankName),
+          accountNo: cleanString(parsed.data.accountNo)
+        }
+      })
+
+      const mandiTypeId = normalizeCompanyId(parsed.data.mandiTypeId || null)
+      if (mandiTypeId) {
+        await tx.partyMandiProfile.create({
+          data: {
+            partyId: createdParty.id,
+            mandiTypeId
+          }
+        })
       }
+
+      return tx.party.findFirst({
+        where: { id: createdParty.id },
+        include: {
+          mandiProfile: {
+            include: {
+              mandiType: {
+                select: {
+                  id: true,
+                  name: true
+                }
+              }
+            }
+          }
+        }
+      })
     })
 
     return NextResponse.json({
@@ -271,6 +318,7 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     await ensurePartyOpeningBalanceSchema(prisma)
+    await ensureMandiSchema(prisma)
 
     const parsed = await parseJsonWithSchema(request, putSchema)
     if (!parsed.ok) return parsed.response
@@ -303,23 +351,59 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Secondary phone must be exactly 10 digits' }, { status: 400 })
     }
 
-    const updatedParty = await prisma.party.update({
-      where: { id },
-      data: {
-        type: parsed.data.type,
-        name: parsed.data.name,
-        address: cleanString(parsed.data.address),
-        phone1,
-        phone2,
-        openingBalance: normalizePartyOpeningBalanceAmount(parsed.data.openingBalance),
-        openingBalanceType: normalizePartyOpeningBalanceType(parsed.data.openingBalanceType),
-        openingBalanceDate: parseOptionalDateValue(parsed.data.openingBalanceDate),
-        creditLimit: normalizeOptionalNonNegativeNumber(parsed.data.creditLimit),
-        creditDays: normalizeOptionalNonNegativeNumber(parsed.data.creditDays),
-        ifscCode: cleanString(parsed.data.ifscCode)?.toUpperCase(),
-        bankName: cleanString(parsed.data.bankName),
-        accountNo: cleanString(parsed.data.accountNo)
+    const updatedParty = await prisma.$transaction(async (tx) => {
+      const changedParty = await tx.party.update({
+        where: { id },
+        data: {
+          type: parsed.data.type,
+          name: parsed.data.name,
+          address: cleanString(parsed.data.address),
+          phone1,
+          phone2,
+          openingBalance: normalizePartyOpeningBalanceAmount(parsed.data.openingBalance),
+          openingBalanceType: normalizePartyOpeningBalanceType(parsed.data.openingBalanceType),
+          openingBalanceDate: parseOptionalDateValue(parsed.data.openingBalanceDate),
+          creditLimit: normalizeOptionalNonNegativeNumber(parsed.data.creditLimit),
+          creditDays: normalizeOptionalNonNegativeNumber(parsed.data.creditDays),
+          ifscCode: cleanString(parsed.data.ifscCode)?.toUpperCase(),
+          bankName: cleanString(parsed.data.bankName),
+          accountNo: cleanString(parsed.data.accountNo)
+        }
+      })
+
+      const mandiTypeId = normalizeCompanyId(parsed.data.mandiTypeId || null)
+      if (mandiTypeId) {
+        await tx.partyMandiProfile.upsert({
+          where: { partyId: id },
+          create: {
+            partyId: id,
+            mandiTypeId
+          },
+          update: {
+            mandiTypeId
+          }
+        })
+      } else {
+        await tx.partyMandiProfile.deleteMany({
+          where: { partyId: id }
+        })
       }
+
+      return tx.party.findFirst({
+        where: { id: changedParty.id },
+        include: {
+          mandiProfile: {
+            include: {
+              mandiType: {
+                select: {
+                  id: true,
+                  name: true
+                }
+              }
+            }
+          }
+        }
+      })
     })
 
     return NextResponse.json({

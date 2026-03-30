@@ -4,17 +4,9 @@ import { z } from 'zod'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { ensureAccountingHeadSchema } from '@/lib/accounting-head-schema'
 import { cleanString, parseNonNegativeNumber } from '@/lib/field-validation'
-import { ensureMandiSchema } from '@/lib/mandi-schema'
 import { prisma } from '@/lib/prisma'
 
 function normalizeCompanyId(raw: string | null): string | null {
-  if (!raw) return null
-  const value = raw.trim()
-  if (!value || value === 'null' || value === 'undefined') return null
-  return value
-}
-
-function normalizeOptionalId(raw: string | null | undefined): string | null {
   if (!raw) return null
   const value = raw.trim()
   if (!value || value === 'null' || value === 'undefined') return null
@@ -50,50 +42,23 @@ function getCompanyIdFromAuthenticatedRequest(request: NextRequest): string {
   return companyId
 }
 
-const accountingHeadSchema = z.object({
+const postSchema = z.object({
   name: z.string().trim().min(1).optional(),
   category: z.string().trim().min(1).optional(),
   amount: z.union([z.number(), z.string()]).optional().nullable(),
-  value: z.union([z.number(), z.string()]).optional().nullable(),
-  mandiTypeId: z.string().optional().nullable(),
-  isMandiCharge: z.boolean().optional(),
-  calculationBasis: z.string().optional().nullable(),
-  defaultValue: z.union([z.number(), z.string()]).optional().nullable(),
-  accountGroup: z.string().optional().nullable(),
-  isActive: z.boolean().optional()
+  value: z.union([z.number(), z.string()]).optional().nullable()
 }).strict()
 
-const postSchema = accountingHeadSchema
-const putSchema = accountingHeadSchema.extend({
+const putSchema = z.object({
   name: z.string().trim().min(1),
-  category: z.string().trim().min(1)
+  category: z.string().trim().min(1),
+  amount: z.union([z.number(), z.string()]).optional().nullable(),
+  value: z.union([z.number(), z.string()]).optional().nullable()
 }).strict()
-
-function normalizeAccountingHeadResponse(head: Awaited<ReturnType<typeof prisma.accountingHead.findFirst>>) {
-  if (!head) return null
-  return {
-    id: head.id,
-    companyId: head.companyId,
-    name: head.name,
-    category: head.category,
-    amount: Number(head.amount || 0),
-    value: Number(head.value || 0),
-    mandiTypeId: head.mandiConfig?.mandiTypeId || null,
-    mandiTypeName: head.mandiConfig?.mandiType?.name || null,
-    isMandiCharge: Boolean(head.mandiConfig?.isMandiCharge),
-    calculationBasis: head.mandiConfig?.calculationBasis || null,
-    defaultValue: Number(head.mandiConfig?.defaultValue ?? head.value ?? 0),
-    accountGroup: head.mandiConfig?.accountGroup || null,
-    isActive: head.mandiConfig?.isActive !== false,
-    createdAt: head.createdAt,
-    updatedAt: head.updatedAt
-  }
-}
 
 export async function GET(request: NextRequest) {
   try {
     await ensureAccountingHeadSchema(prisma)
-    await ensureMandiSchema(prisma)
 
     const companyId =
       normalizeCompanyId(new URL(request.url).searchParams.get('companyId')) ||
@@ -104,22 +69,10 @@ export async function GET(request: NextRequest) {
 
     const rows = await prisma.accountingHead.findMany({
       where: { companyId },
-      include: {
-        mandiConfig: {
-          include: {
-            mandiType: {
-              select: {
-                id: true,
-                name: true
-              }
-            }
-          }
-        }
-      },
       orderBy: [{ name: 'asc' }, { category: 'asc' }]
     })
 
-    return NextResponse.json(rows.map((row) => normalizeAccountingHeadResponse(row)))
+    return NextResponse.json(rows)
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
   }
@@ -128,7 +81,6 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     await ensureAccountingHeadSchema(prisma)
-    await ensureMandiSchema(prisma)
 
     const parsed = await parseJsonWithSchema(request, postSchema)
     if (!parsed.ok) return parsed.response
@@ -143,12 +95,7 @@ export async function POST(request: NextRequest) {
     const name = cleanString(parsed.data.name)
     const category = cleanString(parsed.data.category)
     const amount = parseNonNegativeNumber(parsed.data.amount) ?? 0
-    const normalizedDefaultValue = parseNonNegativeNumber(parsed.data.defaultValue ?? parsed.data.value) ?? 0
-    const mandiTypeId = normalizeOptionalId(parsed.data.mandiTypeId)
-    const calculationBasis = cleanString(parsed.data.calculationBasis)?.toUpperCase() || null
-    const accountGroup = cleanString(parsed.data.accountGroup)?.toUpperCase() || null
-    const isMandiCharge = Boolean(parsed.data.isMandiCharge)
-    const isActive = parsed.data.isActive !== false
+    const value = parseNonNegativeNumber(parsed.data.value) ?? 0
 
     if (!name || !category) {
       return NextResponse.json({ error: 'Accounting head name and category are required' }, { status: 400 })
@@ -166,50 +113,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Accounting head name already exists' }, { status: 400 })
     }
 
-    const created = await prisma.$transaction(async (tx) => {
-      const accountingHead = await tx.accountingHead.create({
-        data: {
-          companyId,
-          name,
-          category,
-          amount,
-          value: normalizedDefaultValue
-        }
-      })
-
-      await tx.accountingHeadMandiConfig.create({
-        data: {
-          accountingHeadId: accountingHead.id,
-          mandiTypeId,
-          isMandiCharge,
-          calculationBasis,
-          defaultValue: normalizedDefaultValue,
-          accountGroup,
-          isActive
-        }
-      })
-
-      return tx.accountingHead.findFirst({
-        where: { id: accountingHead.id },
-        include: {
-          mandiConfig: {
-            include: {
-              mandiType: {
-                select: {
-                  id: true,
-                  name: true
-                }
-              }
-            }
-          }
-        }
-      })
+    const created = await prisma.accountingHead.create({
+      data: {
+        companyId,
+        name,
+        category,
+        amount,
+        value
+      }
     })
 
     return NextResponse.json({
       success: true,
       message: 'Accounting head stored successfully',
-      accountingHead: normalizeAccountingHeadResponse(created)
+      accountingHead: created
     })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
@@ -219,7 +136,6 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     await ensureAccountingHeadSchema(prisma)
-    await ensureMandiSchema(prisma)
 
     const parsed = await parseJsonWithSchema(request, putSchema)
     if (!parsed.ok) return parsed.response
@@ -250,67 +166,28 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Accounting head name already exists' }, { status: 400 })
     }
 
-    const updated = await prisma.$transaction(async (tx) => {
-      const changed = await tx.accountingHead.updateMany({
-        where: { id, companyId },
-        data: {
-          name: parsed.data.name.trim(),
-          category: parsed.data.category.trim(),
-          amount: parseNonNegativeNumber(parsed.data.amount) ?? 0,
-          value: parseNonNegativeNumber(parsed.data.defaultValue ?? parsed.data.value) ?? 0
-        }
-      })
-
-      if (changed.count === 0) {
-        return null
+    const updated = await prisma.accountingHead.updateMany({
+      where: { id, companyId },
+      data: {
+        name: parsed.data.name.trim(),
+        category: parsed.data.category.trim(),
+        amount: parseNonNegativeNumber(parsed.data.amount) ?? 0,
+        value: parseNonNegativeNumber(parsed.data.value) ?? 0
       }
-
-      await tx.accountingHeadMandiConfig.upsert({
-        where: { accountingHeadId: id },
-        create: {
-          accountingHeadId: id,
-          mandiTypeId: normalizeOptionalId(parsed.data.mandiTypeId),
-          isMandiCharge: Boolean(parsed.data.isMandiCharge),
-          calculationBasis: cleanString(parsed.data.calculationBasis)?.toUpperCase() || null,
-          defaultValue: parseNonNegativeNumber(parsed.data.defaultValue ?? parsed.data.value) ?? 0,
-          accountGroup: cleanString(parsed.data.accountGroup)?.toUpperCase() || null,
-          isActive: parsed.data.isActive !== false
-        },
-        update: {
-          mandiTypeId: normalizeOptionalId(parsed.data.mandiTypeId),
-          isMandiCharge: Boolean(parsed.data.isMandiCharge),
-          calculationBasis: cleanString(parsed.data.calculationBasis)?.toUpperCase() || null,
-          defaultValue: parseNonNegativeNumber(parsed.data.defaultValue ?? parsed.data.value) ?? 0,
-          accountGroup: cleanString(parsed.data.accountGroup)?.toUpperCase() || null,
-          isActive: parsed.data.isActive !== false
-        }
-      })
-
-      return tx.accountingHead.findFirst({
-        where: { id, companyId },
-        include: {
-          mandiConfig: {
-            include: {
-              mandiType: {
-                select: {
-                  id: true,
-                  name: true
-                }
-              }
-            }
-          }
-        }
-      })
     })
 
-    if (!updated) {
+    if (updated.count === 0) {
       return NextResponse.json({ error: 'Accounting head not found' }, { status: 404 })
     }
+
+    const accountingHead = await prisma.accountingHead.findFirst({
+      where: { id, companyId }
+    })
 
     return NextResponse.json({
       success: true,
       message: 'Accounting head updated successfully',
-      accountingHead: normalizeAccountingHeadResponse(updated)
+      accountingHead
     })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
@@ -320,7 +197,6 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     await ensureAccountingHeadSchema(prisma)
-    await ensureMandiSchema(prisma)
 
     const { searchParams } = new URL(request.url)
     const id = cleanString(searchParams.get('id'))

@@ -93,6 +93,10 @@ export function resolveRoutePermission(pathname: string, method: string): RouteP
     return { module: 'MASTER_ACCOUNTING_HEAD', action }
   }
 
+  if (path.startsWith('/api/mandi-types')) {
+    return { module: 'MASTER_ACCOUNTING_HEAD', action }
+  }
+
   if (path.startsWith('/api/markas')) {
     return { module: 'MASTER_MARKA', action }
   }

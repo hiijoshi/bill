@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
+import { calculateMandiCharges, getCalculationBasisLabel } from '@/lib/mandi-charge-engine'
 import { kgToQuintal, round4, toKg } from '@/lib/unit-conversion'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
@@ -31,16 +32,46 @@ interface UserUnit {
   isUniversal: boolean
 }
 
+interface FarmerOption {
+  id: string
+  name: string
+  address?: string | null
+  phone1?: string | null
+  krashakAnubandhNumber?: string | null
+  mandiTypeId?: string | null
+  mandiTypeName?: string | null
+}
+
+interface MandiType {
+  id: string
+  name: string
+}
+
+interface AccountingHeadCharge {
+  id: string
+  name: string
+  category: string
+  mandiTypeId?: string | null
+  isMandiCharge: boolean
+  calculationBasis?: string | null
+  defaultValue?: number
+  accountGroup?: string | null
+}
+
 export default function PurchaseEntryPage() {
   const router = useRouter()
   const [companyId, setCompanyId] = useState('')
   const [products, setProducts] = useState<Product[]>([])
   const [userUnits, setUserUnits] = useState<UserUnit[]>([])
+  const [farmers, setFarmers] = useState<FarmerOption[]>([])
+  const [mandiTypes, setMandiTypes] = useState<MandiType[]>([])
+  const [accountingHeads, setAccountingHeads] = useState<AccountingHeadCharge[]>([])
   const [loading, setLoading] = useState(true)
 
   // Form state
   const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0])
   const [farmerName, setFarmerName] = useState('')
+  const [selectedMandiType, setSelectedMandiType] = useState('')
   const [farmerAddress, setFarmerAddress] = useState('')
   const [farmerContact, setFarmerContact] = useState('')
   const [krashakAnubandhNumber, setKrashakAnubandhNumber] = useState('')
@@ -71,9 +102,27 @@ export default function PurchaseEntryPage() {
   const getCurrentFinalTotalValue = useCallback(() => {
     const taxableAmount = parseFloat(payableAmount) || 0
     const selectedProductRecord = products.find((product) => product.id === selectedProduct)
-    const calculatedTotal = calculateTaxBreakdown(taxableAmount, selectedProductRecord?.gstRate || 0).lineTotal
+    const tax = calculateTaxBreakdown(taxableAmount, selectedProductRecord?.gstRate || 0)
+    const mandiChargePreview = calculateMandiCharges({
+      definitions: accountingHeads.map((head, index) => ({
+        accountingHeadId: head.id,
+        name: head.name,
+        category: head.category,
+        mandiTypeId: head.mandiTypeId || null,
+        isMandiCharge: head.isMandiCharge,
+        calculationBasis: head.calculationBasis,
+        defaultValue: head.defaultValue,
+        accountGroup: head.accountGroup,
+        sortOrder: index
+      })),
+      mandiTypeId: selectedMandiType || null,
+      subTotal: taxableAmount,
+      totalWeight: parseFloat(weight) || 0,
+      totalBags: parseFloat(noOfBags) || 0
+    })
+    const calculatedTotal = roundCurrency(tax.lineTotal + mandiChargePreview.totalChargeAmount)
     return manualTotalAmount !== '' ? roundCurrency(parseFloat(manualTotalAmount) || 0) : calculatedTotal
-  }, [manualTotalAmount, payableAmount, products, selectedProduct])
+  }, [accountingHeads, manualTotalAmount, noOfBags, payableAmount, products, selectedMandiType, selectedProduct, weight])
 
   const handlePaidAmountChange = (value: string) => {
     const normalized = toNonNegative(value)
@@ -112,10 +161,13 @@ export default function PurchaseEntryPage() {
 
       // Same-origin fetch automatically sends auth cookies.
       stripCompanyParamsFromUrl()
-      const [productsRes, billsRes, unitsRes] = await Promise.all([
+      const [productsRes, billsRes, unitsRes, farmersRes, mandiTypesRes, accountingHeadsRes] = await Promise.all([
         fetch(`/api/products?companyId=${companyId}`),
         fetch(`/api/purchase-bills?companyId=${companyId}&last=true`),
-        fetch(`/api/units?companyId=${companyId}`)
+        fetch(`/api/units?companyId=${companyId}`),
+        fetch(`/api/farmers?companyId=${companyId}`),
+        fetch(`/api/mandi-types?companyId=${companyId}`),
+        fetch(`/api/accounting-heads?companyId=${companyId}`)
       ])
 
       // Handle auth/company context failures quickly without retry loops.
@@ -165,6 +217,9 @@ export default function PurchaseEntryPage() {
       setBillNumber((lastBillNum + 1).toString())
 
       const unitsPayload = unitsRes.ok ? await unitsRes.json().catch(() => ({})) : []
+      const farmersPayload = farmersRes.ok ? await farmersRes.json().catch(() => []) : []
+      const mandiTypesPayload = mandiTypesRes.ok ? await mandiTypesRes.json().catch(() => []) : []
+      const accountingHeadsPayload = accountingHeadsRes.ok ? await accountingHeadsRes.json().catch(() => []) : []
       const unitsData = Array.isArray(unitsPayload)
         ? unitsPayload
         : Array.isArray(unitsPayload?.units)
@@ -177,6 +232,10 @@ export default function PurchaseEntryPage() {
       } else {
         setUserUnits([])
       }
+
+      setFarmers(Array.isArray(farmersPayload) ? farmersPayload : [])
+      setMandiTypes(Array.isArray(mandiTypesPayload) ? mandiTypesPayload : [])
+      setAccountingHeads(Array.isArray(accountingHeadsPayload) ? accountingHeadsPayload : [])
     } catch (error) {
       if (isAbortError(error)) return
       console.error('Error fetching data:', error)
@@ -188,6 +247,19 @@ export default function PurchaseEntryPage() {
   useEffect(() => {
     void fetchData()
   }, [fetchData])
+
+  useEffect(() => {
+    const normalizedName = farmerName.trim().toLowerCase()
+    if (!normalizedName) return
+
+    const matchedFarmer = farmers.find((farmer) => String(farmer.name || '').trim().toLowerCase() === normalizedName)
+    if (!matchedFarmer) return
+
+    setFarmerAddress((current) => current || String(matchedFarmer.address || ''))
+    setFarmerContact((current) => current || String(matchedFarmer.phone1 || ''))
+    setKrashakAnubandhNumber((current) => current || String(matchedFarmer.krashakAnubandhNumber || ''))
+    setSelectedMandiType((current) => current || String(matchedFarmer.mandiTypeId || ''))
+  }, [farmerName, farmers])
 
   // Calculate hammali when noOfBags changes
   useEffect(() => {
@@ -288,6 +360,7 @@ export default function PurchaseEntryPage() {
         billNumber,
         billDate,
         farmerName,
+        mandiTypeId: selectedMandiType || null,
         farmerAddress,
         farmerContact,
         krashakAnubandhNumber,
@@ -348,6 +421,24 @@ export default function PurchaseEntryPage() {
   const defaultProductName = products.find((product) => product.id === defaultProductId)?.name || ''
   const selectedProductRecord = products.find((product) => product.id === selectedProduct) || null
   const taxPreview = calculateTaxBreakdown(parseFloat(payableAmount) || 0, selectedProductRecord?.gstRate || 0)
+  const mandiChargePreview = calculateMandiCharges({
+    definitions: accountingHeads.map((head, index) => ({
+      accountingHeadId: head.id,
+      name: head.name,
+      category: head.category,
+      mandiTypeId: head.mandiTypeId || null,
+      isMandiCharge: head.isMandiCharge,
+      calculationBasis: head.calculationBasis,
+      defaultValue: head.defaultValue,
+      accountGroup: head.accountGroup,
+      sortOrder: index
+    })),
+    mandiTypeId: selectedMandiType || null,
+    subTotal: parseFloat(payableAmount) || 0,
+    totalWeight: parseFloat(weight) || 0,
+    totalBags: parseFloat(noOfBags) || 0
+  })
+  const computedTotalWithMandi = roundCurrency(taxPreview.lineTotal + mandiChargePreview.totalChargeAmount)
   const finalTotalAmount = getCurrentFinalTotalValue()
 
   return (
@@ -398,6 +489,23 @@ export default function PurchaseEntryPage() {
                       placeholder="Enter farmer name"
                       required
                     />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="purchaseMandiType">Mandi Type</Label>
+                    <Select value={selectedMandiType || '__none__'} onValueChange={(value) => setSelectedMandiType(value === '__none__' ? '' : value)}>
+                      <SelectTrigger id="purchaseMandiType">
+                        <SelectValue placeholder="Select mandi type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">No Mandi Type</SelectItem>
+                        {mandiTypes.map((mandiType) => (
+                          <SelectItem key={mandiType.id} value={mandiType.id}>
+                            {mandiType.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   {/* Farmer Address */}
@@ -591,10 +699,10 @@ export default function PurchaseEntryPage() {
                       step="0.01"
                       value={manualTotalAmount}
                       onChange={(e) => setManualTotalAmount(toNonNegative(e.target.value))}
-                      placeholder={taxPreview.lineTotal.toFixed(2)}
+                      placeholder={computedTotalWithMandi.toFixed(2)}
                     />
                     <p className="mt-1 text-xs text-slate-500">
-                      Leave blank to keep the GST-calculated total. Enter a value only when the final bill total needs a manual override.
+                      Leave blank to keep the GST + mandi-charge calculated total. Enter a value only when the final bill total needs a manual override.
                     </p>
                   </div>
 
@@ -638,13 +746,41 @@ export default function PurchaseEntryPage() {
                     </p>
                   </div>
                   <div className="rounded-[1rem] border border-slate-200 bg-slate-50 px-4 py-4">
-                    <p className="text-xs text-slate-500">Calculated Total</p>
-                    <p className="mt-1 text-lg font-semibold text-slate-900">{currencyText(taxPreview.lineTotal)}</p>
+                    <p className="text-xs text-slate-500">Mandi Charges</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900">{currencyText(mandiChargePreview.totalChargeAmount)}</p>
                   </div>
                   <div className="rounded-[1rem] border border-slate-200 bg-slate-50 px-4 py-4">
                     <p className="text-xs text-slate-500">Final Invoice Total</p>
                     <p className="mt-1 text-lg font-semibold text-emerald-700">{currencyText(finalTotalAmount)}</p>
                   </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Bottom of Bill - Mandi Charges</p>
+                      <p className="text-xs text-slate-500">
+                        Selected mandi type: {mandiTypes.find((row) => row.id === selectedMandiType)?.name || 'No mandi type linked'}
+                      </p>
+                    </div>
+                    <p className="text-sm font-medium text-slate-700">
+                      GST total {currencyText(taxPreview.lineTotal)} + mandi charges {currencyText(mandiChargePreview.totalChargeAmount)}
+                    </p>
+                  </div>
+                  {mandiChargePreview.lines.length > 0 ? (
+                    <div className="mt-3 space-y-2">
+                      {mandiChargePreview.lines.map((line) => (
+                        <div key={line.accountingHeadId} className="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-sm text-slate-700">
+                          <span>
+                            {line.name} ({getCalculationBasisLabel(line.calculationBasis)} @ {line.basisValue.toFixed(2)})
+                          </span>
+                          <span className="font-semibold text-slate-900">{currencyText(line.chargeAmount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-slate-500">No mandi charges matched for this farmer / mandi type.</p>
+                  )}
                 </div>
 
                 <div className="flex justify-end space-x-4">

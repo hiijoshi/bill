@@ -45,6 +45,7 @@ const menuItems: MenuItem[] = [
       { title: 'Transport', href: '/master/transport', permissionModule: 'MASTER_TRANSPORT' },
       { title: 'Unit', href: '/master/unit', permissionModule: 'MASTER_UNITS' },
       { title: 'Payment Mode', href: '/master/payment-mode', permissionModule: 'MASTER_PAYMENT_MODE' },
+      { title: 'Mandi Type', href: '/master/mandi-type', permissionModule: 'MASTER_ACCOUNTING_HEAD' },
       { title: 'Accounting Head', href: '/master/accounting-head', permissionModule: 'MASTER_ACCOUNTING_HEAD' },
       { title: 'Bank', href: '/master/bank', permissionModule: 'MASTER_BANK' },
     ],

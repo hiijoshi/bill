@@ -13,6 +13,7 @@ import DashboardLayout from '@/app/components/DashboardLayout'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { deleteClientCacheByPrefix } from '@/lib/client-fetch-cache'
+import { calculateMandiCharges, getCalculationBasisLabel } from '@/lib/mandi-charge-engine'
 import { openWhatsappChat } from '@/lib/whatsapp'
 
 interface Party {
@@ -24,6 +25,19 @@ interface Party {
   type: string
   creditLimit?: number | null
   creditDays?: number | null
+  mandiTypeId?: string | null
+  mandiTypeName?: string | null
+}
+
+interface AccountingHeadCharge {
+  id: string
+  name: string
+  category: string
+  mandiTypeId?: string | null
+  isMandiCharge: boolean
+  calculationBasis?: string | null
+  defaultValue?: number
+  accountGroup?: string | null
 }
 
 interface SalesItem {
@@ -175,6 +189,7 @@ export default function SalesEntryPage() {
   const [companyId, setCompanyId] = useState('')
   const [editBillId, setEditBillId] = useState('')
   const [parties, setParties] = useState<Party[]>([])
+  const [accountingHeads, setAccountingHeads] = useState<AccountingHeadCharge[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
 
@@ -247,11 +262,6 @@ export default function SalesEntryPage() {
     () => roundCurrency(totalAmount + totalGstAmount + additionalTotal),
     [additionalTotal, totalAmount, totalGstAmount]
   )
-  const grandTotal = manualGrandTotal !== ''
-    ? roundCurrency(parseFloat(manualGrandTotal) || 0)
-    : computedGrandTotal
-
-  const isEditMode = editBillId !== ''
 
   const filteredParties = useMemo(() => {
     const query = normalizeSearchText(partySearchTerm)
@@ -262,7 +272,8 @@ export default function SalesEntryPage() {
         party.address,
         party.phone1,
         party.phone2,
-        party.type
+        party.type,
+        party.mandiTypeName
       ]
         .map((value) => normalizeSearchText(value))
         .filter(Boolean)
@@ -291,6 +302,37 @@ export default function SalesEntryPage() {
     () => salesItems.find((item) => item.id === currentItem.salesItemId) || null,
     [currentItem.salesItemId, salesItems]
   )
+
+  const mandiChargePreview = useMemo(() => {
+    return calculateMandiCharges({
+      definitions: accountingHeads.map((head, index) => ({
+        accountingHeadId: head.id,
+        name: head.name,
+        category: head.category,
+        mandiTypeId: head.mandiTypeId || null,
+        isMandiCharge: head.isMandiCharge,
+        calculationBasis: head.calculationBasis,
+        defaultValue: head.defaultValue,
+        accountGroup: head.accountGroup,
+        sortOrder: index
+      })),
+      mandiTypeId: selectedPartyRecord?.mandiTypeId || null,
+      subTotal: totalAmount,
+      totalWeight,
+      totalBags: totalNoOfBags
+    })
+  }, [accountingHeads, selectedPartyRecord?.mandiTypeId, totalAmount, totalNoOfBags, totalWeight])
+
+  const computedGrandTotalWithMandi = useMemo(
+    () => roundCurrency(computedGrandTotal + mandiChargePreview.totalChargeAmount),
+    [computedGrandTotal, mandiChargePreview.totalChargeAmount]
+  )
+
+  const grandTotal = manualGrandTotal !== ''
+    ? roundCurrency(parseFloat(manualGrandTotal) || 0)
+    : computedGrandTotalWithMandi
+
+  const isEditMode = editBillId !== ''
 
   const fetchPartyRisk = useCallback(
     async (partyId: string, pendingSaleAmount: number) => {
@@ -335,10 +377,10 @@ export default function SalesEntryPage() {
 
   useEffect(() => {
     const previousComputedGrandTotal = previousComputedGrandTotalRef.current
-    previousComputedGrandTotalRef.current = computedGrandTotal
+    previousComputedGrandTotalRef.current = computedGrandTotalWithMandi
 
     if (previousComputedGrandTotal === null) return
-    if (Math.abs(previousComputedGrandTotal - computedGrandTotal) < 0.01) return
+    if (Math.abs(previousComputedGrandTotal - computedGrandTotalWithMandi) < 0.01) return
     if (preserveLoadedManualGrandTotalRef.current) {
       preserveLoadedManualGrandTotalRef.current = false
       return
@@ -346,7 +388,7 @@ export default function SalesEntryPage() {
     if (!manualGrandTotalTouched && manualGrandTotal !== '') {
       setManualGrandTotal('')
     }
-  }, [computedGrandTotal, manualGrandTotal, manualGrandTotalTouched])
+  }, [computedGrandTotalWithMandi, manualGrandTotal, manualGrandTotalTouched])
 
   const handleAdvanceChange = (value: string) => {
     const normalized = toNonNegative(value)
@@ -652,32 +694,36 @@ export default function SalesEntryPage() {
         stripCompanyParamsFromUrl()
       }
 
-      const [partiesRes, transportsRes, salesItemsRes] = await Promise.all([
+      const [partiesRes, transportsRes, salesItemsRes, accountingHeadsRes] = await Promise.all([
         fetch(`/api/parties?companyId=${resolvedCompanyId}`),
         fetch(`/api/transports?companyId=${resolvedCompanyId}`),
-        fetch(`/api/sales-item-masters?companyId=${resolvedCompanyId}`)
+        fetch(`/api/sales-item-masters?companyId=${resolvedCompanyId}`),
+        fetch(`/api/accounting-heads?companyId=${resolvedCompanyId}`)
       ])
 
-      if ([partiesRes, transportsRes, salesItemsRes].some((res) => res.status === 401 || res.status === 403)) {
+      if ([partiesRes, transportsRes, salesItemsRes, accountingHeadsRes].some((res) => res.status === 401 || res.status === 403)) {
         alert('Session expired. Please login again.')
         router.push('/login')
         return
       }
 
-      const [partiesData, transportsData, salesItemsData] = await Promise.all([
+      const [partiesData, transportsData, salesItemsData, accountingHeadsData] = await Promise.all([
         parseApiJson<Party[]>(partiesRes, [], 'Parties API'),
         parseApiJson<TransportOption[]>(transportsRes, [], 'Transports API'),
-        parseApiJson<SalesItemMasterOption[]>(salesItemsRes, [], 'Sales item masters API')
+        parseApiJson<SalesItemMasterOption[]>(salesItemsRes, [], 'Sales item masters API'),
+        parseApiJson<AccountingHeadCharge[]>(accountingHeadsRes, [], 'Accounting heads API')
       ])
 
       const nextParties = Array.isArray(partiesData) ? partiesData : []
       const nextTransports = Array.isArray(transportsData) ? transportsData : []
       const nextSalesItems = Array.isArray(salesItemsData) ? salesItemsData : []
+      const nextAccountingHeads = Array.isArray(accountingHeadsData) ? accountingHeadsData : []
 
       setParties(nextParties)
       setTransports(nextTransports)
       setFilteredTransports(nextTransports)
       setSalesItems(nextSalesItems)
+      setAccountingHeads(nextAccountingHeads)
 
       if (billIdFromQuery) {
         const existingRes = await fetch(`/api/sales-bills?companyId=${resolvedCompanyId}&billId=${billIdFromQuery}`)
@@ -1255,6 +1301,19 @@ export default function SalesEntryPage() {
                         </div>
                       </div>
                     ) : null}
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                      <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                        <span>
+                          Mandi Type:
+                          <span className="ml-2 font-semibold text-slate-900">
+                            {selectedPartyRecord?.mandiTypeName || 'No mandi type linked'}
+                          </span>
+                        </span>
+                        <span className="text-slate-500">
+                          Matching mandi charges: {mandiChargePreview.lines.length}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -1712,11 +1771,30 @@ export default function SalesEntryPage() {
                           <span>Other + insurance</span>
                           <span>₹{extraChargesTotal.toFixed(2)}</span>
                         </div>
+                        <div className="flex items-center justify-between">
+                          <span>Mandi charges</span>
+                          <span>₹{mandiChargePreview.totalChargeAmount.toFixed(2)}</span>
+                        </div>
                         <div className="flex items-center justify-between border-t border-slate-200 pt-2 font-semibold text-slate-900">
                           <span>Calculated total</span>
-                          <span>₹{computedGrandTotal.toFixed(2)}</span>
+                          <span>₹{computedGrandTotalWithMandi.toFixed(2)}</span>
                         </div>
                       </div>
+                      {mandiChargePreview.lines.length > 0 ? (
+                        <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
+                          <p className="text-sm font-semibold text-slate-900">Bottom of Bill - Mandi Charges</p>
+                          <div className="mt-2 space-y-2 text-sm text-slate-600">
+                            {mandiChargePreview.lines.map((line) => (
+                              <div key={line.accountingHeadId} className="flex items-center justify-between">
+                                <span>
+                                  {line.name} ({getCalculationBasisLabel(line.calculationBasis)} @ {line.basisValue.toFixed(2)})
+                                </span>
+                                <span className="font-medium text-slate-900">₹{line.chargeAmount.toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="rounded-xl border p-4">
                       <Label htmlFor="manualGrandTotal">Final Invoice Total</Label>
@@ -1731,7 +1809,7 @@ export default function SalesEntryPage() {
                           setManualGrandTotal(nextValue)
                           setManualGrandTotalTouched(nextValue !== '')
                         }}
-                        placeholder={computedGrandTotal.toFixed(2)}
+                        placeholder={computedGrandTotalWithMandi.toFixed(2)}
                         className="mt-2"
                       />
                       <p className="mt-2 text-xs text-slate-500">

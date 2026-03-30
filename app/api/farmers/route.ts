@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { cleanString, normalizeTenDigitPhone } from '@/lib/field-validation'
+import { ensureMandiSchema } from '@/lib/mandi-schema'
 
 function normalizeCompanyId(raw: string | null): string | null {
   if (!raw) return null
@@ -16,18 +17,22 @@ const postSchema = z.object({
   name: z.string().trim().min(1).optional(),
   address: z.string().optional().nullable(),
   phone1: z.string().optional().nullable(),
-  krashakAnubandhNumber: z.string().optional().nullable()
+  krashakAnubandhNumber: z.string().optional().nullable(),
+  mandiTypeId: z.string().optional().nullable()
 }).strict()
 
 const putSchema = z.object({
   name: z.string().trim().min(1).optional(),
   address: z.string().optional().nullable(),
   phone1: z.string().optional().nullable(),
-  krashakAnubandhNumber: z.string().optional().nullable()
+  krashakAnubandhNumber: z.string().optional().nullable(),
+  mandiTypeId: z.string().optional().nullable()
 }).strict()
 
 export async function GET(request: NextRequest) {
   try {
+    await ensureMandiSchema(prisma)
+
     const { searchParams } = new URL(request.url)
     const companyId = normalizeCompanyId(searchParams.get('companyId'))
 
@@ -40,17 +45,32 @@ export async function GET(request: NextRequest) {
 
     const farmers = await prisma.farmer.findMany({
       where: { companyId },
-      select: {
-        id: true,
-        name: true,
-        address: true,
-        phone1: true,
-        krashakAnubandhNumber: true,
+      include: {
+        mandiProfile: {
+          include: {
+            mandiType: {
+              select: {
+                id: true,
+                name: true
+              }
+            }
+          }
+        }
       },
       orderBy: { name: 'asc' },
     })
 
-    return NextResponse.json(farmers)
+    return NextResponse.json(
+      farmers.map((farmer) => ({
+        id: farmer.id,
+        name: farmer.name,
+        address: farmer.address,
+        phone1: farmer.phone1,
+        krashakAnubandhNumber: farmer.krashakAnubandhNumber,
+        mandiTypeId: farmer.mandiProfile?.mandiTypeId || null,
+        mandiTypeName: farmer.mandiProfile?.mandiType?.name || null
+      }))
+    )
   } catch (error) {
     console.error('Error fetching farmers:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -59,6 +79,8 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    await ensureMandiSchema(prisma)
+
     const parsed = await parseJsonWithSchema(request, postSchema)
     if (!parsed.ok) return parsed.response
 
@@ -94,17 +116,59 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Farmer with this name already exists' }, { status: 400 })
     }
 
-    const farmer = await prisma.farmer.create({
-      data: {
-        companyId,
-        name,
-        address,
-        phone1,
-        krashakAnubandhNumber,
-      },
+    const farmer = await prisma.$transaction(async (tx) => {
+      const createdFarmer = await tx.farmer.create({
+        data: {
+          companyId,
+          name,
+          address,
+          phone1,
+          krashakAnubandhNumber,
+        },
+      })
+
+      const mandiTypeId = normalizeCompanyId(parsed.data.mandiTypeId || null)
+      if (mandiTypeId) {
+        await tx.farmerMandiProfile.create({
+          data: {
+            farmerId: createdFarmer.id,
+            mandiTypeId
+          }
+        })
+      }
+
+      return tx.farmer.findFirst({
+        where: { id: createdFarmer.id },
+        include: {
+          mandiProfile: {
+            include: {
+              mandiType: {
+                select: {
+                  id: true,
+                  name: true
+                }
+              }
+            }
+          }
+        }
+      })
     })
 
-    return NextResponse.json({ success: true, message: 'Farmer data stored successfully', farmer })
+    return NextResponse.json({
+      success: true,
+      message: 'Farmer data stored successfully',
+      farmer: farmer
+        ? {
+            id: farmer.id,
+            name: farmer.name,
+            address: farmer.address,
+            phone1: farmer.phone1,
+            krashakAnubandhNumber: farmer.krashakAnubandhNumber,
+            mandiTypeId: farmer.mandiProfile?.mandiTypeId || null,
+            mandiTypeName: farmer.mandiProfile?.mandiType?.name || null
+          }
+        : null
+    })
   } catch (error) {
     console.error('Error creating farmer:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -113,6 +177,8 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    await ensureMandiSchema(prisma)
+
     const parsed = await parseJsonWithSchema(request, putSchema)
     if (!parsed.ok) return parsed.response
 
@@ -159,17 +225,65 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Phone must be exactly 10 digits' }, { status: 400 })
     }
 
-    const farmer = await prisma.farmer.update({
-      where: { id },
-      data: {
-        name: name || existingFarmer.name,
-        address: parsed.data.address !== undefined ? cleanString(parsed.data.address) : existingFarmer.address,
-        phone1: parsed.data.phone1 !== undefined ? phone1 : existingFarmer.phone1,
-        krashakAnubandhNumber: parsed.data.krashakAnubandhNumber !== undefined ? cleanString(parsed.data.krashakAnubandhNumber) : existingFarmer.krashakAnubandhNumber,
-      },
+    const farmer = await prisma.$transaction(async (tx) => {
+      const updatedFarmer = await tx.farmer.update({
+        where: { id },
+        data: {
+          name: name || existingFarmer.name,
+          address: parsed.data.address !== undefined ? cleanString(parsed.data.address) : existingFarmer.address,
+          phone1: parsed.data.phone1 !== undefined ? phone1 : existingFarmer.phone1,
+          krashakAnubandhNumber: parsed.data.krashakAnubandhNumber !== undefined ? cleanString(parsed.data.krashakAnubandhNumber) : existingFarmer.krashakAnubandhNumber,
+        },
+      })
+
+      const mandiTypeId = normalizeCompanyId(parsed.data.mandiTypeId || null)
+      if (mandiTypeId) {
+        await tx.farmerMandiProfile.upsert({
+          where: { farmerId: id },
+          create: {
+            farmerId: id,
+            mandiTypeId
+          },
+          update: {
+            mandiTypeId
+          }
+        })
+      } else {
+        await tx.farmerMandiProfile.deleteMany({
+          where: { farmerId: id }
+        })
+      }
+
+      return tx.farmer.findFirst({
+        where: { id: updatedFarmer.id },
+        include: {
+          mandiProfile: {
+            include: {
+              mandiType: {
+                select: {
+                  id: true,
+                  name: true
+                }
+              }
+            }
+          }
+        }
+      })
     })
 
-    return NextResponse.json(farmer)
+    return NextResponse.json(
+      farmer
+        ? {
+            id: farmer.id,
+            name: farmer.name,
+            address: farmer.address,
+            phone1: farmer.phone1,
+            krashakAnubandhNumber: farmer.krashakAnubandhNumber,
+            mandiTypeId: farmer.mandiProfile?.mandiTypeId || null,
+            mandiTypeName: farmer.mandiProfile?.mandiType?.name || null
+          }
+        : null
+    )
   } catch (error) {
     console.error('Error updating farmer:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

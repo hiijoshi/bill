@@ -8,14 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import {
-  ACCOUNT_GROUP_OPTIONS,
-  getAccountGroupLabel,
-  getCalculationBasisLabel,
-  MANDI_CALCULATION_BASIS_OPTIONS
-} from '@/lib/mandi-charge-engine'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId } from '@/lib/company-context'
 
 type AccountingHead = {
@@ -24,39 +17,13 @@ type AccountingHead = {
   category: string
   amount: number
   value: number
-  mandiTypeId?: string | null
-  mandiTypeName?: string | null
-  isMandiCharge: boolean
-  calculationBasis?: string | null
-  defaultValue: number
-  accountGroup?: string | null
-  isActive: boolean
   createdAt: string
   updatedAt: string
-}
-
-type MandiType = {
-  id: string
-  name: string
-  isActive?: boolean
-}
-
-const DEFAULT_FORM = {
-  name: '',
-  category: '',
-  amount: '0',
-  defaultValue: '0',
-  mandiTypeId: '',
-  isMandiCharge: true,
-  calculationBasis: 'PERCENT_TOTAL',
-  accountGroup: 'DIRECT_EXPENSE',
-  isActive: true
 }
 
 export default function AccountingHeadMasterPage() {
   const [companyId, setCompanyId] = useState('')
   const [rows, setRows] = useState<AccountingHead[]>([])
-  const [mandiTypes, setMandiTypes] = useState<MandiType[]>([])
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
   const [canReadAccountingHead, setCanReadAccountingHead] = useState(false)
@@ -64,7 +31,12 @@ export default function AccountingHeadMasterPage() {
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [editingRow, setEditingRow] = useState<AccountingHead | null>(null)
   const [search, setSearch] = useState('')
-  const [formData, setFormData] = useState(DEFAULT_FORM)
+  const [formData, setFormData] = useState({
+    name: '',
+    category: '',
+    amount: '0',
+    value: '0'
+  })
 
   const fetchAccountingHeadPermissions = useCallback(async (resolvedCompanyId: string) => {
     const denied = { canRead: false, canWrite: false }
@@ -94,33 +66,19 @@ export default function AccountingHeadMasterPage() {
     }
   }, [])
 
-  const fetchMasterData = useCallback(async (targetCompanyId = companyId) => {
+  const fetchAccountingHeads = useCallback(async (targetCompanyId = companyId) => {
     if (!targetCompanyId) return
     try {
-      const [headsResponse, mandiTypesResponse] = await Promise.all([
-        fetch(`/api/accounting-heads?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' }),
-        fetch(`/api/mandi-types?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' })
-      ])
-
-      const [headsPayload, mandiTypesPayload] = await Promise.all([
-        headsResponse.json().catch(() => [] as AccountingHead[]),
-        mandiTypesResponse.json().catch(() => [] as MandiType[])
-      ])
-
-      if (!headsResponse.ok) {
-        throw new Error((headsPayload as { error?: string }).error || 'Failed to load accounting heads')
+      const response = await fetch(`/api/accounting-heads?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' })
+      const payload = await response.json().catch(() => [] as AccountingHead[])
+      if (!response.ok) {
+        throw new Error((payload as { error?: string }).error || 'Failed to load accounting heads')
       }
-      if (!mandiTypesResponse.ok) {
-        throw new Error((mandiTypesPayload as { error?: string }).error || 'Failed to load mandi types')
-      }
-
-      setRows(Array.isArray(headsPayload) ? headsPayload : [])
-      setMandiTypes(Array.isArray(mandiTypesPayload) ? mandiTypesPayload.filter((row) => row.isActive !== false) : [])
+      setRows(Array.isArray(payload) ? payload : [])
       setErrorMessage('')
     } catch (error) {
       setRows([])
-      setMandiTypes([])
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load accounting head master')
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to load accounting heads')
     } finally {
       setLoading(false)
     }
@@ -137,7 +95,6 @@ export default function AccountingHeadMasterPage() {
       if (!resolvedCompanyId) {
         setCompanyId('')
         setRows([])
-        setMandiTypes([])
         setCanReadAccountingHead(false)
         setCanWriteAccountingHead(false)
         setErrorMessage('Company not selected. Please select company once.')
@@ -151,13 +108,12 @@ export default function AccountingHeadMasterPage() {
 
       if (!permission.canRead) {
         setRows([])
-        setMandiTypes([])
         setErrorMessage('No access to accounting head master for this user.')
         setLoading(false)
         return
       }
 
-      await fetchMasterData(resolvedCompanyId)
+      await fetchAccountingHeads(resolvedCompanyId)
     }
 
     void loadAccountingHeadScope()
@@ -167,20 +123,31 @@ export default function AccountingHeadMasterPage() {
     }
 
     window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
     return () => {
       cancelled = true
       window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
-  }, [fetchAccountingHeadPermissions, fetchMasterData])
+  }, [fetchAccountingHeadPermissions, fetchAccountingHeads])
 
   const resetForm = () => {
-    setFormData(DEFAULT_FORM)
+    setFormData({
+      name: '',
+      category: '',
+      amount: '0',
+      value: '0'
+    })
     setEditingRow(null)
     setIsFormOpen(false)
   }
 
   const openCreate = () => {
-    setFormData(DEFAULT_FORM)
+    setFormData({
+      name: '',
+      category: '',
+      amount: '0',
+      value: '0'
+    })
     setEditingRow(null)
     setIsFormOpen(true)
   }
@@ -190,15 +157,7 @@ export default function AccountingHeadMasterPage() {
     if (!query) return rows
 
     return rows.filter((row) =>
-      [
-        row.name,
-        row.category,
-        row.mandiTypeName || '',
-        row.calculationBasis || '',
-        row.accountGroup || '',
-        String(row.amount),
-        String(row.defaultValue)
-      ]
+      [row.name, row.category, String(row.amount), String(row.value)]
         .join(' ')
         .toLowerCase()
         .includes(query)
@@ -214,9 +173,9 @@ export default function AccountingHeadMasterPage() {
     }
 
     const amount = Number(formData.amount)
-    const defaultValue = Number(formData.defaultValue)
-    if (!Number.isFinite(amount) || amount < 0 || !Number.isFinite(defaultValue) || defaultValue < 0) {
-      alert('Amount and default value must be valid non-negative numbers')
+    const value = Number(formData.value)
+    if (!Number.isFinite(amount) || amount < 0 || !Number.isFinite(value) || value < 0) {
+      alert('Amount and value must be valid non-negative numbers')
       return
     }
 
@@ -245,13 +204,7 @@ export default function AccountingHeadMasterPage() {
           name: formData.name,
           category: formData.category,
           amount,
-          value: defaultValue,
-          defaultValue,
-          mandiTypeId: formData.mandiTypeId || null,
-          isMandiCharge: formData.isMandiCharge,
-          calculationBasis: formData.calculationBasis,
-          accountGroup: formData.accountGroup,
-          isActive: formData.isActive
+          value
         })
       })
 
@@ -262,7 +215,7 @@ export default function AccountingHeadMasterPage() {
 
       alert(editingRow ? 'Accounting head updated successfully!' : 'Accounting head created successfully!')
       resetForm()
-      await fetchMasterData()
+      await fetchAccountingHeads()
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to save accounting head')
     }
@@ -279,12 +232,7 @@ export default function AccountingHeadMasterPage() {
       name: row.name,
       category: row.category,
       amount: String(Number(row.amount || 0)),
-      defaultValue: String(Number(row.defaultValue ?? row.value ?? 0)),
-      mandiTypeId: row.mandiTypeId || '',
-      isMandiCharge: Boolean(row.isMandiCharge),
-      calculationBasis: row.calculationBasis || 'PERCENT_TOTAL',
-      accountGroup: row.accountGroup || 'DIRECT_EXPENSE',
-      isActive: row.isActive !== false
+      value: String(Number(row.value || 0))
     })
     setIsFormOpen(true)
   }
@@ -310,7 +258,7 @@ export default function AccountingHeadMasterPage() {
       }
 
       alert('Accounting head deleted successfully!')
-      await fetchMasterData()
+      await fetchAccountingHeads()
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to delete accounting head')
     }
@@ -333,7 +281,7 @@ export default function AccountingHeadMasterPage() {
     const payload = await response.json().catch(() => ({} as { error?: string; message?: string }))
     alert(payload.message || payload.error || 'Operation completed')
     if (response.ok) {
-      await fetchMasterData()
+      await fetchAccountingHeads()
     }
   }
 
@@ -343,18 +291,8 @@ export default function AccountingHeadMasterPage() {
       return
     }
 
-    const headers = ['Name', 'Category', 'MandiType', 'IsMandiCharge', 'CalculationBasis', 'DefaultValue', 'Amount', 'AccountGroup', 'CreatedAt']
-    const csvRows = rows.map((row) => [
-      row.name,
-      row.category,
-      row.mandiTypeName || '',
-      row.isMandiCharge ? 'Yes' : 'No',
-      row.calculationBasis || '',
-      row.defaultValue,
-      row.amount,
-      row.accountGroup || '',
-      row.createdAt
-    ])
+    const headers = ['Name', 'Category', 'Amount', 'Value', 'CreatedAt']
+    const csvRows = rows.map((row) => [row.name, row.category, row.amount, row.value, row.createdAt])
     const csv = [headers.join(','), ...csvRows.map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','))].join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const link = document.createElement('a')
@@ -376,12 +314,12 @@ export default function AccountingHeadMasterPage() {
   return (
     <DashboardLayout companyId={companyId}>
       <div className="p-6">
-        <div className="mx-auto max-w-7xl">
-          {errorMessage ? (
+        <div className="mx-auto max-w-6xl">
+          {errorMessage && (
             <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               {errorMessage}
             </div>
-          ) : null}
+          )}
 
           <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-3">
@@ -389,7 +327,7 @@ export default function AccountingHeadMasterPage() {
               <div>
                 <h1 className="text-3xl font-bold">Accounting Head Master</h1>
                 <p className="mt-1 text-sm text-slate-600">
-                  Configure mandi charges, calculation rules, and ledger grouping from one master.
+                  Manage mandi accounting heads with exact fields used in cash and bank payment entry.
                 </p>
               </div>
             </div>
@@ -413,7 +351,7 @@ export default function AccountingHeadMasterPage() {
             </div>
           ) : null}
 
-          {isFormOpen ? (
+          {isFormOpen && (
             <Card className="mb-6">
               <CardHeader>
                 <CardTitle>{editingRow ? 'Edit Accounting Head' : 'Add New Accounting Head'}</CardTitle>
@@ -422,29 +360,29 @@ export default function AccountingHeadMasterPage() {
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
                     <div>
-                      <Label htmlFor="accountingHeadName">Name *</Label>
+                      <Label htmlFor="name">Name *</Label>
                       <Input
-                        id="accountingHeadName"
+                        id="name"
                         value={formData.name}
                         onChange={(event) => setFormData((current) => ({ ...current, name: event.target.value }))}
-                        placeholder="e.g. Mandi Fee"
+                        placeholder="Enter accounting head name"
                         required
                       />
                     </div>
                     <div>
-                      <Label htmlFor="accountingHeadCategory">Category *</Label>
+                      <Label htmlFor="category">Category *</Label>
                       <Input
-                        id="accountingHeadCategory"
+                        id="category"
                         value={formData.category}
                         onChange={(event) => setFormData((current) => ({ ...current, category: event.target.value }))}
-                        placeholder="e.g. Statutory Charges"
+                        placeholder="Enter category"
                         required
                       />
                     </div>
                     <div>
-                      <Label htmlFor="accountingHeadAmount">Amount</Label>
+                      <Label htmlFor="amount">Amount</Label>
                       <Input
-                        id="accountingHeadAmount"
+                        id="amount"
                         type="number"
                         min="0"
                         step="0.01"
@@ -454,97 +392,17 @@ export default function AccountingHeadMasterPage() {
                       />
                     </div>
                     <div>
-                      <Label htmlFor="accountingHeadDefaultValue">Default Value</Label>
+                      <Label htmlFor="value">Value</Label>
                       <Input
-                        id="accountingHeadDefaultValue"
+                        id="value"
                         type="number"
                         min="0"
                         step="0.01"
-                        value={formData.defaultValue}
-                        onChange={(event) => setFormData((current) => ({ ...current, defaultValue: event.target.value }))}
-                        placeholder="e.g. 1.50 or 5.00"
+                        value={formData.value}
+                        onChange={(event) => setFormData((current) => ({ ...current, value: event.target.value }))}
+                        placeholder="0.00"
                       />
                     </div>
-                    <div>
-                      <Label htmlFor="accountingHeadMandiType">Mandi Type</Label>
-                      <Select
-                        value={formData.mandiTypeId || '__all__'}
-                        onValueChange={(value) => setFormData((current) => ({ ...current, mandiTypeId: value === '__all__' ? '' : value }))}
-                      >
-                        <SelectTrigger id="accountingHeadMandiType">
-                          <SelectValue placeholder="Select mandi type" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__all__">All Mandi Types</SelectItem>
-                          {mandiTypes.map((mandiType) => (
-                            <SelectItem key={mandiType.id} value={mandiType.id}>
-                              {mandiType.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label htmlFor="accountingHeadCalculationBasis">Calculation Basis</Label>
-                      <Select
-                        value={formData.calculationBasis}
-                        onValueChange={(value) => setFormData((current) => ({ ...current, calculationBasis: value }))}
-                      >
-                        <SelectTrigger id="accountingHeadCalculationBasis">
-                          <SelectValue placeholder="Select basis" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {MANDI_CALCULATION_BASIS_OPTIONS.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              {option.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label htmlFor="accountingHeadAccountGroup">Account Group</Label>
-                      <Select
-                        value={formData.accountGroup}
-                        onValueChange={(value) => setFormData((current) => ({ ...current, accountGroup: value }))}
-                      >
-                        <SelectTrigger id="accountingHeadAccountGroup">
-                          <SelectValue placeholder="Select group" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {ACCOUNT_GROUP_OPTIONS.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              {option.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="flex flex-col gap-3 pt-6">
-                      <label className="flex items-center gap-2 text-sm font-medium text-slate-700" htmlFor="accountingHeadIsMandiCharge">
-                        <input
-                          id="accountingHeadIsMandiCharge"
-                          type="checkbox"
-                          checked={formData.isMandiCharge}
-                          onChange={(event) => setFormData((current) => ({ ...current, isMandiCharge: event.target.checked }))}
-                        />
-                        Use in mandi bill charge auto-calculation
-                      </label>
-                      <label className="flex items-center gap-2 text-sm font-medium text-slate-700" htmlFor="accountingHeadIsActive">
-                        <input
-                          id="accountingHeadIsActive"
-                          type="checkbox"
-                          checked={formData.isActive}
-                          onChange={(event) => setFormData((current) => ({ ...current, isActive: event.target.checked }))}
-                        />
-                        Active accounting head
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-                    Billing automation uses the selected mandi type and calculation basis:
-                    `% of Total`, `Per Weight`, or `Per Bag`.
                   </div>
 
                   <div className="flex justify-end gap-2">
@@ -558,7 +416,7 @@ export default function AccountingHeadMasterPage() {
                 </form>
               </CardContent>
             </Card>
-          ) : null}
+          )}
 
           <Card>
             <CardHeader>
@@ -567,7 +425,7 @@ export default function AccountingHeadMasterPage() {
                 <Input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search by name, mandi type, basis, group"
+                  placeholder="Search by name, category, amount, value"
                   className="md:max-w-sm"
                 />
               </CardTitle>
@@ -579,11 +437,8 @@ export default function AccountingHeadMasterPage() {
                     <TableRow>
                       <TableHead>Name</TableHead>
                       <TableHead>Category</TableHead>
-                      <TableHead>Mandi Type</TableHead>
-                      <TableHead>Basis</TableHead>
-                      <TableHead className="text-right">Default Value</TableHead>
-                      <TableHead>Account Group</TableHead>
-                      <TableHead>Charge</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead className="text-right">Value</TableHead>
                       <TableHead>Updated</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
@@ -591,13 +446,13 @@ export default function AccountingHeadMasterPage() {
                   <TableBody>
                     {!canReadAccountingHead ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-center text-slate-500">
+                        <TableCell colSpan={6} className="text-center text-slate-500">
                           No access to view accounting heads.
                         </TableCell>
                       </TableRow>
                     ) : filteredRows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-center text-slate-500">
+                        <TableCell colSpan={6} className="text-center text-slate-500">
                           No accounting heads found.
                         </TableCell>
                       </TableRow>
@@ -606,11 +461,8 @@ export default function AccountingHeadMasterPage() {
                         <TableRow key={row.id}>
                           <TableCell className="font-medium">{row.name}</TableCell>
                           <TableCell>{row.category}</TableCell>
-                          <TableCell>{row.mandiTypeName || 'All Mandi Types'}</TableCell>
-                          <TableCell>{getCalculationBasisLabel(row.calculationBasis)}</TableCell>
-                          <TableCell className="text-right">{Number(row.defaultValue || 0).toFixed(2)}</TableCell>
-                          <TableCell>{getAccountGroupLabel(row.accountGroup)}</TableCell>
-                          <TableCell>{row.isMandiCharge ? 'Enabled' : 'No'}</TableCell>
+                          <TableCell className="text-right">{Number(row.amount || 0).toFixed(2)}</TableCell>
+                          <TableCell className="text-right">{Number(row.value || 0).toFixed(2)}</TableCell>
                           <TableCell>{new Date(row.updatedAt).toLocaleDateString()}</TableCell>
                           <TableCell>
                             {canWriteAccountingHead ? (

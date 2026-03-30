@@ -75,6 +75,9 @@ model Company {
   transports    Transport[]
   banks         Bank[]
   accountingHeads AccountingHead[]
+  mandiTypes    MandiType[]
+  billCharges   BillCharge[]
+  ledgerEntries LedgerEntry[]
   markas        Marka[]
   paymentModes  PaymentMode[]
   userPermissions UserPermission[]
@@ -125,6 +128,8 @@ model Party {
   // relations
   salesBills SalesBill[]
   payments Payment[]
+  mandiProfile PartyMandiProfile?
+  ledgerEntries LedgerEntry[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -144,6 +149,8 @@ model Farmer {
   // relations
   purchaseBills PurchaseBill[]
   payments Payment[]
+  mandiProfile FarmerMandiProfile?
+  ledgerEntries LedgerEntry[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -480,12 +487,75 @@ model AccountingHead {
   category    String
   amount      Float    @default(0)
   value       Float    @default(0)
+  mandiConfig AccountingHeadMandiConfig?
+  billCharges BillCharge[]
+  ledgerEntries LedgerEntry[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@unique([companyId, name])
   @@index([companyId, category], map: "idx_accounting_heads_company_category")
   @@index([companyId, name], map: "idx_accounting_heads_company_name")
+}
+
+model MandiType {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  partyProfiles PartyMandiProfile[]
+  farmerProfiles FarmerMandiProfile[]
+  accountingHeadConfigs AccountingHeadMandiConfig[]
+  billCharges BillCharge[]
+
+  @@unique([companyId, name], map: "uniq_mandi_types_company_name")
+  @@index([companyId, isActive], map: "idx_mandi_types_company_active")
+}
+
+model PartyMandiProfile {
+  id          String   @id @default(cuid())
+  partyId     String   @unique
+  party       Party    @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  mandiTypeId String?
+  mandiType   MandiType? @relation(fields: [mandiTypeId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([mandiTypeId], map: "idx_party_mandi_profiles_mandi_type")
+}
+
+model FarmerMandiProfile {
+  id          String   @id @default(cuid())
+  farmerId    String   @unique
+  farmer      Farmer   @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+  mandiTypeId String?
+  mandiType   MandiType? @relation(fields: [mandiTypeId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([mandiTypeId], map: "idx_farmer_mandi_profiles_mandi_type")
+}
+
+model AccountingHeadMandiConfig {
+  id               String   @id @default(cuid())
+  accountingHeadId String   @unique
+  accountingHead   AccountingHead @relation(fields: [accountingHeadId], references: [id], onDelete: Cascade)
+  mandiTypeId      String?
+  mandiType        MandiType? @relation(fields: [mandiTypeId], references: [id], onDelete: SetNull)
+  isMandiCharge    Boolean  @default(false)
+  calculationBasis String?
+  defaultValue     Float    @default(0)
+  accountGroup     String?
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([mandiTypeId, isMandiCharge], map: "idx_accounting_head_mandi_config_type_charge")
 }
 
 model Marka {
@@ -515,6 +585,58 @@ model PaymentMode {
 
   @@unique([companyId, code])
   @@index([companyId, name], map: "idx_payment_modes_company_name")
+}
+
+model BillCharge {
+  id               String   @id @default(cuid())
+  companyId        String
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  billType         String
+  billId           String
+  accountingHeadId String?
+  accountingHead   AccountingHead? @relation(fields: [accountingHeadId], references: [id], onDelete: SetNull)
+  mandiTypeId      String?
+  mandiType        MandiType? @relation(fields: [mandiTypeId], references: [id], onDelete: SetNull)
+  nameSnapshot     String
+  categorySnapshot String?
+  calculationBasis String?
+  basisValue       Float    @default(0)
+  chargeAmount     Float    @default(0)
+  sortOrder        Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([companyId, billType, billId], map: "idx_bill_charges_company_bill")
+  @@index([accountingHeadId], map: "idx_bill_charges_head")
+}
+
+model LedgerEntry {
+  id                    String   @id @default(cuid())
+  companyId             String
+  company               Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  entryDate             DateTime
+  billType              String
+  billId                String
+  direction             String
+  amount                Float
+  partyId               String?
+  party                 Party?   @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  farmerId              String?
+  farmer                Farmer?  @relation(fields: [farmerId], references: [id], onDelete: SetNull)
+  accountingHeadId      String?
+  accountingHead        AccountingHead? @relation(fields: [accountingHeadId], references: [id], onDelete: SetNull)
+  accountHeadNameSnapshot String?
+  accountGroupSnapshot  String?
+  counterpartyNameSnapshot String?
+  note                  String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([companyId, entryDate], map: "idx_ledger_entries_company_date")
+  @@index([billType, billId], map: "idx_ledger_entries_bill")
+  @@index([partyId], map: "idx_ledger_entries_party")
+  @@index([farmerId], map: "idx_ledger_entries_farmer")
+  @@index([accountingHeadId], map: "idx_ledger_entries_head")
 }
 
 model TransportBill {
