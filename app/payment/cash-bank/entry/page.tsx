@@ -2,20 +2,21 @@
 
 import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Wallet } from 'lucide-react'
+import { ArrowLeft, Building2, Landmark, Wallet } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { SearchableSelect, type SearchableSelectOption } from '@/components/ui/searchable-select'
 import {
   buildCashBankPaymentReference,
   CASH_BANK_PAYMENT_TYPE
 } from '@/lib/payment-entry-types'
 import {
   DEFAULT_PAYMENT_MODES,
+  isCashPaymentMode,
   type PaymentModeOption
 } from '@/lib/payment-mode-utils'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
@@ -31,20 +32,27 @@ type AccountingHeadRecord = {
 type SupplierRecord = {
   id: string
   name: string
+  address: string
+  phone1: string
+  gstNumber: string
+  bankName: string
+  accountNo: string
+  ifscCode: string
+}
+
+type BankRecord = {
+  id: string
+  name: string
+  branch: string
+  ifscCode: string
+  accountNumber: string
+  address: string
+  phone: string
+  isActive: boolean
 }
 
 type PaymentModeRecord = PaymentModeOption
-
-type SelectOption = {
-  value: string
-  entityType: 'accounting-head' | 'supplier'
-  entityId: string
-  name: string
-  label: string
-  category?: string
-  amount?: number
-  valueAmount?: number
-}
+type ReferenceType = 'accounting-head' | 'supplier'
 
 type CollectionPayload<T> =
   | T[]
@@ -58,6 +66,12 @@ function normalizeCollection<T>(payload: CollectionPayload<T>): T[] {
     return payload.data
   }
   return []
+}
+
+function toNonNegativeAmount(value: string): string {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) return ''
+  return String(parsed)
 }
 
 export default function CashBankPaymentEntryPage() {
@@ -76,12 +90,21 @@ function CashBankPaymentEntryPageContent() {
 
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0])
   const [mode, setMode] = useState('cash')
-  const [selectedReference, setSelectedReference] = useState('')
+  const [referenceType, setReferenceType] = useState<ReferenceType>('accounting-head')
+  const [selectedAccountingHeadId, setSelectedAccountingHeadId] = useState('')
+  const [selectedSupplierId, setSelectedSupplierId] = useState('')
+  const [selectedBankId, setSelectedBankId] = useState('')
   const [amount, setAmount] = useState('')
   const [remark, setRemark] = useState('')
 
+  const [bankNameSnapshot, setBankNameSnapshot] = useState('')
+  const [bankBranchSnapshot, setBankBranchSnapshot] = useState('')
+  const [ifscCode, setIfscCode] = useState('')
+  const [beneficiaryBankAccount, setBeneficiaryBankAccount] = useState('')
+
   const [accountingHeadOptions, setAccountingHeadOptions] = useState<AccountingHeadRecord[]>([])
   const [supplierOptions, setSupplierOptions] = useState<SupplierRecord[]>([])
+  const [bankOptions, setBankOptions] = useState<BankRecord[]>([])
   const [paymentModes, setPaymentModes] = useState<PaymentModeRecord[]>([])
 
   useEffect(() => {
@@ -113,42 +136,73 @@ function CashBankPaymentEntryPageContent() {
 
     ;(async () => {
       try {
-        const [accountingHeadsResponse, suppliersResponse, paymentModesResponse] = await Promise.all([
+        const [accountingHeadsResponse, suppliersResponse, banksResponse, paymentModesResponse] = await Promise.all([
           fetch(`/api/accounting-heads?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
           fetch(`/api/suppliers?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+          fetch(`/api/banks?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
           fetch(`/api/payment-modes?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' })
         ])
 
-        const [accountingHeadsPayload, suppliersPayload, paymentModesPayload] = await Promise.all([
+        const [accountingHeadsPayload, suppliersPayload, banksPayload, paymentModesPayload] = await Promise.all([
           accountingHeadsResponse.json().catch(() => [] as CollectionPayload<AccountingHeadRecord>),
           suppliersResponse.json().catch(() => [] as CollectionPayload<SupplierRecord>),
+          banksResponse.json().catch(() => [] as CollectionPayload<BankRecord>),
           paymentModesResponse.json().catch(() => [] as CollectionPayload<PaymentModeRecord>)
         ])
 
         if (cancelled) return
 
         setAccountingHeadOptions(
-          normalizeCollection<AccountingHeadRecord>(accountingHeadsPayload).map((row) => ({
-            id: String(row.id || ''),
-            name: String(row.name || '').trim(),
-            category: String(row.category || '').trim(),
-            amount: Number(row.amount || 0),
-            value: Number(row.value || 0)
-          })).filter((row) => row.id && row.name)
+          normalizeCollection<AccountingHeadRecord>(accountingHeadsPayload)
+            .map((row) => ({
+              id: String(row.id || ''),
+              name: String(row.name || '').trim(),
+              category: String(row.category || '').trim(),
+              amount: Number(row.amount || 0),
+              value: Number(row.value || 0)
+            }))
+            .filter((row) => row.id && row.name)
         )
+
         setSupplierOptions(
-          normalizeCollection<SupplierRecord>(suppliersPayload).map((row) => ({
-            id: String(row.id || ''),
-            name: String(row.name || '').trim()
-          })).filter((row) => row.id && row.name)
+          normalizeCollection<SupplierRecord>(suppliersPayload)
+            .map((row) => ({
+              id: String(row.id || ''),
+              name: String(row.name || '').trim(),
+              address: String(row.address || '').trim(),
+              phone1: String(row.phone1 || '').trim(),
+              gstNumber: String(row.gstNumber || '').trim(),
+              bankName: String(row.bankName || '').trim(),
+              accountNo: String(row.accountNo || '').trim(),
+              ifscCode: String(row.ifscCode || '').trim().toUpperCase()
+            }))
+            .filter((row) => row.id && row.name)
         )
+
+        setBankOptions(
+          normalizeCollection<BankRecord>(banksPayload)
+            .map((row) => ({
+              id: String(row.id || ''),
+              name: String(row.name || '').trim(),
+              branch: String(row.branch || '').trim(),
+              ifscCode: String(row.ifscCode || '').trim().toUpperCase(),
+              accountNumber: String(row.accountNumber || '').trim(),
+              address: String(row.address || '').trim(),
+              phone: String(row.phone || '').trim(),
+              isActive: row.isActive !== false
+            }))
+            .filter((row) => row.id && row.name && row.isActive)
+        )
+
         setPaymentModes(
-          normalizeCollection<PaymentModeRecord>(paymentModesPayload).map((row) => ({
-            id: String(row.id || ''),
-            name: String(row.name || '').trim(),
-            code: String(row.code || '').trim(),
-            isActive: row.isActive !== false
-          })).filter((row) => row.id && row.name && row.code && row.isActive)
+          normalizeCollection<PaymentModeRecord>(paymentModesPayload)
+            .map((row) => ({
+              id: String(row.id || ''),
+              name: String(row.name || '').trim(),
+              code: String(row.code || '').trim(),
+              isActive: row.isActive !== false
+            }))
+            .filter((row) => row.id && row.name && row.code && row.isActive)
         )
       } finally {
         if (!cancelled) {
@@ -168,39 +222,103 @@ function CashBankPaymentEntryPageContent() {
 
   useEffect(() => {
     if (paymentModeOptions.length === 0) return
-    const hasSelectedMode = paymentModeOptions.some((option) => option.code === mode)
-    if (hasSelectedMode) return
+    if (paymentModeOptions.some((option) => option.code === mode)) return
     setMode(paymentModeOptions[0]?.code || 'cash')
   }, [mode, paymentModeOptions])
 
-  const referenceOptions = useMemo<SelectOption[]>(() => {
-    const accountingHeads = accountingHeadOptions.map((head) => ({
-      value: `accounting-head:${head.id}`,
-      entityType: 'accounting-head' as const,
-      entityId: head.id,
-      name: head.name,
-      label: head.category ? `Accounting Head: ${head.name} (${head.category})` : `Accounting Head: ${head.name}`,
-      category: head.category,
-      amount: Number(head.amount || 0),
-      valueAmount: Number(head.value || 0)
-    }))
+  const paymentModeItems = useMemo<SearchableSelectOption[]>(
+    () =>
+      paymentModeOptions.map((paymentMode) => ({
+        value: paymentMode.code,
+        label: paymentMode.name,
+        keywords: [paymentMode.code, paymentMode.name]
+      })),
+    [paymentModeOptions]
+  )
 
-    const suppliers = supplierOptions.map((supplier) => ({
-      value: `supplier:${supplier.id}`,
-      entityType: 'supplier' as const,
-      entityId: supplier.id,
-      name: supplier.name,
-      label: `Supplier: ${supplier.name}`
-    }))
+  const selectedPaymentMode = useMemo(
+    () => paymentModeOptions.find((paymentMode) => paymentMode.code === mode) || null,
+    [mode, paymentModeOptions]
+  )
 
-    return [...accountingHeads, ...suppliers].sort((left, right) => left.label.localeCompare(right.label))
-  }, [accountingHeadOptions, supplierOptions])
+  const isCashMode = useMemo(
+    () => isCashPaymentMode(mode, selectedPaymentMode?.name || ''),
+    [mode, selectedPaymentMode]
+  )
 
-  const selectedAccountingHead = useMemo(() => {
-    const selectedOption = referenceOptions.find((option) => option.value === selectedReference)
-    if (!selectedOption || selectedOption.entityType !== 'accounting-head') return null
-    return selectedOption
-  }, [referenceOptions, selectedReference])
+  const showBankDetails = Boolean(mode) && !isCashMode
+
+  const referenceTypeItems = useMemo<SearchableSelectOption[]>(
+    () => [
+      {
+        value: 'accounting-head',
+        label: 'Account Head',
+        description: 'Record expense against accounting head'
+      },
+      {
+        value: 'supplier',
+        label: 'Supplier',
+        description: 'Record direct payment to supplier'
+      }
+    ],
+    []
+  )
+
+  const accountingHeadItems = useMemo<SearchableSelectOption[]>(
+    () =>
+      accountingHeadOptions.map((head) => ({
+        value: head.id,
+        label: head.name,
+        description: head.category ? `Category: ${head.category}` : 'Accounting head',
+        keywords: [head.name, head.category]
+      })),
+    [accountingHeadOptions]
+  )
+
+  const supplierItems = useMemo<SearchableSelectOption[]>(
+    () =>
+      supplierOptions.map((supplier) => ({
+        value: supplier.id,
+        label: supplier.name,
+        description: supplier.address || supplier.gstNumber || supplier.phone1 || 'Supplier',
+        keywords: [supplier.name, supplier.address, supplier.gstNumber, supplier.phone1, supplier.bankName]
+      })),
+    [supplierOptions]
+  )
+
+  const bankItems = useMemo<SearchableSelectOption[]>(
+    () =>
+      bankOptions.map((bank) => ({
+        value: bank.id,
+        label: bank.name,
+        description: [bank.branch, bank.ifscCode].filter(Boolean).join(' | ') || 'Bank',
+        keywords: [bank.name, bank.branch, bank.ifscCode, bank.accountNumber]
+      })),
+    [bankOptions]
+  )
+
+  const selectedAccountingHead = useMemo(
+    () => accountingHeadOptions.find((head) => head.id === selectedAccountingHeadId) || null,
+    [accountingHeadOptions, selectedAccountingHeadId]
+  )
+
+  const selectedSupplier = useMemo(
+    () => supplierOptions.find((supplier) => supplier.id === selectedSupplierId) || null,
+    [selectedSupplierId, supplierOptions]
+  )
+
+  const selectedBank = useMemo(
+    () => bankOptions.find((bank) => bank.id === selectedBankId) || null,
+    [bankOptions, selectedBankId]
+  )
+
+  useEffect(() => {
+    if (referenceType === 'accounting-head') {
+      setSelectedSupplierId('')
+      return
+    }
+    setSelectedAccountingHeadId('')
+  }, [referenceType])
 
   useEffect(() => {
     if (!selectedAccountingHead) return
@@ -212,6 +330,30 @@ function CashBankPaymentEntryPageContent() {
     }
   }, [amount, selectedAccountingHead])
 
+  useEffect(() => {
+    if (!showBankDetails) {
+      setSelectedBankId('')
+      setBankNameSnapshot('')
+      setBankBranchSnapshot('')
+      setIfscCode('')
+      setBeneficiaryBankAccount('')
+      return
+    }
+
+    if (!selectedBank) {
+      setBankNameSnapshot('')
+      setBankBranchSnapshot('')
+      setIfscCode('')
+      setBeneficiaryBankAccount('')
+      return
+    }
+
+    setBankNameSnapshot(selectedBank.name || '')
+    setBankBranchSnapshot(selectedBank.branch || '')
+    setIfscCode(selectedBank.ifscCode || '')
+    setBeneficiaryBankAccount(selectedBank.accountNumber || '')
+  }, [selectedBank, showBankDetails])
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
 
@@ -220,9 +362,9 @@ function CashBankPaymentEntryPageContent() {
       return
     }
 
-    const selectedOption = referenceOptions.find((option) => option.value === selectedReference)
-    if (!selectedOption) {
-      alert('Select account head / supplier.')
+    const selectedReference = referenceType === 'accounting-head' ? selectedAccountingHead : selectedSupplier
+    if (!selectedReference) {
+      alert(referenceType === 'accounting-head' ? 'Select account head.' : 'Select supplier.')
       return
     }
 
@@ -237,6 +379,11 @@ function CashBankPaymentEntryPageContent() {
       return
     }
 
+    if (showBankDetails && !selectedBank) {
+      alert('Select bank for non-cash payment mode.')
+      return
+    }
+
     setSubmitting(true)
 
     try {
@@ -248,12 +395,18 @@ function CashBankPaymentEntryPageContent() {
         body: JSON.stringify({
           companyId,
           billType: CASH_BANK_PAYMENT_TYPE,
-          billId: buildCashBankPaymentReference(selectedOption.entityType, selectedOption.entityId),
+          billId: buildCashBankPaymentReference(referenceType, selectedReference.id),
           partyId: null,
           payDate: paymentDate,
           amount: paymentAmount,
           mode,
-          bankNameSnapshot: selectedOption.name,
+          bankId: showBankDetails ? selectedBank?.id || null : null,
+          onlinePayAmount: showBankDetails ? paymentAmount : null,
+          onlinePaymentDate: showBankDetails ? paymentDate : null,
+          ifscCode: showBankDetails ? ifscCode || null : null,
+          beneficiaryBankAccount: showBankDetails ? beneficiaryBankAccount || null : null,
+          bankNameSnapshot: showBankDetails ? bankNameSnapshot || null : null,
+          bankBranchSnapshot: showBankDetails ? bankBranchSnapshot || null : null,
           note: remark.trim() || null,
           status: 'paid'
         })
@@ -286,11 +439,13 @@ function CashBankPaymentEntryPageContent() {
   return (
     <DashboardLayout companyId={companyId}>
       <div className="p-6">
-        <div className="mx-auto max-w-3xl">
+        <div className="mx-auto max-w-4xl">
           <div className="mb-6 flex items-center justify-between">
             <div>
               <h1 className="text-3xl font-bold">Record Cash / Bank Payment</h1>
-              <p className="mt-1 text-sm text-slate-600">Store direct outgoing payments to accounting heads or suppliers.</p>
+              <p className="mt-1 text-sm text-slate-600">
+                Store direct outgoing payments to accounting heads or suppliers with mode-based bank visibility.
+              </p>
             </div>
             <Button variant="outline" onClick={() => router.push('/payment/dashboard')}>
               <ArrowLeft className="mr-2 h-4 w-4" />
@@ -319,46 +474,70 @@ function CashBankPaymentEntryPageContent() {
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="paymentMode">Mode of Payment</Label>
-                    <Select value={mode} onValueChange={setMode}>
-                      <SelectTrigger id="paymentMode">
-                        <SelectValue placeholder="Select mode" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {paymentModeOptions.map((paymentMode) => (
-                          <SelectItem key={paymentMode.id} value={paymentMode.code}>
-                            {paymentMode.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <SearchableSelect
+                      id="paymentMode"
+                      value={mode}
+                      onValueChange={setMode}
+                      options={paymentModeItems}
+                      placeholder="Select mode of payment"
+                      searchPlaceholder="Search payment mode..."
+                      emptyText="No payment modes found."
+                    />
                   </div>
                 </div>
 
-                <div className="grid gap-2">
-                  <Label htmlFor="reference">Account Head / Supplier</Label>
-                  <Select value={selectedReference} onValueChange={setSelectedReference}>
-                    <SelectTrigger id="reference">
-                      <SelectValue placeholder="Select accounting head / supplier" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {referenceOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor="referenceType">Payment For</Label>
+                    <SearchableSelect
+                      id="referenceType"
+                      value={referenceType}
+                      onValueChange={(value) => setReferenceType(value as ReferenceType)}
+                      options={referenceTypeItems}
+                      placeholder="Select account head or supplier"
+                      searchPlaceholder="Search type..."
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="referenceValue">
+                      {referenceType === 'accounting-head' ? 'Account Head' : 'Supplier'}
+                    </Label>
+                    <SearchableSelect
+                      id="referenceValue"
+                      value={referenceType === 'accounting-head' ? selectedAccountingHeadId : selectedSupplierId}
+                      onValueChange={(value) => {
+                        if (referenceType === 'accounting-head') {
+                          setSelectedAccountingHeadId(value)
+                          return
+                        }
+                        setSelectedSupplierId(value)
+                      }}
+                      options={referenceType === 'accounting-head' ? accountingHeadItems : supplierItems}
+                      placeholder={
+                        referenceType === 'accounting-head'
+                          ? 'Search and select account head'
+                          : 'Search and select supplier'
+                      }
+                      searchPlaceholder={
+                        referenceType === 'accounting-head'
+                          ? 'Search account head...'
+                          : 'Search supplier...'
+                      }
+                      emptyText={
+                        referenceType === 'accounting-head'
+                          ? 'No accounting head found.'
+                          : 'No supplier found.'
+                      }
+                    />
+                  </div>
                 </div>
 
-                {selectedAccountingHead && (
+                {selectedAccountingHead ? (
                   <div className="grid gap-4 rounded-lg border bg-slate-50 p-4 md:grid-cols-3">
                     <div className="grid gap-2">
                       <Label htmlFor="selectedHeadCategory">Category</Label>
-                      <Input
-                        id="selectedHeadCategory"
-                        value={selectedAccountingHead.category || ''}
-                        readOnly
-                      />
+                      <Input id="selectedHeadCategory" value={selectedAccountingHead.category || ''} readOnly />
                     </div>
                     <div className="grid gap-2">
                       <Label htmlFor="selectedHeadAmount">Configured Amount</Label>
@@ -372,12 +551,72 @@ function CashBankPaymentEntryPageContent() {
                       <Label htmlFor="selectedHeadValue">Configured Value</Label>
                       <Input
                         id="selectedHeadValue"
-                        value={Number(selectedAccountingHead.valueAmount || 0).toFixed(2)}
+                        value={Number(selectedAccountingHead.value || 0).toFixed(2)}
                         readOnly
                       />
                     </div>
                   </div>
-                )}
+                ) : null}
+
+                {selectedSupplier ? (
+                  <div className="grid gap-4 rounded-lg border bg-slate-50 p-4 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="selectedSupplierPhone">Supplier Contact</Label>
+                      <Input id="selectedSupplierPhone" value={selectedSupplier.phone1 || ''} readOnly />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="selectedSupplierGst">GST Number</Label>
+                      <Input id="selectedSupplierGst" value={selectedSupplier.gstNumber || ''} readOnly />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="selectedSupplierBankName">Saved Bank Name</Label>
+                      <Input id="selectedSupplierBankName" value={selectedSupplier.bankName || ''} readOnly />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="selectedSupplierBankAccount">Saved Bank Account</Label>
+                      <Input id="selectedSupplierBankAccount" value={selectedSupplier.accountNo || ''} readOnly />
+                    </div>
+                  </div>
+                ) : null}
+
+                {showBankDetails ? (
+                  <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                      <Landmark className="h-4 w-4" />
+                      Bank Details
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="grid gap-2">
+                        <Label htmlFor="selectedBank">Bank</Label>
+                        <SearchableSelect
+                          id="selectedBank"
+                          value={selectedBankId}
+                          onValueChange={setSelectedBankId}
+                          options={bankItems}
+                          placeholder="Search and select bank"
+                          searchPlaceholder="Search bank, branch, IFSC..."
+                          emptyText="No banks found."
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="selectedBankBranch">Branch</Label>
+                        <Input id="selectedBankBranch" value={bankBranchSnapshot} readOnly />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="selectedBankIfsc">IFSC Code</Label>
+                        <Input id="selectedBankIfsc" value={ifscCode} readOnly />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="selectedBankAccount">Bank Account</Label>
+                        <Input id="selectedBankAccount" value={beneficiaryBankAccount} readOnly />
+                      </div>
+                      <div className="grid gap-2 md:col-span-2">
+                        <Label htmlFor="selectedBankAddress">Bank Address</Label>
+                        <Input id="selectedBankAddress" value={selectedBank?.address || ''} readOnly />
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="grid gap-2">
@@ -388,7 +627,7 @@ function CashBankPaymentEntryPageContent() {
                       min="0"
                       step="0.01"
                       value={amount}
-                      onChange={(event) => setAmount(event.target.value)}
+                      onChange={(event) => setAmount(toNonNegativeAmount(event.target.value))}
                       placeholder="Enter amount"
                     />
                   </div>
@@ -404,11 +643,17 @@ function CashBankPaymentEntryPageContent() {
                 </div>
 
                 <div className="flex justify-end gap-2 pt-2">
-                  {accountingHeadOptions.length === 0 && (
+                  {referenceType === 'accounting-head' && accountingHeadOptions.length === 0 ? (
                     <Button type="button" variant="outline" onClick={() => router.push('/master/accounting-head')}>
+                      <Building2 className="mr-2 h-4 w-4" />
                       Add Accounting Head
                     </Button>
-                  )}
+                  ) : null}
+                  {referenceType === 'supplier' && supplierOptions.length === 0 ? (
+                    <Button type="button" variant="outline" onClick={() => router.push('/master/supplier')}>
+                      Add Supplier
+                    </Button>
+                  ) : null}
                   <Button type="button" variant="outline" onClick={() => router.push('/payment/dashboard')}>
                     Cancel
                   </Button>

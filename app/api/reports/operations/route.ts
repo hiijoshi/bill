@@ -21,6 +21,7 @@ import {
   getPaymentTypeLabel,
   isIncomingCashflowPaymentType,
   isOutgoingCashflowPaymentType,
+  parseCashBankPaymentReference,
   isSalesReceiptType,
   isSelfTransferPaymentType
 } from '@/lib/payment-entry-types'
@@ -170,6 +171,16 @@ function normalizeOutstandingStatus(balanceAmount: number, receivedAmount: numbe
 
 function normalizeTransferAccountLabel(value: string | null | undefined): string {
   return String(value || '').trim()
+}
+
+function normalizeBankFilterValue(value: string | null | undefined): string {
+  const normalized = String(value || '').trim()
+  if (!normalized) return ''
+  const lowered = normalized.toLowerCase()
+  if (lowered === '-' || lowered === 'bank / online' || lowered === 'bank transfer') {
+    return ''
+  }
+  return normalized
 }
 
 function isCashDescriptor(value: string | null | undefined): boolean {
@@ -850,8 +861,25 @@ export async function GET(request: NextRequest) {
             .map((payment) => payment.billId)
         )
       )
+      const cashBankReferences = payments
+        .map((payment) => parseCashBankPaymentReference(payment.billId))
+        .filter((reference): reference is NonNullable<ReturnType<typeof parseCashBankPaymentReference>> => Boolean(reference))
+      const accountingHeadReferenceIds = Array.from(
+        new Set(
+          cashBankReferences
+            .filter((reference) => reference.referenceType === 'accounting-head')
+            .map((reference) => reference.referenceId)
+        )
+      )
+      const supplierReferenceIds = Array.from(
+        new Set(
+          cashBankReferences
+            .filter((reference) => reference.referenceType === 'supplier')
+            .map((reference) => reference.referenceId)
+        )
+      )
 
-      const [paymentPurchaseBills, paymentSpecialPurchaseBills, paymentSalesBills] = await Promise.all([
+      const [paymentPurchaseBills, paymentSpecialPurchaseBills, paymentSalesBills, referencedAccountingHeads, referencedSuppliers] = await Promise.all([
       purchasePaymentBillIds.length > 0
         ? prisma.purchaseBill.findMany({
             where: { id: { in: purchasePaymentBillIds }, companyId: { in: targetCompanyIds } },
@@ -869,15 +897,48 @@ export async function GET(request: NextRequest) {
             where: { id: { in: salesPaymentBillIds }, companyId: { in: targetCompanyIds } },
             select: { id: true, billNo: true }
           })
+        : Promise.resolve([]),
+      accountingHeadReferenceIds.length > 0
+        ? prisma.accountingHead.findMany({
+            where: {
+              companyId: { in: targetCompanyIds },
+              id: { in: accountingHeadReferenceIds }
+            },
+            select: {
+              id: true,
+              name: true
+            }
+          })
+        : Promise.resolve([]),
+      supplierReferenceIds.length > 0
+        ? prisma.supplier.findMany({
+            where: {
+              companyId: { in: targetCompanyIds },
+              id: { in: supplierReferenceIds }
+            },
+            select: {
+              id: true,
+              name: true
+            }
+          })
         : Promise.resolve([])
     ])
 
       const purchaseBillNoMap = new Map(paymentPurchaseBills.map((bill) => [bill.id, bill.billNo]))
       const specialPurchaseBillNoMap = new Map(paymentSpecialPurchaseBills.map((bill) => [bill.id, bill.supplierInvoiceNo]))
       const salesBillNoMap = new Map(paymentSalesBills.map((bill) => [bill.id, bill.billNo]))
+      const cashBankReferenceLabelMap = new Map<string, string>([
+        ...referencedAccountingHeads.map((head) => [`accounting-head:${head.id}`, head.name || ''] as const),
+        ...referencedSuppliers.map((supplier) => [`supplier:${supplier.id}`, supplier.name || ''] as const)
+      ])
 
       const salesReceiptByBillId = new Map<string, number>()
       const purchasePaidByBillId = new Map<string, number>()
+      const getCashBankTargetLabel = (billId: string): string => {
+        const reference = parseCashBankPaymentReference(billId)
+        if (!reference) return ''
+        return cashBankReferenceLabelMap.get(`${reference.referenceType}:${reference.referenceId}`) || ''
+      }
 
       for (const payment of paymentsAsOf) {
         if (!payment.billId) continue
@@ -1400,7 +1461,7 @@ export async function GET(request: NextRequest) {
         refNo,
         partyName: isSelfTransfer
           ? [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
-          : String(payment.party?.name || payment.farmer?.name || payment.bankNameSnapshot || ''),
+          : String(payment.party?.name || payment.farmer?.name || getCashBankTargetLabel(payment.billId) || payment.bankNameSnapshot || ''),
         productName: '-',
         amount,
         quantity: 0,
@@ -1478,6 +1539,16 @@ export async function GET(request: NextRequest) {
             const bankLabel = isSelfTransfer
               ? selfTransferSide?.accountName || 'Bank Transfer'
               : String(payment.bankNameSnapshot || '').trim() || 'Bank / Online'
+            const bankFilterValues = Array.from(
+              new Set(
+                (isSelfTransfer
+                  ? [payment.bankNameSnapshot, payment.bankBranchSnapshot]
+                  : [payment.bankNameSnapshot]
+                )
+                  .map((value) => normalizeBankFilterValue(value))
+                  .filter((value) => value && !isCashDescriptor(value))
+              )
+            )
             return {
               id: payment.id,
               date: dateKey(payment.payDate),
@@ -1489,8 +1560,9 @@ export async function GET(request: NextRequest) {
               refNo: billNo || String(payment.txnRef || ''),
               partyName: isSelfTransfer
                 ? selfTransferSide?.description || [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
-                : String(payment.party?.name || payment.farmer?.name || payment.bankNameSnapshot || ''),
+                : String(payment.party?.name || payment.farmer?.name || getCashBankTargetLabel(payment.billId) || payment.bankNameSnapshot || ''),
               bankName: bankLabel,
+              bankFilterValues,
               mode: formatPaymentMode(payment.mode),
               amountIn,
               amountOut,
@@ -1535,7 +1607,7 @@ export async function GET(request: NextRequest) {
               refNo: billNo || String(payment.txnRef || ''),
               partyName: isSelfTransfer
                 ? selfTransferSide?.description || [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
-                : String(payment.party?.name || payment.farmer?.name || payment.bankNameSnapshot || 'Cash'),
+                : String(payment.party?.name || payment.farmer?.name || getCashBankTargetLabel(payment.billId) || payment.bankNameSnapshot || 'Cash'),
               bankName: isSelfTransfer
                 ? selfTransferSide?.accountName || 'Cash'
                 : String(payment.bankNameSnapshot || '').trim() || 'Cash',
@@ -1626,7 +1698,13 @@ export async function GET(request: NextRequest) {
       cashLedger: needsCashLedgerView ? cashLedgerRows : [],
       filterOptions: {
         banks: needsBankLedgerView
-          ? Array.from(new Set(bankLedgerRows.map((row) => row.bankName).filter(Boolean))).sort((a, b) => a.localeCompare(b))
+          ? Array.from(
+              new Set(
+                bankLedgerRows.flatMap((row) =>
+                  Array.isArray(row.bankFilterValues) ? row.bankFilterValues : []
+                )
+              )
+            ).sort((a, b) => a.localeCompare(b))
           : []
       },
       meta: {

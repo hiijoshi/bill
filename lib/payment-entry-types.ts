@@ -13,6 +13,7 @@ export const PAYMENT_ENTRY_TYPES = [
 ] as const
 
 export type PaymentEntryType = (typeof PAYMENT_ENTRY_TYPES)[number]
+export type CashBankReferenceType = 'accounting-head' | 'supplier'
 
 export function isPaymentEntryType(value: unknown): value is PaymentEntryType {
   return PAYMENT_ENTRY_TYPES.includes(String(value || '').trim() as PaymentEntryType)
@@ -63,6 +64,27 @@ export function buildCashBankPaymentReference(referenceType: string, referenceId
   const type = String(referenceType || 'manual').trim().toLowerCase() || 'manual'
   const id = String(referenceId || 'entry').trim() || 'entry'
   return `cash-bank:${type}:${id}`
+}
+
+export function parseCashBankPaymentReference(
+  value: unknown
+): { referenceType: CashBankReferenceType; referenceId: string } | null {
+  const normalized = String(value || '').trim()
+  if (!normalized.startsWith('cash-bank:')) return null
+
+  const [, rawType = '', ...idParts] = normalized.split(':')
+  const referenceType = rawType.trim().toLowerCase()
+  const referenceId = idParts.join(':').trim()
+
+  if (!referenceId) return null
+  if (referenceType !== 'accounting-head' && referenceType !== 'supplier') {
+    return null
+  }
+
+  return {
+    referenceType,
+    referenceId
+  }
 }
 
 export function buildSelfTransferReference(fromValue: string, toValue: string): string {

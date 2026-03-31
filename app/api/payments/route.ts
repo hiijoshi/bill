@@ -29,6 +29,7 @@ import {
   isCashBankPaymentType,
   isCashBankReceiptType,
   isPaymentEntryType,
+  parseCashBankPaymentReference,
   isPurchasePaymentType,
   isSalesReceiptType,
   isSelfTransferPaymentType,
@@ -406,8 +407,17 @@ export async function GET(request: NextRequest) {
     const salesBillIds = [...new Set(payments
       .filter((payment) => payment.billType === 'sales')
       .map((payment) => payment.billId))]
+    const cashBankReferences = payments
+      .map((payment) => parseCashBankPaymentReference(payment.billId))
+      .filter((reference): reference is NonNullable<ReturnType<typeof parseCashBankPaymentReference>> => Boolean(reference))
+    const accountingHeadIds = [...new Set(cashBankReferences
+      .filter((reference) => reference.referenceType === 'accounting-head')
+      .map((reference) => reference.referenceId))]
+    const supplierReferenceIds = [...new Set(cashBankReferences
+      .filter((reference) => reference.referenceType === 'supplier')
+      .map((reference) => reference.referenceId))]
 
-    const [purchaseBills, specialPurchaseBills, salesBills] = await Promise.all([
+    const [purchaseBills, specialPurchaseBills, salesBills, accountingHeads, suppliers] = await Promise.all([
       purchaseBillIds.length > 0
         ? prisma.purchaseBill.findMany({
             where: { id: { in: purchaseBillIds } },
@@ -441,6 +451,30 @@ export async function GET(request: NextRequest) {
             where: { id: { in: salesBillIds } },
             select: { id: true, billNo: true }
           })
+        : Promise.resolve([]),
+      accountingHeadIds.length > 0
+        ? prisma.accountingHead.findMany({
+            where: {
+              companyId: { in: permissionScopedIds },
+              id: { in: accountingHeadIds }
+            },
+            select: {
+              id: true,
+              name: true
+            }
+          })
+        : Promise.resolve([]),
+      supplierReferenceIds.length > 0
+        ? prisma.supplier.findMany({
+            where: {
+              companyId: { in: permissionScopedIds },
+              id: { in: supplierReferenceIds }
+            },
+            select: {
+              id: true,
+              name: true
+            }
+          })
         : Promise.resolve([])
     ])
 
@@ -463,30 +497,42 @@ export async function GET(request: NextRequest) {
       ])
     )
     const salesBillMap = new Map(salesBills.map((bill) => [bill.id, bill.billNo]))
+    const cashBankReferenceLabelMap = new Map<string, string>([
+      ...accountingHeads.map((head) => [`accounting-head:${head.id}`, head.name || ''] as const),
+      ...suppliers.map((supplier) => [`supplier:${supplier.id}`, supplier.name || ''] as const)
+    ])
 
-    const enhancedPayments = payments.map((payment) => ({
-      ...payment,
-      amount: clampNonNegative(payment.amount),
-      billTypeLabel: getPaymentTypeLabel(payment.billType),
-      billNo:
-        payment.billType === SALES_RECEIPT_TYPE && isPartyOpeningBalanceReference(payment.billId)
-          ? 'Opening Balance'
-          : isPurchasePaymentType(payment.billType)
-          ? purchaseBillMap.get(payment.billId)?.billNo || specialPurchaseBillMap.get(payment.billId)?.billNo || ''
-          : payment.billType === SALES_RECEIPT_TYPE
-          ? salesBillMap.get(payment.billId) || ''
-          : getPaymentTypeLabel(payment.billType),
-      partyName:
-        payment.party?.name ||
-        payment.farmer?.name ||
-        purchaseBillMap.get(payment.billId)?.partyName ||
-        specialPurchaseBillMap.get(payment.billId)?.partyName ||
-        (isCashBankPaymentType(payment.billType) || isCashBankReceiptType(payment.billType)
-          ? String(payment.bankNameSnapshot || '').trim()
-          : isSelfTransferPaymentType(payment.billType)
-          ? [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
-          : '')
-    }))
+    const enhancedPayments = payments.map((payment) => {
+      const cashBankReference = parseCashBankPaymentReference(payment.billId)
+      const cashBankTargetLabel = cashBankReference
+        ? cashBankReferenceLabelMap.get(`${cashBankReference.referenceType}:${cashBankReference.referenceId}`) || ''
+        : ''
+
+      return {
+        ...payment,
+        amount: clampNonNegative(payment.amount),
+        billTypeLabel: getPaymentTypeLabel(payment.billType),
+        billNo:
+          payment.billType === SALES_RECEIPT_TYPE && isPartyOpeningBalanceReference(payment.billId)
+            ? 'Opening Balance'
+            : isPurchasePaymentType(payment.billType)
+            ? purchaseBillMap.get(payment.billId)?.billNo || specialPurchaseBillMap.get(payment.billId)?.billNo || ''
+            : payment.billType === SALES_RECEIPT_TYPE
+            ? salesBillMap.get(payment.billId) || ''
+            : getPaymentTypeLabel(payment.billType),
+        partyName:
+          payment.party?.name ||
+          payment.farmer?.name ||
+          purchaseBillMap.get(payment.billId)?.partyName ||
+          specialPurchaseBillMap.get(payment.billId)?.partyName ||
+          cashBankTargetLabel ||
+          (isCashBankPaymentType(payment.billType) || isCashBankReceiptType(payment.billType)
+            ? String(payment.bankNameSnapshot || '').trim()
+            : isSelfTransferPaymentType(payment.billType)
+            ? [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
+            : '')
+      }
+    })
 
     if (pagination.enabled) {
       return NextResponse.json({
