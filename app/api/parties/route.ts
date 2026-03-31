@@ -51,8 +51,8 @@ function getCompanyIdFromAuthenticatedRequest(request: NextRequest): string {
 }
 
 const postSchema = z.object({
-  type: z.enum(['farmer', 'buyer']).optional(),
-  name: z.string().trim().min(1).optional(),
+  type: z.enum(['farmer', 'buyer']),
+  name: z.string().trim().min(1),
   address: z.string().optional().nullable(),
   phone1: z.string().optional().nullable(),
   phone2: z.string().optional().nullable(),
@@ -240,9 +240,6 @@ export async function POST(request: NextRequest) {
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
-    if (!parsed.data.type || !parsed.data.name) {
-      return NextResponse.json({ error: 'Party type and name are required' }, { status: 400 })
-    }
     const phone1 = normalizeTenDigitPhone(parsed.data.phone1)
     const phone2 = normalizeTenDigitPhone(parsed.data.phone2)
     if (parsed.data.phone1 !== undefined && parsed.data.phone1 !== null && !phone1) {

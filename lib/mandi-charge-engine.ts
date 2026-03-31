@@ -31,11 +31,11 @@ export type CalculatedMandiCharge = {
   accountingHeadId: string
   name: string
   category: string
-  mandiTypeId?: string | null
+  mandiTypeId: string | null
   calculationBasis: MandiCalculationBasis
   basisValue: number
   chargeAmount: number
-  accountGroup?: string | null
+  accountGroup: string | null
   sortOrder: number
 }
 
@@ -67,7 +67,7 @@ export function calculateMandiCharges(args: {
 }) {
   const activeTypeId = String(args.mandiTypeId || '').trim() || null
 
-  const lines = args.definitions
+  const mappedLines = args.definitions
     .filter((definition) => definition.isMandiCharge)
     .filter((definition) => isMandiTypeMatch(definition.mandiTypeId, activeTypeId))
     .map((definition, index) => {
@@ -101,8 +101,9 @@ export function calculateMandiCharges(args: {
         sortOrder: Number.isFinite(Number(definition.sortOrder)) ? Number(definition.sortOrder) : index
       } satisfies CalculatedMandiCharge
     })
-    .filter((line): line is CalculatedMandiCharge => Boolean(line))
-    .sort((left, right) => {
+    .filter((line): line is CalculatedMandiCharge => line !== null)
+
+  const lines: CalculatedMandiCharge[] = mappedLines.sort((left, right) => {
       if (left.sortOrder !== right.sortOrder) return left.sortOrder - right.sortOrder
       return left.name.localeCompare(right.name)
     })

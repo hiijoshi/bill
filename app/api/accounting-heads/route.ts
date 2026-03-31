@@ -1,11 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import { Prisma } from '@prisma/client'
 
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { ensureAccountingHeadSchema } from '@/lib/accounting-head-schema'
 import { cleanString, parseNonNegativeNumber } from '@/lib/field-validation'
 import { ensureMandiSchema } from '@/lib/mandi-schema'
 import { prisma } from '@/lib/prisma'
+
+type AccountingHeadWithConfig = Prisma.AccountingHeadGetPayload<{
+  include: {
+    mandiConfig: {
+      include: {
+        mandiType: {
+          select: {
+            id: true
+            name: true
+          }
+        }
+      }
+    }
+  }
+}>
 
 function normalizeCompanyId(raw: string | null): string | null {
   if (!raw) return null
@@ -69,7 +85,7 @@ const putSchema = accountingHeadSchema.extend({
   category: z.string().trim().min(1)
 }).strict()
 
-function normalizeAccountingHeadResponse(head: Awaited<ReturnType<typeof prisma.accountingHead.findFirst>>) {
+function normalizeAccountingHeadResponse(head: AccountingHeadWithConfig | null) {
   if (!head) return null
   return {
     id: head.id,
