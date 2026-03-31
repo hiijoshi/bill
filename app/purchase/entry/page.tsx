@@ -58,6 +58,12 @@ interface AccountingHeadCharge {
   accountGroup?: string | null
 }
 
+interface MarkaOption {
+  id: string
+  markaNumber: string
+  isActive?: boolean
+}
+
 export default function PurchaseEntryPage() {
   const router = useRouter()
   const [companyId, setCompanyId] = useState('')
@@ -66,6 +72,7 @@ export default function PurchaseEntryPage() {
   const [farmers, setFarmers] = useState<FarmerOption[]>([])
   const [mandiTypes, setMandiTypes] = useState<MandiType[]>([])
   const [accountingHeads, setAccountingHeads] = useState<AccountingHeadCharge[]>([])
+  const [markas, setMarkas] = useState<MarkaOption[]>([])
   const [loading, setLoading] = useState(true)
 
   // Form state
@@ -161,13 +168,14 @@ export default function PurchaseEntryPage() {
 
       // Same-origin fetch automatically sends auth cookies.
       stripCompanyParamsFromUrl()
-      const [productsRes, billsRes, unitsRes, farmersRes, mandiTypesRes, accountingHeadsRes] = await Promise.all([
+      const [productsRes, billsRes, unitsRes, farmersRes, mandiTypesRes, accountingHeadsRes, markasRes] = await Promise.all([
         fetch(`/api/products?companyId=${companyId}`),
         fetch(`/api/purchase-bills?companyId=${companyId}&last=true`),
         fetch(`/api/units?companyId=${companyId}`),
         fetch(`/api/farmers?companyId=${companyId}`),
         fetch(`/api/mandi-types?companyId=${companyId}`),
-        fetch(`/api/accounting-heads?companyId=${companyId}`)
+        fetch(`/api/accounting-heads?companyId=${companyId}`),
+        fetch(`/api/markas?companyId=${companyId}`)
       ])
 
       // Handle auth/company context failures quickly without retry loops.
@@ -220,6 +228,7 @@ export default function PurchaseEntryPage() {
       const farmersPayload = farmersRes.ok ? await farmersRes.json().catch(() => []) : []
       const mandiTypesPayload = mandiTypesRes.ok ? await mandiTypesRes.json().catch(() => []) : []
       const accountingHeadsPayload = accountingHeadsRes.ok ? await accountingHeadsRes.json().catch(() => []) : []
+      const markasPayload = markasRes.ok ? await markasRes.json().catch(() => []) : []
       const unitsData = Array.isArray(unitsPayload)
         ? unitsPayload
         : Array.isArray(unitsPayload?.units)
@@ -236,6 +245,17 @@ export default function PurchaseEntryPage() {
       setFarmers(Array.isArray(farmersPayload) ? farmersPayload : [])
       setMandiTypes(Array.isArray(mandiTypesPayload) ? mandiTypesPayload : [])
       setAccountingHeads(Array.isArray(accountingHeadsPayload) ? accountingHeadsPayload : [])
+      setMarkas(
+        Array.isArray(markasPayload)
+          ? markasPayload
+              .map((row) => ({
+                id: String(row?.id || ''),
+                markaNumber: String(row?.markaNumber || '').trim(),
+                isActive: row?.isActive !== false
+              }))
+              .filter((row) => row.id && row.markaNumber && row.isActive !== false)
+          : []
+      )
     } catch (error) {
       if (isAbortError(error)) return
       console.error('Error fetching data:', error)
@@ -307,7 +327,14 @@ export default function PurchaseEntryPage() {
   useEffect(() => {
     const bags = parseFloat(noOfBags) || 0
     const selected = userUnits.find((u) => u.id === selectedUserUnit)
-    if (!selected || bags <= 0) return
+    if (!selected) {
+      if (!noOfBags) setWeight('')
+      return
+    }
+    if (!noOfBags || bags <= 0) {
+      setWeight('')
+      return
+    }
 
     const totalKg = toKg(bags, Number(selected.kgEquivalent || 1))
     const totalQt = round4(kgToQuintal(totalKg))
@@ -553,10 +580,18 @@ export default function PurchaseEntryPage() {
                     <Label htmlFor="markaNumber">Marka No.</Label>
                     <Input
                       id="markaNumber"
+                      list="purchaseMarkaOptions"
                       value={markaNumber}
-                      onChange={(e) => setMarkaNumber(e.target.value)}
+                      onChange={(e) => setMarkaNumber(e.target.value.toUpperCase())}
                       placeholder="Enter Marka Number"
                     />
+                    {markas.length > 0 ? (
+                      <datalist id="purchaseMarkaOptions">
+                        {markas.map((marka) => (
+                          <option key={marka.id} value={marka.markaNumber} />
+                        ))}
+                      </datalist>
+                    ) : null}
                   </div>
 
                   {/* Product */}

@@ -167,7 +167,14 @@ export default function SpecialPurchaseEntryPage() {
   useEffect(() => {
     const bags = parseFloat(noOfBags) || 0
     const selected = userUnits.find((unit) => unit.id === selectedUserUnit)
-    if (!selected || bags <= 0) return
+    if (!selected) {
+      if (!noOfBags) setWeight('')
+      return
+    }
+    if (!noOfBags || bags <= 0) {
+      setWeight('')
+      return
+    }
     const totalKg = toKg(bags, Number(selected.kgEquivalent || 1))
     const totalQt = round4(kgToQuintal(totalKg))
     setWeight(totalQt.toString())

@@ -98,6 +98,7 @@ const menuItems: MenuItem[] = [
       { title: 'Party Ledger', href: '/reports/main?reportType=operations&view=ledger', permissionModule: 'REPORTS' },
       { title: 'Daily Transaction', href: '/reports/main?reportType=operations&view=daily-transaction', permissionModule: 'REPORTS' },
       { title: 'Daily Consolidated', href: '/reports/main?reportType=operations&view=daily-consolidated', permissionModule: 'REPORTS' },
+      { title: 'Cash Ledger', href: '/reports/main?reportType=operations&view=cash-ledger', permissionModule: 'REPORTS' },
       { title: 'Bank Ledger', href: '/reports/main?reportType=operations&view=bank-ledger', permissionModule: 'REPORTS' },
     ],
   },

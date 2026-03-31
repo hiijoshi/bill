@@ -76,7 +76,7 @@ function toDateOrNull(value: Date | string | null | undefined): Date | null {
   return Number.isFinite(parsed.getTime()) ? parsed : null
 }
 
-function normalizeLedgerEntry(entry: {
+type StockLedgerEntryRow = {
   id: string
   entryDate: Date
   type: string
@@ -85,6 +85,7 @@ function normalizeLedgerEntry(entry: {
   refTable: string
   refId: string
   createdAt: Date
+  note?: string | null
   product: {
     id: string
     name: string
@@ -92,7 +93,9 @@ function normalizeLedgerEntry(entry: {
       symbol: string
     } | null
   }
-}) {
+}
+
+function normalizeLedgerEntry(entry: StockLedgerEntryRow) {
   return {
     id: entry.id,
     entryDate: entry.entryDate,
@@ -101,6 +104,7 @@ function normalizeLedgerEntry(entry: {
     qtyOut: Number(entry.qtyOut || 0),
     refTable: entry.refTable,
     refId: entry.refId,
+    note: entry.note || null,
     createdAt: entry.createdAt,
     product: {
       id: entry.product.id,
@@ -108,6 +112,41 @@ function normalizeLedgerEntry(entry: {
       unit: entry.product.unit?.symbol || ''
     }
   }
+}
+
+async function attachLedgerNotes(rows: StockLedgerEntryRow[]): Promise<StockLedgerEntryRow[]> {
+  const adjustmentIds = rows
+    .filter((row) => row.type === 'adjustment')
+    .map((row) => row.id)
+
+  if (adjustmentIds.length === 0) {
+    return rows
+  }
+
+  const auditLogs = await prisma.auditLog.findMany({
+    where: {
+      resourceType: 'STOCK',
+      resourceId: { in: adjustmentIds }
+    },
+    select: {
+      resourceId: true,
+      notes: true,
+      createdAt: true
+    },
+    orderBy: [{ createdAt: 'desc' }]
+  })
+
+  const noteByEntryId = new Map<string, string>()
+  for (const log of auditLogs) {
+    const note = String(log.notes || '').trim()
+    if (!note || noteByEntryId.has(log.resourceId)) continue
+    noteByEntryId.set(log.resourceId, note)
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    note: noteByEntryId.get(row.id) || null
+  }))
 }
 
 export async function POST(request: NextRequest) {
@@ -315,6 +354,8 @@ export async function GET(request: NextRequest) {
         lastMovementDate: toDateOrNull(row.lastMovementDate)
       }))
 
+      const recentEntriesWithNotes = await attachLedgerNotes(recentEntries)
+
       return NextResponse.json({
         companyId,
         products: summary.map((row) => ({
@@ -325,7 +366,7 @@ export async function GET(request: NextRequest) {
           currentStock: row.closingStock
         })),
         summary,
-        recentEntries: recentEntries.map(normalizeLedgerEntry),
+        recentEntries: recentEntriesWithNotes.map(normalizeLedgerEntry),
         ...(includeMeta
           ? {
               meta: {
@@ -369,7 +410,7 @@ export async function GET(request: NextRequest) {
       pagination.enabled ? prisma.stockLedger.count({ where: whereClause }) : Promise.resolve(0)
     ])
 
-    const rows = stockLedger.map(normalizeLedgerEntry)
+    const rows = (await attachLedgerNotes(stockLedger)).map(normalizeLedgerEntry)
 
     if (pagination.enabled) {
       return NextResponse.json({

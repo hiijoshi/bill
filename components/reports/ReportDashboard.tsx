@@ -23,6 +23,7 @@ const BASE_HEADERS = [
   'Bhugtan_Date',
   'Auction_Rate',
   'Actual_Weight',
+  'No_of_Bags',
   'Total_Hammali_Toul',
   'Farmer_Payment',
   'Payment_Mode',
@@ -82,12 +83,14 @@ interface PartyRecord {
 
 interface PurchaseItemRecord {
   qty?: number
+  bags?: number
   rate?: number
   hammali?: number
 }
 
 interface SalesItemRecord {
   weight?: number
+  bags?: number
   rate?: number
 }
 
@@ -108,6 +111,7 @@ interface PurchaseBillRecord {
 }
 
 interface SpecialPurchaseItemRecord {
+  noOfBags?: number
   weight?: number
   rate?: number
   otherAmount?: number
@@ -333,6 +337,7 @@ const getHeaderLabel = (header: CsvHeader, reportType: ReportType): string => {
     Bhugtan_Date: 'Payment Date',
     Auction_Rate: reportType === 'sales' ? 'Average Sale Rate' : 'Average Rate',
     Actual_Weight: 'Weight',
+    No_of_Bags: 'No. of Bags',
     Total_Hammali_Toul: 'Hammali / Other',
     Farmer_Payment: reportType === 'sales' ? 'Invoice Amount' : 'Bill Amount',
     Payment_Mode: 'Payment Mode',
@@ -665,6 +670,7 @@ export default function ReportDashboard({
           const farmer = bill.farmer || {}
           const purchaseItems = Array.isArray(bill.purchaseItems) ? bill.purchaseItems : []
           const totalWeight = purchaseItems.reduce((acc, item) => acc + normalizeAmount(item.qty), 0)
+          const totalBags = purchaseItems.reduce((acc, item) => acc + normalizeAmount(item.bags), 0)
           const totalHammali = purchaseItems.reduce((acc, item) => acc + normalizeAmount(item.hammali), 0)
           const weightedRate = purchaseItems.reduce(
             (acc, item) => acc + normalizeAmount(item.qty) * normalizeAmount(item.rate),
@@ -752,6 +758,7 @@ export default function ReportDashboard({
             Bhugtan_Date: formatCompactDate(latestPayment?.payDate),
             Auction_Rate: round2(totalWeight > 0 ? weightedRate / totalWeight : normalizeAmount(purchaseItems[0]?.rate)),
             Actual_Weight: round3(totalWeight),
+            No_of_Bags: round2(totalBags),
             Total_Hammali_Toul: round2(totalHammali),
             Farmer_Payment: round2(normalizeAmount(bill.totalAmount)),
             Payment_Mode: resolveModeCode(modeBucket),
@@ -780,6 +787,7 @@ export default function ReportDashboard({
           const supplier = bill.supplier || {}
           const specialItems = Array.isArray(bill.specialPurchaseItems) ? bill.specialPurchaseItems : []
           const totalWeight = specialItems.reduce((acc, item) => acc + normalizeAmount(item.weight), 0)
+          const totalBags = specialItems.reduce((acc, item) => acc + normalizeAmount(item.noOfBags), 0)
           const totalOtherAmount = specialItems.reduce((acc, item) => acc + normalizeAmount(item.otherAmount), 0)
           const weightedRate = specialItems.reduce(
             (acc, item) => acc + normalizeAmount(item.weight) * normalizeAmount(item.rate),
@@ -868,6 +876,7 @@ export default function ReportDashboard({
             Bhugtan_Date: formatCompactDate(latestPayment?.payDate),
             Auction_Rate: round2(totalWeight > 0 ? weightedRate / totalWeight : normalizeAmount(specialItems[0]?.rate)),
             Actual_Weight: round3(totalWeight),
+            No_of_Bags: round2(totalBags),
             Total_Hammali_Toul: round2(totalOtherAmount),
             Farmer_Payment: round2(specialTotal),
             Payment_Mode: resolveModeCode(modeBucket),
@@ -896,6 +905,7 @@ export default function ReportDashboard({
           const party = bill.party || {}
           const salesItems = Array.isArray(bill.salesItems) ? bill.salesItems : []
           const totalWeight = salesItems.reduce((acc, item) => acc + normalizeAmount(item.weight), 0)
+          const totalBags = salesItems.reduce((acc, item) => acc + normalizeAmount(item.bags), 0)
           const weightedRate = salesItems.reduce(
             (acc, item) => acc + normalizeAmount(item.weight) * normalizeAmount(item.rate),
             0
@@ -982,6 +992,7 @@ export default function ReportDashboard({
             Bhugtan_Date: formatCompactDate(latestPayment?.payDate),
             Auction_Rate: round2(totalWeight > 0 ? weightedRate / totalWeight : normalizeAmount(salesItems[0]?.rate)),
             Actual_Weight: round3(totalWeight),
+            No_of_Bags: round2(totalBags),
             Total_Hammali_Toul: 0,
             Farmer_Payment: round2(normalizeAmount(bill.totalAmount)),
             Payment_Mode: resolveModeCode(modeBucket),

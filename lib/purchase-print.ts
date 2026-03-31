@@ -21,6 +21,7 @@ export interface PurchaseBillPrintData {
   totalWeightQt: number
   rate: number
   hammali: number
+  grossAmount: number
   amount: number
   taxableAmount: number
   gstRate: number
@@ -135,6 +136,13 @@ export function mapPurchaseBillToPrintData(bill: PurchaseBillPrintSource | null 
   const krashakAnubandhNumber = toStringValue(bill?.krashakAnubandhSnapshot ?? bill?.farmer?.krashakAnubandhNumber)
 
   const productName = toStringValue(item?.productNameSnapshot ?? item?.product?.name)
+  const qty = Math.max(0, toNumber(item?.qty, 0))
+  const totalWeightQt = Math.max(0, toNumber(item?.totalWeightQt ?? item?.qty, 0))
+  const rate = Math.max(0, toNumber(item?.rate, 0))
+  const hammali = Math.max(0, toNumber(item?.hammali, 0))
+  const netAmount = Math.max(0, toNumber(item?.amount, 0))
+  const inferredGrossAmount = Math.max(0, netAmount + hammali)
+  const fallbackGrossAmount = Math.max(0, qty * rate)
 
   return {
     id: String(bill?.id || ''),
@@ -153,11 +161,12 @@ export function mapPurchaseBillToPrintData(bill: PurchaseBillPrintSource | null 
     productName,
     bags: Math.max(0, Math.round(toNumber(item?.bags, 0))),
     markaNo: toStringValue(item?.markaNo),
-    qty: Math.max(0, toNumber(item?.qty, 0)),
-    totalWeightQt: Math.max(0, toNumber(item?.totalWeightQt ?? item?.qty, 0)),
-    rate: Math.max(0, toNumber(item?.rate, 0)),
-    hammali: Math.max(0, toNumber(item?.hammali, 0)),
-    amount: Math.max(0, toNumber(item?.amount, 0)),
+    qty,
+    totalWeightQt,
+    rate,
+    hammali,
+    grossAmount: inferredGrossAmount > 0 ? inferredGrossAmount : fallbackGrossAmount,
+    amount: netAmount,
     taxableAmount: Math.max(0, toNumber(item?.taxableAmount ?? item?.amount, 0)),
     gstRate: Math.max(0, toNumber(item?.gstRateSnapshot, 0)),
     itemGstAmount: Math.max(0, toNumber(item?.gstAmount, 0)),

@@ -24,6 +24,7 @@ import {
   isSalesReceiptType,
   isSelfTransferPaymentType
 } from '@/lib/payment-entry-types'
+import { isCashPaymentMode } from '@/lib/payment-mode-utils'
 
 type CompanyOption = {
   id: string
@@ -56,10 +57,17 @@ type OutstandingAccumulator = {
   receivedAmount: number
   balanceAmount: number
   invoiceCount: number
+  oldestBillDate: string
   lastBillDate: string
 }
 
-type OperationsReportView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'bank-ledger'
+type OperationsReportView =
+  | 'outstanding'
+  | 'ledger'
+  | 'daily-transaction'
+  | 'daily-consolidated'
+  | 'bank-ledger'
+  | 'cash-ledger'
 
 function normalizeReportView(value: string | null): OperationsReportView {
   if (
@@ -67,7 +75,8 @@ function normalizeReportView(value: string | null): OperationsReportView {
     value === 'ledger' ||
     value === 'daily-transaction' ||
     value === 'daily-consolidated' ||
-    value === 'bank-ledger'
+    value === 'bank-ledger' ||
+    value === 'cash-ledger'
   ) {
     return value
   }
@@ -91,6 +100,29 @@ function dateKey(value: Date | string | null | undefined): string {
   const month = String(parsed.getMonth() + 1).padStart(2, '0')
   const day = String(parsed.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function startOfLocalDay(value: Date): Date {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate())
+}
+
+function getDaysOverdue(value: string, asOf: Date): number {
+  if (!value) return 0
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return 0
+  const diffMs = startOfLocalDay(asOf).getTime() - startOfLocalDay(parsed).getTime()
+  if (diffMs <= 0) return 0
+  return Math.floor(diffMs / 86_400_000)
+}
+
+function getOutstandingAgeBucket(daysOverdue: number): string {
+  if (daysOverdue <= 0) return 'Current'
+  if (daysOverdue <= 7) return '1-7 Days'
+  if (daysOverdue <= 15) return '8-15 Days'
+  if (daysOverdue <= 30) return '16-30 Days'
+  if (daysOverdue <= 60) return '31-60 Days'
+  if (daysOverdue <= 90) return '61-90 Days'
+  return '90+ Days'
 }
 
 function getOrCreateDailyRow(map: Map<string, DailySummaryAccumulator>, key: string): DailySummaryAccumulator {
@@ -136,6 +168,106 @@ function normalizeOutstandingStatus(balanceAmount: number, receivedAmount: numbe
   return 'unpaid'
 }
 
+function normalizeTransferAccountLabel(value: string | null | undefined): string {
+  return String(value || '').trim()
+}
+
+function isCashDescriptor(value: string | null | undefined): boolean {
+  const normalized = String(value || '').trim().toLowerCase()
+  return normalized === 'cash' || normalized.startsWith('cash ') || normalized.includes(' cash')
+}
+
+function resolveSelfTransferSide(
+  payment: {
+    bankNameSnapshot?: string | null
+    bankBranchSnapshot?: string | null
+  },
+  target: 'bank' | 'cash'
+): {
+  direction: 'IN' | 'OUT' | 'TRANSFER' | null
+  amountIn: number
+  amountOut: number
+  accountName: string
+  description: string
+} {
+  const fromLabel = normalizeTransferAccountLabel(payment.bankNameSnapshot)
+  const toLabel = normalizeTransferAccountLabel(payment.bankBranchSnapshot)
+  const fromCash = isCashDescriptor(fromLabel)
+  const toCash = isCashDescriptor(toLabel)
+
+  if (target === 'cash') {
+    if (fromCash && !toCash) {
+      return {
+        direction: 'OUT',
+        amountIn: 0,
+        amountOut: 1,
+        accountName: toLabel || 'Bank',
+        description: [fromLabel || 'Cash', toLabel || 'Bank'].filter(Boolean).join(' -> ')
+      }
+    }
+    if (!fromCash && toCash) {
+      return {
+        direction: 'IN',
+        amountIn: 1,
+        amountOut: 0,
+        accountName: fromLabel || 'Bank',
+        description: [fromLabel || 'Bank', toLabel || 'Cash'].filter(Boolean).join(' -> ')
+      }
+    }
+    if (fromCash && toCash) {
+      return {
+        direction: 'TRANSFER',
+        amountIn: 1,
+        amountOut: 1,
+        accountName: 'Cash',
+        description: [fromLabel || 'Cash', toLabel || 'Cash'].filter(Boolean).join(' -> ')
+      }
+    }
+    return {
+      direction: null,
+      amountIn: 0,
+      amountOut: 0,
+      accountName: '',
+      description: [fromLabel, toLabel].filter(Boolean).join(' -> ')
+    }
+  }
+
+  if (fromCash && !toCash) {
+    return {
+      direction: 'IN',
+      amountIn: 1,
+      amountOut: 0,
+      accountName: toLabel || 'Bank',
+      description: [fromLabel || 'Cash', toLabel || 'Bank'].filter(Boolean).join(' -> ')
+    }
+  }
+  if (!fromCash && toCash) {
+    return {
+      direction: 'OUT',
+      amountIn: 0,
+      amountOut: 1,
+      accountName: fromLabel || 'Bank',
+      description: [fromLabel || 'Bank', toLabel || 'Cash'].filter(Boolean).join(' -> ')
+    }
+  }
+  if (!fromCash && !toCash && (fromLabel || toLabel)) {
+    return {
+      direction: 'TRANSFER',
+      amountIn: 1,
+      amountOut: 1,
+      accountName: [fromLabel, toLabel].filter(Boolean).join(' -> ') || 'Bank Transfer',
+      description: [fromLabel, toLabel].filter(Boolean).join(' -> ')
+    }
+  }
+  return {
+    direction: null,
+    amountIn: 0,
+    amountOut: 0,
+    accountName: '',
+    description: [fromLabel, toLabel].filter(Boolean).join(' -> ')
+  }
+}
+
 function isBankLikePayment(payment: {
   mode?: string | null
   bankNameSnapshot?: string | null
@@ -151,6 +283,18 @@ function isBankLikePayment(payment: {
   return Boolean(
     mode || payment.bankNameSnapshot || payment.ifscCode || payment.beneficiaryBankAccount || payment.txnRef
   )
+}
+
+function isCashLikePayment(payment: {
+  billType?: string | null
+  mode?: string | null
+  bankNameSnapshot?: string | null
+  bankBranchSnapshot?: string | null
+}): boolean {
+  if (isSelfTransferPaymentType(payment.billType)) {
+    return Boolean(resolveSelfTransferSide(payment, 'cash').direction)
+  }
+  return isCashPaymentMode(payment.mode)
 }
 
 function formatPaymentMode(mode: string | null | undefined): string {
@@ -382,7 +526,8 @@ export async function GET(request: NextRequest) {
       const needsLedgerView = requestedView === 'ledger'
       const needsDailyView = requestedView === 'daily-transaction' || requestedView === 'daily-consolidated'
       const needsBankLedgerView = requestedView === 'bank-ledger'
-      const needsDetailedPayments = needsDailyView || needsBankLedgerView
+      const needsCashLedgerView = requestedView === 'cash-ledger'
+      const needsDetailedPayments = needsDailyView || needsBankLedgerView || needsCashLedgerView
       const needsPartyBalances = requestedView === 'outstanding' || needsLedgerView
 
       const [
@@ -785,6 +930,7 @@ export async function GET(request: NextRequest) {
       }
 
       const outstandingMap = new Map<string, OutstandingAccumulator>()
+      const outstandingAsOfDate = dateTo || new Date()
 
       for (const bill of salesBillsAsOf) {
       const receivedAmount = roundCurrency(salesReceiptByBillId.get(bill.id) || 0)
@@ -803,6 +949,7 @@ export async function GET(request: NextRequest) {
         receivedAmount: 0,
         balanceAmount: 0,
         invoiceCount: 0,
+        oldestBillDate: '',
         lastBillDate: ''
       }
 
@@ -811,6 +958,9 @@ export async function GET(request: NextRequest) {
       existing.balanceAmount += balanceAmount
       existing.invoiceCount += 1
       const billDateKey = dateKey(bill.billDate)
+      if (billDateKey && (!existing.oldestBillDate || billDateKey < existing.oldestBillDate)) {
+        existing.oldestBillDate = billDateKey
+      }
       if (!existing.lastBillDate || billDateKey > existing.lastBillDate) {
         existing.lastBillDate = billDateKey
       }
@@ -836,6 +986,7 @@ export async function GET(request: NextRequest) {
           receivedAmount: 0,
           balanceAmount: 0,
           invoiceCount: 0,
+          oldestBillDate: '',
           lastBillDate: ''
         }
 
@@ -846,6 +997,9 @@ export async function GET(request: NextRequest) {
 
         existing.balanceAmount += openingOutstanding
         const openingDateKey = dateKey(party.openingBalanceDate)
+        if (openingDateKey && (!existing.oldestBillDate || openingDateKey < existing.oldestBillDate)) {
+          existing.oldestBillDate = openingDateKey
+        }
         if (openingDateKey && (!existing.lastBillDate || openingDateKey > existing.lastBillDate)) {
           existing.lastBillDate = openingDateKey
         }
@@ -858,7 +1012,9 @@ export async function GET(request: NextRequest) {
         saleAmount: roundCurrency(row.saleAmount),
         receivedAmount: roundCurrency(row.receivedAmount),
         balanceAmount: roundCurrency(row.balanceAmount),
-        status: normalizeOutstandingStatus(row.balanceAmount, row.receivedAmount)
+        status: normalizeOutstandingStatus(row.balanceAmount, row.receivedAmount),
+        daysOverdue: getDaysOverdue(row.oldestBillDate || row.lastBillDate, outstandingAsOfDate),
+        ageBucket: getOutstandingAgeBucket(getDaysOverdue(row.oldestBillDate || row.lastBillDate, outstandingAsOfDate))
       }))
       .sort((a, b) => b.balanceAmount - a.balanceAmount || a.partyName.localeCompare(b.partyName))
 
@@ -1307,31 +1463,89 @@ export async function GET(request: NextRequest) {
             const isOutgoingPayment = isOutgoingCashflowPaymentType(payment.billType)
             const isSelfTransfer = isSelfTransferPaymentType(payment.billType)
             const amount = roundCurrency(normalizeNonNegative(payment.amount))
+            const selfTransferSide = isSelfTransfer ? resolveSelfTransferSide(payment, 'bank') : null
             const billNo = isIncomingReceipt
               ? String(salesBillNoMap.get(payment.billId) || '')
               : payment.billType === 'purchase'
                 ? String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || '')
                 : ''
+            const amountIn = isSelfTransfer
+              ? roundCurrency(amount * Number(selfTransferSide?.amountIn || 0))
+              : roundCurrency(isIncomingReceipt ? amount : 0)
+            const amountOut = isSelfTransfer
+              ? roundCurrency(amount * Number(selfTransferSide?.amountOut || 0))
+              : roundCurrency(isOutgoingPayment ? amount : 0)
+            const bankLabel = isSelfTransfer
+              ? selfTransferSide?.accountName || 'Bank Transfer'
+              : String(payment.bankNameSnapshot || '').trim() || 'Bank / Online'
             return {
               id: payment.id,
               date: dateKey(payment.payDate),
               companyId: payment.companyId,
               companyName: companyNameMap.get(payment.companyId) || payment.companyId,
-              direction: isSelfTransfer ? 'TRANSFER' : isIncomingReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-',
+              direction: selfTransferSide?.direction || (isIncomingReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-'),
               billType: getPaymentTypeLabel(payment.billType),
               billNo,
               refNo: billNo || String(payment.txnRef || ''),
               partyName: isSelfTransfer
-                ? [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
+                ? selfTransferSide?.description || [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
                 : String(payment.party?.name || payment.farmer?.name || payment.bankNameSnapshot || ''),
-              bankName: String(payment.bankNameSnapshot || '').trim() || 'Bank / Online',
+              bankName: bankLabel,
               mode: formatPaymentMode(payment.mode),
-              amountIn: roundCurrency(isIncomingReceipt ? amount : 0),
-              amountOut: roundCurrency(isOutgoingPayment ? amount : 0),
+              amountIn,
+              amountOut,
               txnRef: String(payment.txnRef || ''),
               ifscCode: String(payment.ifscCode || ''),
               accountNo: String(payment.beneficiaryBankAccount || ''),
               note: String(payment.note || payment.bankBranchSnapshot || '')
+            }
+          })
+          .sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName))
+      : []
+
+      const cashLedgerRows = needsCashLedgerView
+      ? payments
+          .filter((payment) => isCashLikePayment(payment))
+          .map((payment) => {
+            const isIncomingReceipt = isIncomingCashflowPaymentType(payment.billType)
+            const isOutgoingPayment = isOutgoingCashflowPaymentType(payment.billType)
+            const isSelfTransfer = isSelfTransferPaymentType(payment.billType)
+            const amount = roundCurrency(normalizeNonNegative(payment.amount))
+            const selfTransferSide = isSelfTransfer ? resolveSelfTransferSide(payment, 'cash') : null
+            const billNo = isIncomingReceipt
+              ? String(salesBillNoMap.get(payment.billId) || '')
+              : payment.billType === 'purchase'
+                ? String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || '')
+                : ''
+            const amountIn = isSelfTransfer
+              ? roundCurrency(amount * Number(selfTransferSide?.amountIn || 0))
+              : roundCurrency(isIncomingReceipt ? amount : 0)
+            const amountOut = isSelfTransfer
+              ? roundCurrency(amount * Number(selfTransferSide?.amountOut || 0))
+              : roundCurrency(isOutgoingPayment ? amount : 0)
+
+            return {
+              id: payment.id,
+              date: dateKey(payment.payDate),
+              companyId: payment.companyId,
+              companyName: companyNameMap.get(payment.companyId) || payment.companyId,
+              direction: selfTransferSide?.direction || (isIncomingReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-'),
+              billType: getPaymentTypeLabel(payment.billType),
+              billNo,
+              refNo: billNo || String(payment.txnRef || ''),
+              partyName: isSelfTransfer
+                ? selfTransferSide?.description || [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
+                : String(payment.party?.name || payment.farmer?.name || payment.bankNameSnapshot || 'Cash'),
+              bankName: isSelfTransfer
+                ? selfTransferSide?.accountName || 'Cash'
+                : String(payment.bankNameSnapshot || '').trim() || 'Cash',
+              mode: formatPaymentMode(payment.mode),
+              amountIn,
+              amountOut,
+              txnRef: String(payment.txnRef || ''),
+              ifscCode: '',
+              accountNo: '',
+              note: String(payment.note || '').trim() || (isSelfTransfer ? selfTransferSide?.description || 'Cash transfer' : formatPaymentMode(payment.mode))
             }
           })
           .sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName))
@@ -1409,6 +1623,7 @@ export async function GET(request: NextRequest) {
       dailyTransactionSummary: needsDailyView ? dailySummaryRows : [],
       dailyConsolidated: requestedView === 'daily-consolidated' ? dailySummaryRows : [],
       bankLedger: needsBankLedgerView ? bankLedgerRows : [],
+      cashLedger: needsCashLedgerView ? cashLedgerRows : [],
       filterOptions: {
         banks: needsBankLedgerView
           ? Array.from(new Set(bankLedgerRows.map((row) => row.bankName).filter(Boolean))).sort((a, b) => a.localeCompare(b))

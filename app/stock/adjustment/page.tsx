@@ -32,6 +32,7 @@ interface StockLedgerEntry {
   qtyOut: number
   refTable: string
   refId: string
+  note?: string | null
   product: {
     id: string
     name: string
@@ -113,6 +114,7 @@ function normalizeLedger(payload: unknown): StockLedgerEntry[] {
       qtyOut: Number(entry?.qtyOut || 0),
       refTable: String(entry?.refTable || ''),
       refId: String(entry?.refId || ''),
+      note: typeof entry?.note === 'string' ? entry.note : null,
       product: {
         id: String(entry?.product?.id || ''),
         name: String(entry?.product?.name || '')
@@ -688,6 +690,7 @@ export default function StockAdjustmentPage() {
                               <div>
                                 <p className="text-sm font-medium text-slate-900">{formatReference(entry.refTable)}</p>
                                 <p className="text-xs text-slate-500">{formatDate(entry.entryDate)}</p>
+                                {entry.note ? <p className="mt-1 text-xs text-slate-600">{entry.note}</p> : null}
                               </div>
                               <div className="text-right">
                                 <p className={`text-sm font-semibold ${entry.qtyIn > 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
@@ -731,6 +734,7 @@ export default function StockAdjustmentPage() {
                         <TableHead>Direction</TableHead>
                         <TableHead className="text-right">Qty</TableHead>
                         <TableHead>Reference</TableHead>
+                        <TableHead>Remark</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -750,12 +754,13 @@ export default function StockAdjustmentPage() {
                                 {isIn ? formatQuantity(entry.qtyIn) : formatQuantity(entry.qtyOut)}
                               </TableCell>
                               <TableCell>{formatReference(entry.refTable)}</TableCell>
+                              <TableCell>{entry.note || '-'}</TableCell>
                             </TableRow>
                           )
                         })
                       ) : (
                         <TableRow>
-                          <TableCell colSpan={5} className="py-8 text-center text-slate-500">
+                          <TableCell colSpan={6} className="py-8 text-center text-slate-500">
                             No adjustment history found yet.
                           </TableCell>
                         </TableRow>

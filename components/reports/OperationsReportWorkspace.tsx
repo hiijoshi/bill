@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { BarChart3, Download, FileText, RefreshCw, Search } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -12,10 +13,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { printHtmlDocument } from '@/lib/report-print'
 
-type ReportView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'bank-ledger'
+type ReportView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'bank-ledger' | 'cash-ledger'
 type OutstandingSort = 'highest' | 'lowest'
 type ReportScope = 'company' | 'individual-trader'
-type BankDirectionFilter = 'all' | 'in' | 'out'
+type LedgerDirectionFilter = 'all' | 'in' | 'out' | 'transfer'
+type OutstandingAgeBucket = 'Current' | '1-7 Days' | '8-15 Days' | '16-30 Days' | '31-60 Days' | '61-90 Days' | '90+ Days'
 
 type CompanyRecord = {
   id: string
@@ -45,7 +47,10 @@ type OutstandingRow = {
   receivedAmount: number
   balanceAmount: number
   invoiceCount: number
+  oldestBillDate: string
   lastBillDate: string
+  daysOverdue: number
+  ageBucket: OutstandingAgeBucket
   status: 'paid' | 'partial' | 'unpaid'
 }
 
@@ -109,7 +114,7 @@ type BankLedgerRow = {
   date: string
   companyId: string
   companyName: string
-  direction: 'IN' | 'OUT'
+  direction: 'IN' | 'OUT' | 'TRANSFER' | '-'
   billType: string
   billNo: string
   refNo: string
@@ -156,6 +161,7 @@ type OperationsReportPayload = {
   dailyTransactionSummary?: DailySummaryRow[]
   dailyConsolidated?: DailySummaryRow[]
   bankLedger?: BankLedgerRow[]
+  cashLedger?: BankLedgerRow[]
   filterOptions?: {
     banks?: string[]
   }
@@ -191,7 +197,18 @@ const operationsViewOptions: Array<{ value: ReportView; label: string }> = [
   { value: 'ledger', label: 'Party Ledger' },
   { value: 'daily-transaction', label: 'Daily Transaction' },
   { value: 'daily-consolidated', label: 'Daily Consolidated' },
+  { value: 'cash-ledger', label: 'Cash Ledger' },
   { value: 'bank-ledger', label: 'Bank Ledger' }
+]
+
+const OUTSTANDING_BUCKET_OPTIONS: OutstandingAgeBucket[] = [
+  'Current',
+  '1-7 Days',
+  '8-15 Days',
+  '16-30 Days',
+  '31-60 Days',
+  '61-90 Days',
+  '90+ Days'
 ]
 
 function toDateInputValue(value: Date): string {
@@ -230,14 +247,6 @@ function formatLedgerBalanceSummary(value: number): string {
     return `Balanced ${currencyText(0)}`
   }
   return `${normalized >= 0 ? 'Debit' : 'Credit'} ${absoluteCurrencyText(normalized)}`
-}
-
-function formatOutstandingDeltaText(value: number): string {
-  const normalized = Number(value || 0)
-  if (Math.abs(normalized) < 0.005) {
-    return `Balanced ${currencyText(0)}`
-  }
-  return `${normalized >= 0 ? 'Receivable' : 'Payable'} ${absoluteCurrencyText(normalized)}`
 }
 
 function csvEscape(value: string | number): string {
@@ -505,10 +514,11 @@ function buildDateSummaryFromTransactions(rows: DailyTransactionRow[]): DailySum
 }
 
 function getSearchPlaceholder(activeView: ReportView): string {
-  if (activeView === 'outstanding') return 'Search party, mobile, address, company, last bill date...'
+  if (activeView === 'outstanding') return 'Search party, mobile, address, company, overdue bucket, or bill dates...'
   if (activeView === 'ledger') return 'Search date, reference, mode, notes...'
   if (activeView === 'daily-transaction') return 'Search type, party, product, company, bank, note...'
   if (activeView === 'daily-consolidated') return 'Search date, reference, party, product, mode, note...'
+  if (activeView === 'cash-ledger') return 'Search cash entry, party, counter account, reference, note...'
   return 'Search bank, party, bill, IFSC, account, reference...'
 }
 
@@ -518,6 +528,9 @@ export default function OperationsReportWorkspace({
   embedded = false,
   onBackToDashboard
 }: OperationsReportWorkspaceProps) {
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
   const today = useMemo(() => new Date(), [])
   const firstDay = useMemo(() => new Date(today.getFullYear(), today.getMonth(), 1), [today])
 
@@ -529,20 +542,28 @@ export default function OperationsReportWorkspace({
   const [selectedPartyId, setSelectedPartyId] = useState('')
   const [activeView, setActiveView] = useState<ReportView>(initialView)
   const [outstandingSort, setOutstandingSort] = useState<OutstandingSort>('highest')
+  const [outstandingBucketFilter, setOutstandingBucketFilter] = useState<'all' | OutstandingAgeBucket>('all')
   const [bankFilter, setBankFilter] = useState('all')
-  const [bankDirectionFilter, setBankDirectionFilter] = useState<BankDirectionFilter>('all')
+  const [bankDirectionFilter, setBankDirectionFilter] = useState<LedgerDirectionFilter>('all')
   const [searchTerm, setSearchTerm] = useState('')
   const [loadingCompanies, setLoadingCompanies] = useState(true)
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [lastGeneratedAt, setLastGeneratedAt] = useState('')
   const [reportData, setReportData] = useState<OperationsReportPayload | null>(null)
+  const companyFilterRef = useRef<HTMLDetailsElement | null>(null)
   const selectedCompanyId = selectedCompanyIds[0] || ''
   const canAggregateCompanies = reportData?.meta?.canAggregateCompanies ?? true
 
   useEffect(() => {
     setActiveView(initialView)
   }, [initialView])
+
+  useEffect(() => {
+    const requestedPartyId = String(searchParams.get('partyId') || '').trim()
+    if (!requestedPartyId) return
+    setSelectedPartyId((previous) => (previous === requestedPartyId ? previous : requestedPartyId))
+  }, [searchParams])
 
   const loadCompanies = useCallback(async () => {
     setLoadingCompanies(true)
@@ -596,6 +617,24 @@ export default function OperationsReportWorkspace({
     if (canAggregateCompanies || selectedCompanyIds.length <= 1) return
     setSelectedCompanyIds([selectedCompanyIds[0]])
   }, [canAggregateCompanies, selectedCompanyIds])
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const details = companyFilterRef.current
+      const target = event.target
+      if (!details?.open || !(target instanceof Node)) return
+      if (details.contains(target)) return
+      details.open = false
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('touchstart', handlePointerDown)
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('touchstart', handlePointerDown)
+    }
+  }, [])
 
   const generateReport = useCallback(async () => {
     if (scope === 'company' && selectedCompanyIds.length === 0) {
@@ -684,18 +723,6 @@ export default function OperationsReportWorkspace({
     void generateReport()
   }, [generateReport, loadingCompanies, scope, selectedCompanyIds.length, dateFrom, dateTo])
 
-  const summary = reportData?.summary || {
-    totalSaleAmount: 0,
-    totalPurchaseAmount: 0,
-    totalPaidAmount: 0,
-    totalReceivedAmount: 0,
-    totalBalance: 0,
-    netOutstanding: 0,
-    salesBalanceTotal: 0,
-    purchaseBalanceTotal: 0,
-    totalStockAdjustmentQty: 0
-  }
-
   const showCompanyColumn = (reportData?.meta?.companyIds?.length || selectedCompanyIds.length) > 1
   const parties = useMemo(() => reportData?.parties || [], [reportData?.parties])
   const bankOptions = reportData?.filterOptions?.banks || []
@@ -703,13 +730,17 @@ export default function OperationsReportWorkspace({
   const filteredOutstanding = useMemo(() => {
     const query = searchTerm.trim().toLowerCase()
     const rows = (reportData?.outstanding || []).filter((row) => {
+      if (outstandingBucketFilter !== 'all' && row.ageBucket !== outstandingBucketFilter) return false
       if (!query) return true
       return (
         row.partyName.toLowerCase().includes(query) ||
         row.phone1.toLowerCase().includes(query) ||
         row.address.toLowerCase().includes(query) ||
         row.companyName.toLowerCase().includes(query) ||
-        row.lastBillDate.toLowerCase().includes(query)
+        row.lastBillDate.toLowerCase().includes(query) ||
+        row.oldestBillDate.toLowerCase().includes(query) ||
+        row.ageBucket.toLowerCase().includes(query) ||
+        String(row.daysOverdue).includes(query)
       )
     })
 
@@ -719,7 +750,7 @@ export default function OperationsReportWorkspace({
       }
       return b.balanceAmount - a.balanceAmount || a.partyName.localeCompare(b.partyName)
     })
-  }, [outstandingSort, reportData?.outstanding, searchTerm])
+  }, [outstandingBucketFilter, outstandingSort, reportData?.outstanding, searchTerm])
 
   const filteredLedgerRows = useMemo(() => {
     const query = searchTerm.trim().toLowerCase()
@@ -850,6 +881,26 @@ export default function OperationsReportWorkspace({
     })
   }, [bankDirectionFilter, bankFilter, reportData?.bankLedger, searchTerm])
 
+  const filteredCashLedger = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase()
+    return (reportData?.cashLedger || []).filter((row) => {
+      if (bankDirectionFilter !== 'all' && row.direction.toLowerCase() !== bankDirectionFilter) return false
+      if (!query) return true
+      return (
+        row.date.toLowerCase().includes(query) ||
+        row.refNo.toLowerCase().includes(query) ||
+        row.billNo.toLowerCase().includes(query) ||
+        row.partyName.toLowerCase().includes(query) ||
+        row.bankName.toLowerCase().includes(query) ||
+        row.mode.toLowerCase().includes(query) ||
+        row.txnRef.toLowerCase().includes(query) ||
+        row.companyName.toLowerCase().includes(query) ||
+        row.direction.toLowerCase().includes(query) ||
+        row.note.toLowerCase().includes(query)
+      )
+    })
+  }, [bankDirectionFilter, reportData?.cashLedger, searchTerm])
+
   const partyLedgerStatementRows = useMemo(
     () =>
       filteredLedgerRows.map((row) => ({
@@ -877,7 +928,7 @@ export default function OperationsReportWorkspace({
     return sortedRows.map((row) => {
       runningBalance += Number(row.amountIn || 0) - Number(row.amountOut || 0)
       return {
-        type: row.direction === 'IN' ? 'Receipt' : 'Payment',
+        type: row.direction === 'IN' ? 'Receipt' : row.direction === 'OUT' ? 'Payment' : 'Transfer',
         date: formatDateLabel(row.date),
         voucherNo: row.refNo || row.billNo || '-',
         particular: [
@@ -896,6 +947,38 @@ export default function OperationsReportWorkspace({
     })
   }, [filteredBankLedger, showCompanyColumn])
 
+  const cashLedgerStatementRows = useMemo(() => {
+    const sortedRows = [...filteredCashLedger].sort(
+      (a, b) =>
+        new Date(a.date).getTime() - new Date(b.date).getTime() ||
+        a.refNo.localeCompare(b.refNo) ||
+        a.id.localeCompare(b.id)
+    )
+
+    let runningBalance = 0
+
+    return sortedRows.map((row) => {
+      runningBalance += Number(row.amountIn || 0) - Number(row.amountOut || 0)
+      return {
+        type: row.direction === 'IN' ? 'Receipt' : row.direction === 'OUT' ? 'Payment' : 'Transfer',
+        date: formatDateLabel(row.date),
+        voucherNo: row.refNo || row.billNo || '-',
+        particular: [
+          showCompanyColumn ? row.companyName : '',
+          row.partyName,
+          row.bankName ? `Counter: ${row.bankName}` : '',
+          row.mode,
+          row.txnRef || row.note
+        ]
+          .filter(Boolean)
+          .join(' | '),
+        debit: row.amountOut > 0 ? numberText(row.amountOut) : '',
+        credit: row.amountIn > 0 ? numberText(row.amountIn) : '',
+        balance: formatLedgerBalance(runningBalance)
+      }
+    })
+  }, [filteredCashLedger, showCompanyColumn])
+
   const bankLedgerOpeningBalance = 0
   const bankLedgerClosingBalance = useMemo(
     () => filteredBankLedger.reduce((sum, row) => sum + row.amountIn - row.amountOut, 0),
@@ -908,6 +991,19 @@ export default function OperationsReportWorkspace({
   const bankLedgerTotalCredit = useMemo(
     () => filteredBankLedger.reduce((sum, row) => sum + row.amountIn, 0),
     [filteredBankLedger]
+  )
+  const cashLedgerOpeningBalance = 0
+  const cashLedgerClosingBalance = useMemo(
+    () => filteredCashLedger.reduce((sum, row) => sum + row.amountIn - row.amountOut, 0),
+    [filteredCashLedger]
+  )
+  const cashLedgerTotalDebit = useMemo(
+    () => filteredCashLedger.reduce((sum, row) => sum + row.amountOut, 0),
+    [filteredCashLedger]
+  )
+  const cashLedgerTotalCredit = useMemo(
+    () => filteredCashLedger.reduce((sum, row) => sum + row.amountIn, 0),
+    [filteredCashLedger]
   )
   const selectedBankLabel = bankFilter === 'all' ? 'All Banks' : bankFilter
   const selectedCompanySummary = useMemo(() => {
@@ -922,130 +1018,65 @@ export default function OperationsReportWorkspace({
     return `${targetNames[0]}, ${targetNames[1]} +${targetNames.length - 2} more`
   }, [companies, reportData?.meta?.companyIds, selectedCompanyIds])
 
+  const closeCompanyFilter = useCallback(() => {
+    if (companyFilterRef.current) {
+      companyFilterRef.current.open = false
+    }
+  }, [])
+
+  const updateOperationsRoute = useCallback(
+    (nextView: ReportView, nextPartyId?: string) => {
+      const params = new URLSearchParams(searchParams.toString())
+      params.set('reportType', 'operations')
+      params.set('view', nextView)
+
+      const normalizedPartyId = String(nextPartyId || '').trim()
+      if (nextView === 'ledger' && normalizedPartyId) {
+        params.set('partyId', normalizedPartyId)
+      } else {
+        params.delete('partyId')
+      }
+
+      const query = params.toString()
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false })
+    },
+    [pathname, router, searchParams]
+  )
+
+  const handleViewChange = useCallback(
+    (nextView: ReportView) => {
+      setActiveView(nextView)
+      updateOperationsRoute(nextView, nextView === 'ledger' ? selectedPartyId : '')
+    },
+    [selectedPartyId, updateOperationsRoute]
+  )
+
+  const handleLedgerPartyChange = useCallback(
+    (value: string) => {
+      const nextPartyId = value === 'none' ? '' : value
+      setSelectedPartyId(nextPartyId)
+      updateOperationsRoute('ledger', nextPartyId)
+    },
+    [updateOperationsRoute]
+  )
+
   const toggleCompanySelection = (companyId: string) => {
     setSelectedCompanyIds((previous) => {
+      let nextCompanyIds = previous
+
       if (!canAggregateCompanies) {
-        return [companyId]
+        nextCompanyIds = [companyId]
+      } else if (previous.includes(companyId)) {
+        nextCompanyIds = previous.length === 1 ? previous : previous.filter((value) => value !== companyId)
+      } else {
+        nextCompanyIds = [...previous, companyId]
       }
-      if (previous.includes(companyId)) {
-        if (previous.length === 1) return previous
-        return previous.filter((value) => value !== companyId)
-      }
-      return [...previous, companyId]
+
+      closeCompanyFilter()
+
+      return nextCompanyIds
     })
   }
-
-  const activeSummaryCards = useMemo(() => {
-    if (activeView === 'outstanding') {
-      const saleTotal = filteredOutstanding.reduce((sum, row) => sum + row.saleAmount, 0)
-      const receivedTotal = filteredOutstanding.reduce((sum, row) => sum + row.receivedAmount, 0)
-      const balanceTotal = filteredOutstanding.reduce((sum, row) => sum + row.balanceAmount, 0)
-      return [
-        { label: 'Outstanding Parties', value: String(filteredOutstanding.length), tone: 'text-slate-900' },
-        { label: 'Sale Amount', value: currencyText(saleTotal), tone: 'text-slate-900' },
-        { label: 'Received Amount', value: currencyText(receivedTotal), tone: 'text-emerald-700' },
-        { label: 'Balance Amount', value: currencyText(balanceTotal), tone: 'text-amber-700' }
-      ]
-    }
-
-    if (activeView === 'ledger') {
-      return [
-        { label: 'Opening Receivable', value: formatLedgerBalanceSummary(reportData?.partyLedger?.openingBalance || 0), tone: 'text-slate-900' },
-        { label: 'Sales Entries', value: currencyText(reportData?.partyLedger?.totalSales || 0), tone: 'text-slate-900' },
-        { label: 'Receipt Entries', value: currencyText(reportData?.partyLedger?.totalReceipts || 0), tone: 'text-emerald-700' },
-        { label: 'Closing Receivable', value: formatLedgerBalanceSummary(reportData?.partyLedger?.closingBalance || 0), tone: 'text-amber-700' }
-      ]
-    }
-
-    if (activeView === 'daily-transaction') {
-      const purchaseTotal = filteredDailyTransactionSummary.reduce((sum, row) => sum + row.totalPurchase, 0)
-      const salesTotal = filteredDailyTransactionSummary.reduce((sum, row) => sum + row.totalSales, 0)
-      const paymentIn = filteredDailyTransactionSummary.reduce((sum, row) => sum + row.totalSalesReceipt, 0)
-      const paymentOut = filteredDailyTransactionSummary.reduce((sum, row) => sum + row.totalPurchasePayment, 0)
-      return [
-        { label: 'Daily Activities', value: String(filteredDailyTransactions.length), tone: 'text-slate-900' },
-        { label: 'Sales Value', value: currencyText(salesTotal), tone: 'text-emerald-700' },
-        { label: 'Purchase Value', value: currencyText(purchaseTotal), tone: 'text-rose-700' },
-        {
-          label: 'Net Payment Flow',
-          value: formatFlowSummaryText(paymentIn - paymentOut),
-          tone: paymentIn - paymentOut >= 0 ? 'text-sky-700' : 'text-rose-700'
-        }
-      ]
-    }
-
-    if (activeView === 'daily-consolidated') {
-      const totalSales = filteredDailyConsolidated.reduce((sum, row) => sum + row.totalSales, 0)
-      const totalPurchase = filteredDailyConsolidated.reduce((sum, row) => sum + row.totalPurchase, 0)
-      const totalNet = filteredDailyConsolidated.reduce((sum, row) => sum + row.netCashflow, 0)
-      return [
-        { label: 'Business Days', value: String(filteredDailyConsolidated.length), tone: 'text-slate-900' },
-        { label: 'Total Sales', value: currencyText(totalSales), tone: 'text-emerald-700' },
-        { label: 'Total Purchase', value: currencyText(totalPurchase), tone: 'text-rose-700' },
-        { label: 'Net Cashflow', value: formatFlowSummaryText(totalNet), tone: totalNet >= 0 ? 'text-sky-700' : 'text-rose-700' }
-      ]
-    }
-
-    const totalIn = filteredBankLedger.reduce((sum, row) => sum + row.amountIn, 0)
-    const totalOut = filteredBankLedger.reduce((sum, row) => sum + row.amountOut, 0)
-    return [
-      { label: 'Bank Entries', value: String(filteredBankLedger.length), tone: 'text-slate-900' },
-      { label: 'Payment In', value: currencyText(totalIn), tone: 'text-emerald-700' },
-      { label: 'Payment Out', value: currencyText(totalOut), tone: 'text-rose-700' },
-      { label: 'Net Bank Flow', value: formatFlowSummaryText(totalIn - totalOut), tone: totalIn - totalOut >= 0 ? 'text-sky-700' : 'text-rose-700' }
-    ]
-  }, [
-    activeView,
-    filteredBankLedger,
-    filteredDailyConsolidated,
-    filteredDailyTransactionSummary,
-    filteredDailyTransactions,
-    filteredOutstanding,
-    reportData?.partyLedger?.closingBalance,
-    reportData?.partyLedger?.openingBalance,
-    reportData?.partyLedger?.totalReceipts,
-    reportData?.partyLedger?.totalSales
-  ])
-
-  const activeViewMeta = useMemo(() => {
-    if (activeView === 'outstanding') {
-      return {
-        label: 'Outstanding Board',
-        description: 'Use this view to isolate receivable pressure, largest pending parties, and unpaid invoice clusters.',
-        cues: ['Party-wise receivable scan', 'Status-first filtering', 'Collection follow-up friendly']
-      }
-    }
-
-    if (activeView === 'ledger') {
-      return {
-        label: 'Ledger Statement',
-        description: 'This view is shaped like an account statement: opening balance, sales, receipts, and a running balance trail.',
-        cues: ['Statement-style running balance', 'Party-specific transaction history', 'Best for print or shareable exports']
-      }
-    }
-
-    if (activeView === 'daily-transaction') {
-      return {
-        label: 'Daily Activity Feed',
-        description: 'See the day exactly as it moved: sales, purchases, stock movement, receipts, and outgoing payments together.',
-        cues: ['Chronological activity scan', 'Cross-module movement in one feed', 'Useful for operations review']
-      }
-    }
-
-    if (activeView === 'daily-consolidated') {
-      return {
-        label: 'Consolidated Business Day',
-        description: 'This is the daily management summary for business totals, payment flow, operational load, and the detailed work done each day.',
-        cues: ['One row per business day', 'Cashflow-first summary', 'Daily work detail below']
-      }
-    }
-
-    return {
-      label: 'Bank Movement Ledger',
-      description: 'Track bank and online movement separately from party ledgers, with inflow, outflow, bank, and txn reference fields.',
-      cues: ['Bank-wise reconciliation', 'Inflow vs outflow tracking', 'Reference-led audit trail']
-    }
-  }, [activeView])
 
   const activeExport = useMemo(() => {
     const scopeLabel =
@@ -1062,7 +1093,10 @@ export default function OperationsReportWorkspace({
           'Party Name',
           'Mobile',
           'Address',
+          'Oldest Due Date',
           'Last Bill Date',
+          'Overdue Days',
+          'Age Bucket',
           'Status',
           'Sale Amount',
           'Received Amount',
@@ -1074,7 +1108,10 @@ export default function OperationsReportWorkspace({
           row.partyName,
           row.phone1 || '-',
           row.address || '-',
+          formatDateLabel(row.oldestBillDate),
           formatDateLabel(row.lastBillDate),
+          String(row.daysOverdue),
+          row.ageBucket,
           row.status,
           numberText(row.saleAmount),
           numberText(row.receivedAmount),
@@ -1158,6 +1195,24 @@ export default function OperationsReportWorkspace({
       }
     }
 
+    if (activeView === 'cash-ledger') {
+      return {
+        title: 'Cash Ledger',
+        subtitle,
+        fileName: `cash-ledger-${scopeLabel}-${dateFrom}-${dateTo}.csv`,
+        headers: ['Type', 'Date', 'Voucher No', 'Particular', 'Debit (Rs)', 'Credit (Rs)', 'Balance'],
+        rows: cashLedgerStatementRows.map((row) => [
+          row.type,
+          row.date,
+          row.voucherNo || '-',
+          row.particular || '-',
+          row.debit || '-',
+          row.credit || '-',
+          row.balance
+        ])
+      }
+    }
+
     return {
       title: 'Bank Ledger',
       subtitle,
@@ -1181,6 +1236,7 @@ export default function OperationsReportWorkspace({
     filteredDailyTransactions,
     filteredOutstanding,
     bankLedgerStatementRows,
+    cashLedgerStatementRows,
     partyLedgerStatementRows,
     reportData?.partyLedger?.selectedPartyName,
     selectedCompanyIds.length,
@@ -1237,21 +1293,34 @@ export default function OperationsReportWorkspace({
       return
     }
 
-    if (activeView === 'ledger' || activeView === 'bank-ledger') {
+    if (activeView === 'ledger' || activeView === 'bank-ledger' || activeView === 'cash-ledger') {
       const isPartyLedger = activeView === 'ledger'
-      const totalDebit = isPartyLedger ? reportData?.partyLedger?.totalSales || 0 : bankLedgerTotalDebit
-      const totalCredit = isPartyLedger ? reportData?.partyLedger?.totalReceipts || 0 : bankLedgerTotalCredit
-      const finalBalance = isPartyLedger ? reportData?.partyLedger?.closingBalance || 0 : bankLedgerClosingBalance
+      const isCashLedger = activeView === 'cash-ledger'
+      const totalDebit = isPartyLedger ? reportData?.partyLedger?.totalSales || 0 : isCashLedger ? cashLedgerTotalDebit : bankLedgerTotalDebit
+      const totalCredit = isPartyLedger ? reportData?.partyLedger?.totalReceipts || 0 : isCashLedger ? cashLedgerTotalCredit : bankLedgerTotalCredit
+      const finalBalance = isPartyLedger
+        ? reportData?.partyLedger?.closingBalance || 0
+        : isCashLedger
+          ? cashLedgerClosingBalance
+          : bankLedgerClosingBalance
 
       const csvRows = [
         ['Company Name', selectedCompanySummary],
         ['Company Address', reportData?.meta?.companyAddress || '-'],
         ['Company Phone', reportData?.meta?.companyPhone || '-'],
-        [isPartyLedger ? 'Party Name' : 'Bank Name', isPartyLedger ? selectedLedgerParty?.name || reportData?.partyLedger?.selectedPartyName || '-' : selectedBankLabel],
+        [
+          isPartyLedger ? 'Party Name' : isCashLedger ? 'Cash Ledger' : 'Bank Name',
+          isPartyLedger ? selectedLedgerParty?.name || reportData?.partyLedger?.selectedPartyName || '-' : isCashLedger ? 'Cash Book' : selectedBankLabel
+        ],
         ['Address', isPartyLedger ? selectedLedgerParty?.address || '-' : '-'],
         [isPartyLedger ? 'Phone' : 'Direction', isPartyLedger ? selectedLedgerParty?.phone1 || '-' : bankDirectionFilter === 'all' ? 'All' : bankDirectionFilter.toUpperCase()],
         ['Statement Period', `${formatDateLabel(dateFrom)} to ${formatDateLabel(dateTo)}`],
-        [isPartyLedger ? 'Opening Receivable' : 'Opening Balance', isPartyLedger ? formatLedgerBalance(reportData?.partyLedger?.openingBalance || 0) : formatLedgerBalance(bankLedgerOpeningBalance)],
+        [
+          isPartyLedger ? 'Opening Receivable' : 'Opening Balance',
+          isPartyLedger
+            ? formatLedgerBalance(reportData?.partyLedger?.openingBalance || 0)
+            : formatLedgerBalance(isCashLedger ? cashLedgerOpeningBalance : bankLedgerOpeningBalance)
+        ],
         [isPartyLedger ? 'Closing Receivable' : 'Closing Balance', formatLedgerBalance(finalBalance)],
         [],
         activeExport.headers,
@@ -1320,19 +1389,50 @@ export default function OperationsReportWorkspace({
       return
     }
 
+    if (activeView === 'cash-ledger') {
+      printLedgerStatement({
+        title: 'Cash Ledger',
+        companyName: selectedCompanySummary,
+        companyAddress: reportData?.meta?.companyAddress || (showCompanyColumn ? 'Multiple selected companies' : '-'),
+        companyPhone: reportData?.meta?.companyPhone || '-',
+        subjectLabel: 'Cash Ledger',
+        subjectName: 'Cash Book',
+        subjectAddress: '-',
+        statementPeriod: `${formatDateLabel(dateFrom)} to ${formatDateLabel(dateTo)}`,
+        openingBalance: formatLedgerBalance(cashLedgerOpeningBalance),
+        closingBalance: formatLedgerBalance(cashLedgerClosingBalance),
+        extraLabel: 'Direction',
+        extraValue: bankDirectionFilter === 'all' ? 'All' : bankDirectionFilter.toUpperCase(),
+        rows: cashLedgerStatementRows,
+        totalDebit: numberText(cashLedgerTotalDebit),
+        totalCredit: numberText(cashLedgerTotalCredit),
+        finalBalance: formatLedgerBalance(cashLedgerClosingBalance)
+      })
+      return
+    }
+
     printTable(activeExport.title, activeExport.subtitle, activeExport.headers, activeExport.rows)
   }
 
   const clearActiveFilters = () => {
     setSearchTerm('')
     setOutstandingSort('highest')
+    setOutstandingBucketFilter('all')
     setBankFilter('all')
     setBankDirectionFilter('all')
   }
 
+  const openOutstandingPartyLedger = useCallback((row: OutstandingRow) => {
+    setSelectedCompanyIds([row.companyId])
+    setSelectedPartyId(row.partyId)
+    setActiveView('ledger')
+    closeCompanyFilter()
+    updateOperationsRoute('ledger', row.partyId)
+  }, [closeCompanyFilter, updateOperationsRoute])
+
   return (
     <div className="space-y-6">
-      <section className={`${surfaceCardClass} overflow-hidden`}>
+      <section className={`${surfaceCardClass} overflow-visible`}>
         <div className="border-b border-slate-100 bg-[linear-gradient(135deg,#f8fafc_0%,#ffffff_55%,#eef6ff_100%)] px-6 py-5 md:px-8">
           <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
             <div className="max-w-3xl">
@@ -1340,7 +1440,7 @@ export default function OperationsReportWorkspace({
                 Operations Reports
               </h2>
               <p className="mt-2 text-sm leading-6 text-slate-500">
-                Outstanding, ledger, daily and bank reporting in one place.
+                Outstanding, ledger, daily, cash, and bank reporting in one place.
               </p>
 
               <div className="mt-4 flex flex-wrap gap-2">
@@ -1356,7 +1456,7 @@ export default function OperationsReportWorkspace({
                           ? 'rounded-2xl bg-slate-950 text-white hover:bg-slate-800'
                           : 'rounded-2xl border-slate-200 bg-white/90 text-slate-700 hover:bg-white'
                       }
-                      onClick={() => setActiveView(item.value)}
+                      onClick={() => handleViewChange(item.value)}
                     >
                       {item.label}
                     </Button>
@@ -1380,23 +1480,37 @@ export default function OperationsReportWorkspace({
           </div>
         </div>
 
-        <div className="grid gap-5 p-6 md:p-8 xl:grid-cols-[1.45fr_0.9fr]">
-          <div className="rounded-[1.5rem] border border-slate-200 bg-white p-5">
-            <div className="flex flex-col gap-1">
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">Report Setup</p>
-              <h3 className="text-lg font-semibold text-slate-950">Filters and search</h3>
-              <p className="text-sm text-slate-500">Choose the company, date range, and view-specific filters before you export or review the statement.</p>
+        <div className="p-6 md:p-8">
+          <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 md:p-6">
+            <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
+              <div className="max-w-3xl">
+                <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">Report Setup</p>
+                <h3 className="text-xl font-semibold text-slate-950">Filters and search</h3>
+                <p className="text-sm leading-6 text-slate-500">
+                  Choose the company, date range, and view-specific filters before you export or review the report.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1">
+                  Selected: {selectedCompanySummary}
+                </span>
+                {lastGeneratedAt ? (
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1">
+                    Updated: {lastGeneratedAt}
+                  </span>
+                ) : null}
+              </div>
             </div>
 
-            <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
+            <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="space-y-2">
                 <Label>Companies</Label>
-                <details className="group">
+                <details ref={companyFilterRef} className="group relative">
                   <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 marker:hidden [&::-webkit-details-marker]:hidden">
                     <span className="truncate">{selectedCompanySummary}</span>
                     <span className="ml-3 shrink-0 text-xs text-slate-400">{selectedCompanyIds.length} selected</span>
                   </summary>
-                  <div className="mt-2 w-full max-w-[360px] rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.35)]">
+                  <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-30 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.35)] sm:right-auto sm:w-[360px]">
                     <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-3">
                       <p className="text-sm font-semibold text-slate-950">Choose companies</p>
                       <div className="flex gap-2 text-xs">
@@ -1404,14 +1518,20 @@ export default function OperationsReportWorkspace({
                           type="button"
                           className="rounded-full border border-slate-200 px-2 py-1 text-slate-600 hover:bg-slate-50"
                           disabled={!canAggregateCompanies}
-                          onClick={() => setSelectedCompanyIds(companies.map((company) => company.id))}
+                          onClick={() => {
+                            setSelectedCompanyIds(companies.map((company) => company.id))
+                            closeCompanyFilter()
+                          }}
                         >
                           Select all
                         </button>
                         <button
                           type="button"
                           className="rounded-full border border-slate-200 px-2 py-1 text-slate-600 hover:bg-slate-50"
-                          onClick={() => setSelectedCompanyIds(companies[0]?.id ? [companies[0].id] : [])}
+                          onClick={() => {
+                            setSelectedCompanyIds(companies[0]?.id ? [companies[0].id] : [])
+                            closeCompanyFilter()
+                          }}
                         >
                           Reset
                         </button>
@@ -1442,7 +1562,6 @@ export default function OperationsReportWorkspace({
                               />
                               <span className="min-w-0">
                                 <span className="block truncate text-sm font-medium text-slate-900">{company.name}</span>
-                                <span className="block text-xs text-slate-500">{company.id}</span>
                               </span>
                             </label>
                           )
@@ -1478,7 +1597,7 @@ export default function OperationsReportWorkspace({
               {activeView === 'ledger' ? (
                 <div className="space-y-2">
                   <Label>Party Ledger Party</Label>
-                  <Select value={selectedPartyId || 'none'} onValueChange={(value) => setSelectedPartyId(value === 'none' ? '' : value)}>
+                  <Select value={selectedPartyId || 'none'} onValueChange={handleLedgerPartyChange}>
                     <SelectTrigger className="rounded-2xl border-slate-200 bg-white">
                       <SelectValue placeholder="Select party" />
                     </SelectTrigger>
@@ -1509,6 +1628,27 @@ export default function OperationsReportWorkspace({
                 </div>
               ) : null}
 
+              {activeView === 'outstanding' ? (
+                <>
+                  <div className="space-y-2">
+                    <Label>Overdue Bucket</Label>
+                    <Select value={outstandingBucketFilter} onValueChange={(value) => setOutstandingBucketFilter(value as 'all' | OutstandingAgeBucket)}>
+                      <SelectTrigger className="rounded-2xl border-slate-200 bg-white">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Buckets</SelectItem>
+                        {OUTSTANDING_BUCKET_OPTIONS.map((bucket) => (
+                          <SelectItem key={bucket} value={bucket}>
+                            {bucket}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              ) : null}
+
               {activeView === 'bank-ledger' ? (
                 <>
                   <div className="space-y-2">
@@ -1530,7 +1670,26 @@ export default function OperationsReportWorkspace({
 
                   <div className="space-y-2">
                     <Label>Direction</Label>
-                    <Select value={bankDirectionFilter} onValueChange={(value) => setBankDirectionFilter(value as BankDirectionFilter)}>
+                    <Select value={bankDirectionFilter} onValueChange={(value) => setBankDirectionFilter(value as LedgerDirectionFilter)}>
+                      <SelectTrigger className="rounded-2xl border-slate-200 bg-white">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="in">In</SelectItem>
+                        <SelectItem value="out">Out</SelectItem>
+                        <SelectItem value="transfer">Transfer</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              ) : null}
+
+              {activeView === 'cash-ledger' ? (
+                <>
+                  <div className="space-y-2">
+                    <Label>Direction</Label>
+                    <Select value={bankDirectionFilter} onValueChange={(value) => setBankDirectionFilter(value as LedgerDirectionFilter)}>
                       <SelectTrigger className="rounded-2xl border-slate-200 bg-white">
                         <SelectValue />
                       </SelectTrigger>
@@ -1545,7 +1704,7 @@ export default function OperationsReportWorkspace({
               ) : null}
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1fr_auto]">
+            <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_auto]">
               <div className="space-y-2">
                 <Label htmlFor="operationsSearch">Search</Label>
                 <div className="relative">
@@ -1567,32 +1726,6 @@ export default function OperationsReportWorkspace({
               </div>
             </div>
           </div>
-
-          <div className="rounded-[1.5rem] border border-slate-200 bg-[#f8fbff] p-5">
-            <div className="flex flex-col gap-1">
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-sky-500">Active Workspace</p>
-              <h3 className="text-lg font-semibold text-slate-950">{activeViewMeta.label}</h3>
-              <p className="text-sm leading-6 text-slate-600">{activeViewMeta.description}</p>
-              {lastGeneratedAt ? <p className="pt-1 text-xs text-slate-400">Updated: {lastGeneratedAt}</p> : null}
-            </div>
-
-            <div className="mt-5 space-y-3">
-              {activeViewMeta.cues.map((cue) => (
-                <div key={cue} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700">
-                  {cue}
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
-              {activeSummaryCards.map((card) => (
-                <div key={card.label} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                  <p className="text-xs uppercase tracking-[0.12em] text-slate-400">{card.label}</p>
-                  <p className={`mt-2 text-lg font-semibold ${card.tone}`}>{card.value}</p>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
       </section>
 
@@ -1602,33 +1735,6 @@ export default function OperationsReportWorkspace({
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-6">
-        {[
-          { label: 'Total Sales', value: currencyText(summary.totalSaleAmount), tone: 'text-slate-900', shell: 'bg-white', accent: 'bg-slate-900/80' },
-          { label: 'Total Purchase', value: currencyText(summary.totalPurchaseAmount), tone: 'text-slate-900', shell: 'bg-white', accent: 'bg-slate-400' },
-          { label: 'Outgoing Payment', value: currencyText(summary.totalPaidAmount), tone: 'text-rose-700', shell: 'bg-rose-50/70', accent: 'bg-rose-500' },
-          { label: 'Incoming Receipt', value: currencyText(summary.totalReceivedAmount), tone: 'text-emerald-700', shell: 'bg-emerald-50/70', accent: 'bg-emerald-500' },
-          { label: 'Sales Outstanding', value: currencyText(summary.salesBalanceTotal), tone: 'text-amber-700', shell: 'bg-amber-50/70', accent: 'bg-amber-500' },
-          {
-            label: 'Net Outstanding',
-            value: formatOutstandingDeltaText(summary.netOutstanding),
-            tone: summary.netOutstanding >= 0 ? 'text-sky-700' : 'text-rose-700',
-            shell: 'bg-sky-50/70',
-            accent: summary.netOutstanding >= 0 ? 'bg-sky-500' : 'bg-rose-500'
-          }
-        ].map((card) => (
-          <Card key={card.label} className={`${surfaceCardClass} overflow-hidden ${card.shell}`}>
-            <CardContent className="pt-0">
-              <div className={`h-1.5 ${card.accent}`} />
-              <div className="px-1 pb-1 pt-5">
-                <p className="text-xs uppercase tracking-[0.14em] text-slate-400">{card.label}</p>
-                <p className={`mt-3 text-2xl font-semibold ${card.tone}`}>{card.value}</p>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
       {activeView === 'outstanding' ? (
         <Card className={surfaceCardClass}>
           <CardHeader className="border-b border-slate-100 pb-5">
@@ -1636,7 +1742,7 @@ export default function OperationsReportWorkspace({
               <div>
                 <CardTitle className="text-2xl tracking-tight text-slate-950">Outstanding Report</CardTitle>
                 <CardDescription className="mt-2">
-                  Party-wise outstanding built from sale amount, received amount, balance amount, and last bill visibility.
+                  Party-wise outstanding with clickable ledger drilldown, overdue day aging, and bucket visibility for collection follow-up.
                 </CardDescription>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -1653,7 +1759,10 @@ export default function OperationsReportWorkspace({
                     <TableHead>Party</TableHead>
                     <TableHead>Mobile</TableHead>
                     <TableHead>Address</TableHead>
+                    <TableHead>Oldest Due</TableHead>
                     <TableHead>Last Bill</TableHead>
+                    <TableHead className="text-right">Overdue Days</TableHead>
+                    <TableHead>Bucket</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Sale Amount</TableHead>
                     <TableHead className="text-right">Received Amount</TableHead>
@@ -1664,7 +1773,7 @@ export default function OperationsReportWorkspace({
                 <TableBody>
                   {filteredOutstanding.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={showCompanyColumn ? 10 : 9} className="py-8 text-center text-slate-500">
+                      <TableCell colSpan={showCompanyColumn ? 13 : 12} className="py-8 text-center text-slate-500">
                         No outstanding rows found for this filter.
                       </TableCell>
                     </TableRow>
@@ -1672,10 +1781,22 @@ export default function OperationsReportWorkspace({
                     filteredOutstanding.map((row) => (
                       <TableRow key={`${row.companyId}-${row.partyId}`}>
                         {showCompanyColumn ? <TableCell>{row.companyName}</TableCell> : null}
-                        <TableCell className="font-medium text-slate-900">{row.partyName}</TableCell>
+                        <TableCell className="font-medium text-slate-900">
+                          <Button
+                            type="button"
+                            variant="link"
+                            className="h-auto p-0 text-left font-medium text-sky-700 underline-offset-4 hover:text-sky-900"
+                            onClick={() => openOutstandingPartyLedger(row)}
+                          >
+                            {row.partyName}
+                          </Button>
+                        </TableCell>
                         <TableCell>{row.phone1 || '-'}</TableCell>
                         <TableCell>{row.address || '-'}</TableCell>
+                        <TableCell>{formatDateLabel(row.oldestBillDate)}</TableCell>
                         <TableCell>{formatDateLabel(row.lastBillDate)}</TableCell>
+                        <TableCell className="text-right">{row.daysOverdue}</TableCell>
+                        <TableCell>{row.ageBucket}</TableCell>
                         <TableCell className="capitalize">{row.status}</TableCell>
                         <TableCell className="text-right">{currencyText(row.saleAmount)}</TableCell>
                         <TableCell className="text-right text-emerald-700">{currencyText(row.receivedAmount)}</TableCell>
@@ -2190,6 +2311,125 @@ export default function OperationsReportWorkspace({
             </CardContent>
           </Card>
         </>
+      ) : null}
+
+      {activeView === 'cash-ledger' ? (
+        <Card className={surfaceCardClass}>
+          <CardHeader className="border-b border-slate-100 pb-5">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div>
+                <CardTitle className="text-2xl tracking-tight text-slate-950">Cash Ledger</CardTitle>
+                <CardDescription className="mt-2">
+                  All cash receipts, cash payments, and cash transfer movement with date-wise inflow, outflow, and counter-account visibility.
+                </CardDescription>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {renderExportButtons('rounded-2xl border-slate-200 bg-white hover:bg-slate-50')}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4 p-6">
+            <div className="overflow-hidden rounded-[1.5rem] border border-[#8fa57e] bg-white shadow-[0_18px_40px_-28px_rgba(15,23,42,0.3)]">
+              <div className="border-b border-[#8fa57e] bg-[#a9d08e] px-4 py-4 text-center text-[2rem] font-semibold text-slate-950">
+                Cash Ledger
+              </div>
+
+              <div className="overflow-x-auto">
+                <div className="min-w-[980px]">
+                  <div className="grid gap-px border-b border-[#1f2937] bg-[#1f2937]">
+                    <div className="bg-[#d9d9d9] px-4 py-3 text-center text-[1.45rem] font-semibold text-slate-950">
+                      {reportData?.meta?.companyName || '-'}
+                    </div>
+                    <div className="bg-white px-4 py-3 text-center text-sm leading-7 text-slate-700">
+                      {reportData?.meta?.companyAddress || '-'}
+                      <br />
+                      {reportData?.meta?.companyPhone ? `Mobile ${reportData.meta.companyPhone}` : '-'}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-px border-b border-[#1f2937] bg-[#1f2937] md:grid-cols-[160px_1.4fr_0.7fr_0.7fr_0.8fr_0.9fr]">
+                    <div className="bg-white px-3 py-3 text-sm font-semibold text-slate-950">Ledger</div>
+                    <div className="bg-white px-3 py-3 text-sm font-semibold text-slate-950">Cash Book</div>
+                    <div className="bg-white px-3 py-3" />
+                    <div className="bg-white px-3 py-3" />
+                    <div className="bg-white px-3 py-3 text-sm font-semibold text-slate-950">Date</div>
+                    <div className="bg-white px-3 py-3 text-sm text-slate-700">
+                      {formatDateLabel(dateFrom)} to {formatDateLabel(dateTo)}
+                    </div>
+
+                    <div className="bg-white px-3 py-3 text-sm font-semibold text-slate-950">Direction</div>
+                    <div className="bg-white px-3 py-3 text-sm text-slate-700">
+                      {bankDirectionFilter === 'all' ? 'All' : bankDirectionFilter.toUpperCase()}
+                    </div>
+                    <div className="bg-white px-3 py-3" />
+                    <div className="bg-white px-3 py-3" />
+                    <div className="bg-white px-3 py-3 text-sm font-semibold text-slate-950">Opening Bal</div>
+                    <div className="bg-white px-3 py-3 text-sm text-slate-700">
+                      {formatLedgerBalance(cashLedgerOpeningBalance)}
+                    </div>
+
+                    <div className="bg-white px-3 py-3 text-sm font-semibold text-slate-950">Entries</div>
+                    <div className="bg-white px-3 py-3 text-sm text-slate-700">{filteredCashLedger.length}</div>
+                    <div className="bg-white px-3 py-3" />
+                    <div className="bg-white px-3 py-3" />
+                    <div className="bg-white px-3 py-3 text-sm font-semibold text-slate-950">Closing Bal</div>
+                    <div className="bg-white px-3 py-3 text-sm text-slate-700">
+                      {formatLedgerBalance(cashLedgerClosingBalance)}
+                    </div>
+                  </div>
+
+                  <div className="max-h-[620px] overflow-auto">
+                    <table className="w-full border-collapse text-sm">
+                      <thead>
+                        <tr className="border-b border-[#8fa57e]">
+                          <th className="sticky top-0 z-10 border-r border-[#1f2937] bg-[#d9d9d9] px-4 py-3 text-left font-semibold text-slate-950">Type</th>
+                          <th className="sticky top-0 z-10 border-r border-[#1f2937] bg-[#d9d9d9] px-4 py-3 text-left font-semibold text-slate-950">Date</th>
+                          <th className="sticky top-0 z-10 border-r border-[#1f2937] bg-[#d9d9d9] px-4 py-3 text-left font-semibold text-slate-950">Voucher No</th>
+                          <th className="sticky top-0 z-10 border-r border-[#1f2937] bg-[#d9d9d9] px-4 py-3 text-left font-semibold text-slate-950">Particular</th>
+                          <th className="sticky top-0 z-10 border-r border-[#1f2937] bg-[#d9d9d9] px-4 py-3 text-right font-semibold text-slate-950">Debit (Rs)</th>
+                          <th className="sticky top-0 z-10 border-r border-[#1f2937] bg-[#d9d9d9] px-4 py-3 text-right font-semibold text-slate-950">Credit (Rs)</th>
+                          <th className="sticky top-0 z-10 bg-[#d9d9d9] px-4 py-3 text-right font-semibold text-slate-950">Balance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cashLedgerStatementRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                              No cash ledger rows found for this range.
+                            </td>
+                          </tr>
+                        ) : (
+                          cashLedgerStatementRows.map((row, index) => (
+                            <tr key={`${row.type}-${row.voucherNo}-${index}`} className="border-b border-[#d7dfcf]">
+                              <td className="border-r border-[#d7dfcf] px-4 py-3 text-slate-700">{row.type}</td>
+                              <td className="border-r border-[#d7dfcf] px-4 py-3 text-slate-700">{row.date}</td>
+                              <td className="border-r border-[#d7dfcf] px-4 py-3 text-slate-700">{row.voucherNo || '-'}</td>
+                              <td className="min-w-[320px] border-r border-[#d7dfcf] px-4 py-3 text-slate-950">{row.particular || '-'}</td>
+                              <td className="border-r border-[#d7dfcf] px-4 py-3 text-right text-slate-900">{row.debit || '0'}</td>
+                              <td className="border-r border-[#d7dfcf] px-4 py-3 text-right text-slate-900">{row.credit || '0'}</td>
+                              <td className="px-4 py-3 text-right font-semibold text-slate-950">{row.balance}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-[#f5f5f5] font-semibold">
+                          <td className="border-r border-[#d7dfcf] px-4 py-3">Total</td>
+                          <td className="border-r border-[#d7dfcf] px-4 py-3"></td>
+                          <td className="border-r border-[#d7dfcf] px-4 py-3"></td>
+                          <td className="border-r border-[#d7dfcf] px-4 py-3"></td>
+                          <td className="border-r border-[#d7dfcf] px-4 py-3 text-right">{numberText(cashLedgerTotalDebit)}</td>
+                          <td className="border-r border-[#d7dfcf] px-4 py-3 text-right">{numberText(cashLedgerTotalCredit)}</td>
+                          <td className="px-4 py-3 text-right">{formatLedgerBalance(cashLedgerClosingBalance)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       ) : null}
 
       {activeView === 'bank-ledger' ? (

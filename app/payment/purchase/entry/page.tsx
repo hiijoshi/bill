@@ -1041,8 +1041,11 @@ function PurchasePaymentEntryPageContent() {
                           <Input
                             id="ifscCode"
                             value={ifscCode}
-                            onChange={(e) => setIfscCode(e.target.value.toUpperCase())}
-                            placeholder="Enter IFSC code"
+                            readOnly
+                            aria-readonly="true"
+                            tabIndex={-1}
+                            placeholder={selectedBank === 'none' ? 'Auto from selected bank' : 'Loaded from bank master'}
+                            className="cursor-not-allowed border-slate-200 bg-slate-100 text-slate-600"
                           />
                         </div>
 
@@ -1051,8 +1054,11 @@ function PurchasePaymentEntryPageContent() {
                           <Input
                             id="beneficiaryBankAccount"
                             value={beneficiaryBankAccount}
-                            onChange={(e) => setBeneficiaryBankAccount(e.target.value)}
-                            placeholder="Enter beneficiary account"
+                            readOnly
+                            aria-readonly="true"
+                            tabIndex={-1}
+                            placeholder={selectedBank === 'none' ? 'Auto from selected bank' : 'Loaded from bank master'}
+                            className="cursor-not-allowed border-slate-200 bg-slate-100 text-slate-600"
                           />
                         </div>
 

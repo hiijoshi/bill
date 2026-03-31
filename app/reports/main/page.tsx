@@ -11,7 +11,7 @@ import StockReportDashboard from '@/components/reports/StockReportDashboard'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 type ReportType = 'main' | 'purchase' | 'sales' | 'stock' | 'operations'
-type OperationsView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'bank-ledger'
+type OperationsView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'cash-ledger' | 'bank-ledger'
 
 const normalizeReportType = (value: string | null): ReportType => {
   if (value === 'purchase' || value === 'sales' || value === 'stock' || value === 'operations') return value
@@ -24,6 +24,7 @@ const normalizeOperationsView = (value: string | null): OperationsView => {
     value === 'ledger' ||
     value === 'daily-transaction' ||
     value === 'daily-consolidated' ||
+    value === 'cash-ledger' ||
     value === 'bank-ledger'
   ) {
     return value

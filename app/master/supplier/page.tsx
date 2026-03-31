@@ -19,6 +19,7 @@ interface Supplier {
   name: string
   address?: string | null
   phone1?: string | null
+  gstNumber?: string | null
   createdAt?: string | null
   updatedAt?: string | null
 }
@@ -50,7 +51,8 @@ export default function SupplierMasterPage() {
   const [formData, setFormData] = useState({
     name: '',
     address: '',
-    phone1: ''
+    phone1: '',
+    gstNumber: ''
   })
 
   const applySuppliers = useCallback((rows: Supplier[], cacheKey: string) => {
@@ -224,7 +226,8 @@ export default function SupplierMasterPage() {
       [
         supplier.name || '',
         supplier.address || '',
-        supplier.phone1 || ''
+        supplier.phone1 || '',
+        supplier.gstNumber || ''
       ]
         .join(' ')
         .toLowerCase()
@@ -242,7 +245,8 @@ export default function SupplierMasterPage() {
     setFormData({
       name: '',
       address: '',
-      phone1: ''
+      phone1: '',
+      gstNumber: ''
     })
     setEditingSupplier(null)
     setIsFormOpen(false)
@@ -273,7 +277,8 @@ export default function SupplierMasterPage() {
           companyId,
           name: formData.name.trim(),
           address: formData.address.trim(),
-          phone1: formData.phone1.trim()
+          phone1: formData.phone1.trim(),
+          gstNumber: formData.gstNumber.trim().toUpperCase()
         })
       })
 
@@ -304,7 +309,8 @@ export default function SupplierMasterPage() {
     setFormData({
       name: supplier.name || '',
       address: supplier.address || '',
-      phone1: supplier.phone1 || ''
+      phone1: supplier.phone1 || '',
+      gstNumber: supplier.gstNumber || ''
     })
     setIsFormOpen(true)
   }
@@ -363,11 +369,12 @@ export default function SupplierMasterPage() {
       return
     }
 
-    const headers = ['Name', 'Address', 'Phone1', 'CreatedAt']
+    const headers = ['Name', 'Address', 'Phone1', 'GSTNumber', 'CreatedAt']
     const rows = filteredSuppliers.map((supplier) => [
       supplier.name || '',
       supplier.address || '',
       supplier.phone1 || '',
+      supplier.gstNumber || '',
       supplier.createdAt || ''
     ])
 
@@ -460,7 +467,7 @@ export default function SupplierMasterPage() {
             <CardContent className="pt-6">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <Input
-                  placeholder="Search by name, phone, address"
+                  placeholder="Search by name, phone, GST, address"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
@@ -496,7 +503,7 @@ export default function SupplierMasterPage() {
               </CardHeader>
               <CardContent>
                 <form onSubmit={handleSubmit} className="space-y-4">
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
                     <div>
                       <Label htmlFor="name">Supplier Name *</Label>
                       <Input
@@ -527,6 +534,16 @@ export default function SupplierMasterPage() {
                         maxLength={10}
                       />
                     </div>
+                    <div>
+                      <Label htmlFor="gstNumber">GST Number</Label>
+                      <Input
+                        id="gstNumber"
+                        value={formData.gstNumber}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, gstNumber: e.target.value.toUpperCase() }))}
+                        placeholder="Enter GST number"
+                        maxLength={20}
+                      />
+                    </div>
                   </div>
                   <div className="flex justify-end space-x-2">
                     <Button type="button" variant="outline" onClick={resetForm}>Cancel</Button>
@@ -552,6 +569,7 @@ export default function SupplierMasterPage() {
                     <TableRow>
                       <TableHead>Name</TableHead>
                       <TableHead>Contact</TableHead>
+                      <TableHead>GST</TableHead>
                       <TableHead>Address</TableHead>
                       <TableHead>Created Date</TableHead>
                       <TableHead>Actions</TableHead>
@@ -562,6 +580,7 @@ export default function SupplierMasterPage() {
                       <TableRow key={supplier.id}>
                         <TableCell className="font-medium">{supplier.name}</TableCell>
                         <TableCell>{supplier.phone1 || '-'}</TableCell>
+                        <TableCell>{supplier.gstNumber || '-'}</TableCell>
                         <TableCell>{supplier.address || '-'}</TableCell>
                         <TableCell>{formatDate(supplier.createdAt, supplier.updatedAt)}</TableCell>
                         <TableCell>

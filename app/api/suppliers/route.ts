@@ -46,12 +46,14 @@ const postSchema = z.object({
   name: z.string().trim().min(1).optional(),
   address: z.string().optional().nullable(),
   phone1: z.string().optional().nullable(),
+  gstNumber: z.string().optional().nullable(),
 }).passthrough()
 
 const putSchema = z.object({
   name: z.string().trim().min(1).optional(),
   address: z.string().optional().nullable(),
   phone1: z.string().optional().nullable(),
+  gstNumber: z.string().optional().nullable(),
 }).passthrough()
 
 export async function GET(request: NextRequest) {
@@ -131,7 +133,7 @@ export async function POST(request: NextRequest) {
     const ifscCode = null
     const bankName = null
     const accountNo = null
-    const gstNumber = null
+    const gstNumber = cleanString(parsed.data.gstNumber)?.toUpperCase() || null
 
     if (parsed.data.phone1 !== undefined && parsed.data.phone1 !== null && !phone1) {
       return NextResponse.json({ error: 'Primary phone must be exactly 10 digits' }, { status: 400 })
@@ -233,7 +235,10 @@ export async function PUT(request: NextRequest) {
         ifscCode: existingSupplier.ifscCode,
         bankName: existingSupplier.bankName,
         accountNo: existingSupplier.accountNo,
-        gstNumber: existingSupplier.gstNumber,
+        gstNumber:
+          parsed.data.gstNumber !== undefined
+            ? cleanString(parsed.data.gstNumber)?.toUpperCase() || null
+            : existingSupplier.gstNumber,
       },
     })
 

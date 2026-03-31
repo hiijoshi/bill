@@ -101,8 +101,6 @@ function SalesPaymentEntryPageContent() {
   const [cashPaymentDate, setCashPaymentDate] = useState(new Date().toISOString().split('T')[0])
   const [onlinePayAmount, setOnlinePayAmount] = useState('')
   const [onlinePaymentDate, setOnlinePaymentDate] = useState(new Date().toISOString().split('T')[0])
-  const [ifscCode, setIfscCode] = useState('')
-  const [beneficiaryBankAccount, setBeneficiaryBankAccount] = useState('')
   const [bankNameSnapshot, setBankNameSnapshot] = useState('')
   const [bankBranchSnapshot, setBankBranchSnapshot] = useState('')
   const [asFlag, setAsFlag] = useState('A')
@@ -359,16 +357,12 @@ function SalesPaymentEntryPageContent() {
 
   useEffect(() => {
     if (!selectedBank || selectedBank === 'none') {
-      setIfscCode('')
-      setBeneficiaryBankAccount('')
       setBankNameSnapshot('')
       setBankBranchSnapshot('')
       return
     }
     const bank = banks.find((entry) => entry.id === selectedBank)
     if (!bank) return
-    setIfscCode(bank.ifscCode || '')
-    setBeneficiaryBankAccount(bank.accountNumber || '')
     setBankNameSnapshot(bank.name || '')
     setBankBranchSnapshot(bank.branch || '')
   }, [banks, selectedBank])
@@ -448,8 +442,8 @@ function SalesPaymentEntryPageContent() {
       cashPaymentDate: isCashMode ? cashPaymentDate || receiptDate : null,
       onlinePayAmount: isCashMode ? null : Number(onlinePayAmount || targetAmount),
       onlinePaymentDate: isCashMode ? null : onlinePaymentDate || receiptDate,
-      ifscCode: isCashMode ? null : ifscCode || null,
-      beneficiaryBankAccount: isCashMode ? null : beneficiaryBankAccount || null,
+      ifscCode: null,
+      beneficiaryBankAccount: null,
       bankNameSnapshot: isCashMode ? null : bankNameSnapshot || null,
       bankBranchSnapshot: isCashMode ? null : bankBranchSnapshot || null,
       asFlag: isCashMode ? 'A' : asFlag || 'A',
@@ -566,8 +560,6 @@ function SalesPaymentEntryPageContent() {
       setCashPaymentDate(new Date().toISOString().split('T')[0])
       setOnlinePayAmount('')
       setOnlinePaymentDate(new Date().toISOString().split('T')[0])
-      setIfscCode('')
-      setBeneficiaryBankAccount('')
       setBankNameSnapshot('')
       setBankBranchSnapshot('')
       setAsFlag('A')
@@ -876,24 +868,6 @@ function SalesPaymentEntryPageContent() {
                               type="date"
                               value={onlinePaymentDate}
                               onChange={(e) => setOnlinePaymentDate(e.target.value)}
-                            />
-                          </div>
-                          <div>
-                            <Label htmlFor="ifscCode">IFSC Code</Label>
-                            <Input
-                              id="ifscCode"
-                              value={ifscCode}
-                              onChange={(e) => setIfscCode(e.target.value.toUpperCase())}
-                              placeholder="Bank IFSC"
-                            />
-                          </div>
-                          <div>
-                            <Label htmlFor="beneficiaryBankAccount">Bank Account</Label>
-                            <Input
-                              id="beneficiaryBankAccount"
-                              value={beneficiaryBankAccount}
-                              onChange={(e) => setBeneficiaryBankAccount(e.target.value)}
-                              placeholder="Beneficiary bank account"
                             />
                           </div>
                           <div>

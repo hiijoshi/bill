@@ -41,12 +41,19 @@ interface PurchaseBill {
     rate: number
     hammali: number
     bags: number
+    markaNo?: string | null
     amount: number
   }>
   totalAmount: number
   paidAmount: number
   balanceAmount: number
   status: string
+}
+
+interface MarkaOption {
+  id: string
+  markaNumber: string
+  isActive?: boolean
 }
 
 export default function PurchaseEditPage() {
@@ -64,6 +71,7 @@ function PurchaseEditPageContent() {
   const [companyId, setCompanyId] = useState('')
 
   const [products, setProducts] = useState<Product[]>([])
+  const [markas, setMarkas] = useState<MarkaOption[]>([])
   const [purchaseBill, setPurchaseBill] = useState<PurchaseBill | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -146,10 +154,25 @@ function PurchaseEditPageContent() {
 
     const fetchData = async (targetCompanyId: string) => {
       try {
-        const productsRes = await fetch(`/api/products?companyId=${targetCompanyId}`)
+        const [productsRes, markasRes] = await Promise.all([
+          fetch(`/api/products?companyId=${targetCompanyId}`),
+          fetch(`/api/markas?companyId=${targetCompanyId}`)
+        ])
         const productsData = await parseApiJson<Product[]>(productsRes, [])
+        const markasData = await parseApiJson<Array<{ id?: unknown; markaNumber?: unknown; isActive?: unknown }>>(markasRes, [])
         if (cancelled) return
         setProducts(productsData)
+        setMarkas(
+          Array.isArray(markasData)
+            ? markasData
+                .map((row) => ({
+                  id: String(row?.id || ''),
+                  markaNumber: String(row?.markaNumber || '').trim(),
+                  isActive: row?.isActive !== false
+                }))
+                .filter((row) => row.id && row.markaNumber && row.isActive !== false)
+            : []
+        )
 
         const billRes = await fetch(`/api/purchase-bills?companyId=${targetCompanyId}&billId=${billId}`)
         if (!billRes.ok) {
@@ -179,6 +202,7 @@ function PurchaseEditPageContent() {
           const item = billData.purchaseItems[0]
           setSelectedProduct(item.productId)
           setNoOfBags(item.bags.toString())
+          setMarkaNumber(item.markaNo || '')
           setHammali(item.hammali.toString())
           setWeight(item.qty.toString())
           setRate(item.rate.toString())
@@ -456,10 +480,18 @@ function PurchaseEditPageContent() {
                     <Label htmlFor="markaNumber">Marka No.</Label>
                     <Input
                       id="markaNumber"
+                      list="purchaseEditMarkaOptions"
                       value={markaNumber}
-                      onChange={(e) => setMarkaNumber(e.target.value)}
+                      onChange={(e) => setMarkaNumber(e.target.value.toUpperCase())}
                       placeholder="Enter Marka Number"
                     />
+                    {markas.length > 0 ? (
+                      <datalist id="purchaseEditMarkaOptions">
+                        {markas.map((marka) => (
+                          <option key={marka.id} value={marka.markaNumber} />
+                        ))}
+                      </datalist>
+                    ) : null}
                   </div>
 
                   {/* Product */}
