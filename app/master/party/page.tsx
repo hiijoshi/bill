@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -43,6 +43,20 @@ type MandiType = {
   id: string
   name: string
   isActive?: boolean
+}
+
+function getVisibleMandiTypes(allRows: MandiType[], selectedId: string): MandiType[] {
+  const activeRows = allRows.filter((row) => row.isActive !== false)
+  if (!selectedId) return activeRows
+  const selectedRow = allRows.find((row) => row.id === selectedId)
+  if (!selectedRow || selectedRow.isActive !== false || activeRows.some((row) => row.id === selectedId)) {
+    return activeRows
+  }
+  return [...activeRows, selectedRow]
+}
+
+function getMandiTypeOptionLabel(row: MandiType): string {
+  return row.isActive === false ? `${row.name} (Inactive)` : row.name
 }
 
 type PartyResponsePayload = Party[] | {
@@ -100,6 +114,11 @@ export default function PartyMasterPage() {
     setParties(rows)
     setClientCache(cacheKey, { data: rows })
   }, [])
+
+  const visibleMandiTypes = useMemo(
+    () => getVisibleMandiTypes(mandiTypes, formData.mandiTypeId),
+    [formData.mandiTypeId, mandiTypes]
+  )
 
   useEffect(() => {
     const term = searchTerm.trim().toLowerCase()
@@ -209,7 +228,7 @@ export default function PartyMasterPage() {
       if (!response.ok) {
         throw new Error((payload as { error?: string }).error || 'Failed to load mandi types')
       }
-      setMandiTypes(Array.isArray(payload) ? payload.filter((row) => row.isActive !== false) : [])
+      setMandiTypes(Array.isArray(payload) ? payload : [])
     } catch (error) {
       console.error('Error fetching mandi types:', error)
       setMandiTypes([])
@@ -607,13 +626,16 @@ export default function PartyMasterPage() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="__none__">No Mandi Type</SelectItem>
-                          {mandiTypes.map((mandiType) => (
+                          {visibleMandiTypes.map((mandiType) => (
                             <SelectItem key={mandiType.id} value={mandiType.id}>
-                              {mandiType.name}
+                              {getMandiTypeOptionLabel(mandiType)}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
+                      {formData.mandiTypeId && mandiTypes.find((row) => row.id === formData.mandiTypeId)?.isActive === false ? (
+                        <p className="mt-1 text-xs text-amber-700">This party is linked to an inactive mandi type.</p>
+                      ) : null}
                     </div>
                     <div>
                       <Label htmlFor="phone1">Primary Phone</Label>

@@ -2,6 +2,7 @@ import { Suspense } from 'react'
 import { prisma } from '@/lib/prisma'
 import { normalizeAppRole } from '@/lib/api-security'
 import { mapSalesBillToPrintData } from '@/lib/sales-print'
+import { listSalesAdditionalChargesByBillIds } from '@/lib/sales-additional-charge-store'
 import { getSession } from '@/lib/session'
 import SalesPrintClient from './SalesPrintClient'
 
@@ -141,7 +142,11 @@ export default async function SalesPrintPage({ params }: PageProps) {
     return <div className="p-6 text-red-600">Insufficient privileges</div>
   }
 
-  const printData = mapSalesBillToPrintData(bill)
+  const additionalChargesMap = await listSalesAdditionalChargesByBillIds(prisma, [bill.id])
+  const printData = mapSalesBillToPrintData({
+    ...bill,
+    additionalCharges: additionalChargesMap.get(bill.id) || [],
+  })
   return (
     <Suspense fallback={<div className="p-6">Loading print preview...</div>}>
       <SalesPrintClient printData={printData} />

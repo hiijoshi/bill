@@ -6,6 +6,7 @@ import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { ensureAccountingHeadSchema } from '@/lib/accounting-head-schema'
 import { cleanString, parseNonNegativeNumber } from '@/lib/field-validation'
 import { ensureMandiSchema } from '@/lib/mandi-schema'
+import { assertMandiTypeBelongsToCompany, normalizeOptionalMandiTypeId } from '@/lib/mandi-type-utils'
 import { prisma } from '@/lib/prisma'
 
 type AccountingHeadWithConfig = Prisma.AccountingHeadGetPayload<{
@@ -160,7 +161,16 @@ export async function POST(request: NextRequest) {
     const category = cleanString(parsed.data.category)
     const amount = parseNonNegativeNumber(parsed.data.amount) ?? 0
     const normalizedDefaultValue = parseNonNegativeNumber(parsed.data.defaultValue ?? parsed.data.value) ?? 0
-    const mandiTypeId = normalizeOptionalId(parsed.data.mandiTypeId)
+    let mandiTypeId: string | null = null
+    try {
+      mandiTypeId = await assertMandiTypeBelongsToCompany(
+        prisma,
+        companyId,
+        normalizeOptionalMandiTypeId(parsed.data.mandiTypeId)
+      )
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'Invalid mandi type' }, { status: 400 })
+    }
     const calculationBasis = cleanString(parsed.data.calculationBasis)?.toUpperCase() || null
     const accountGroup = cleanString(parsed.data.accountGroup)?.toUpperCase() || null
     const isMandiCharge = Boolean(parsed.data.isMandiCharge)
@@ -266,6 +276,17 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Accounting head name already exists' }, { status: 400 })
     }
 
+    let mandiTypeId: string | null = null
+    try {
+      mandiTypeId = await assertMandiTypeBelongsToCompany(
+        prisma,
+        companyId,
+        normalizeOptionalMandiTypeId(parsed.data.mandiTypeId)
+      )
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'Invalid mandi type' }, { status: 400 })
+    }
+
     const updated = await prisma.$transaction(async (tx) => {
       const changed = await tx.accountingHead.updateMany({
         where: { id, companyId },
@@ -285,7 +306,7 @@ export async function PUT(request: NextRequest) {
         where: { accountingHeadId: id },
         create: {
           accountingHeadId: id,
-          mandiTypeId: normalizeOptionalId(parsed.data.mandiTypeId),
+          mandiTypeId,
           isMandiCharge: Boolean(parsed.data.isMandiCharge),
           calculationBasis: cleanString(parsed.data.calculationBasis)?.toUpperCase() || null,
           defaultValue: parseNonNegativeNumber(parsed.data.defaultValue ?? parsed.data.value) ?? 0,
@@ -293,7 +314,7 @@ export async function PUT(request: NextRequest) {
           isActive: parsed.data.isActive !== false
         },
         update: {
-          mandiTypeId: normalizeOptionalId(parsed.data.mandiTypeId),
+          mandiTypeId,
           isMandiCharge: Boolean(parsed.data.isMandiCharge),
           calculationBasis: cleanString(parsed.data.calculationBasis)?.toUpperCase() || null,
           defaultValue: parseNonNegativeNumber(parsed.data.defaultValue ?? parsed.data.value) ?? 0,

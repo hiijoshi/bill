@@ -6,6 +6,14 @@ import { ensureCompanyAccess, normalizeId, parseBooleanParam, parseJsonWithSchem
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 import { calculateTaxBreakdown, calculateTotalsBreakdown, normalizeNonNegative } from '@/lib/billing-calculations'
 import { getPartyCreditSnapshot } from '@/lib/party-credit'
+import {
+  normalizeSalesAdditionalCharges,
+  summarizeSalesAdditionalCharges,
+} from '@/lib/sales-additional-charges'
+import {
+  listSalesAdditionalChargesByBillIds,
+  replaceSalesAdditionalChargesForBill,
+} from '@/lib/sales-additional-charge-store'
 
 const salesItemSchema = z.object({
   productId: z.string().min(1),
@@ -18,6 +26,12 @@ const salesItemSchema = z.object({
   amount: z.coerce.number().nonnegative().optional()
 })
 
+const salesAdditionalChargeSchema = z.object({
+  chargeType: z.string().min(1),
+  amount: z.coerce.number().nonnegative(),
+  remark: z.string().optional().nullable(),
+})
+
 const transportBillSchema = z.object({
   transportName: z.string().optional().nullable(),
   lorryNo: z.string().optional().nullable(),
@@ -26,7 +40,8 @@ const transportBillSchema = z.object({
   advance: z.coerce.number().nonnegative().optional(),
   toPay: z.coerce.number().nonnegative().optional(),
   otherAmount: z.coerce.number().nonnegative().optional(),
-  insuranceAmount: z.coerce.number().nonnegative().optional()
+  insuranceAmount: z.coerce.number().nonnegative().optional(),
+  additionalCharges: z.array(salesAdditionalChargeSchema).optional(),
 })
 
 const salesCreateSchema = z.object({
@@ -318,6 +333,9 @@ async function resolveSalesParty(input: {
 function normalizeTransportBillData(input?: z.infer<typeof transportBillSchema>) {
   if (!input) return null
 
+  const additionalCharges = normalizeSalesAdditionalCharges(input.additionalCharges)
+  const additionalChargeSummary = summarizeSalesAdditionalCharges(additionalCharges)
+  const hasBucketCharges = additionalCharges.length > 0
   const payload = {
     transportName: input.transportName?.trim() || null,
     lorryNo: input.lorryNo?.trim() || null,
@@ -325,8 +343,11 @@ function normalizeTransportBillData(input?: z.infer<typeof transportBillSchema>)
     freightAmount: toNonNegativeNumber(input.freightAmount, 0),
     advance: toNonNegativeNumber(input.advance, 0),
     toPay: toNonNegativeNumber(input.toPay, 0),
-    otherAmount: toNonNegativeNumber(input.otherAmount, 0),
-    insuranceAmount: toNonNegativeNumber(input.insuranceAmount, 0)
+    otherAmount: hasBucketCharges ? additionalChargeSummary.otherAmount : toNonNegativeNumber(input.otherAmount, 0),
+    insuranceAmount: hasBucketCharges
+      ? additionalChargeSummary.insuranceAmount
+      : toNonNegativeNumber(input.insuranceAmount, 0),
+    additionalCharges,
   }
 
   const hasData = Boolean(
@@ -337,7 +358,8 @@ function normalizeTransportBillData(input?: z.infer<typeof transportBillSchema>)
       payload.advance > 0 ||
       payload.toPay > 0 ||
       payload.otherAmount > 0 ||
-      payload.insuranceAmount > 0
+      payload.insuranceAmount > 0 ||
+      payload.additionalCharges.length > 0
   )
 
   if (!hasData) return null
@@ -478,14 +500,29 @@ export async function POST(request: NextRequest) {
         })
       }
 
+      let transportBillRecord: { id: string } | null = null
       if (transportData) {
-        await tx.transportBill.create({
+        transportBillRecord = await tx.transportBill.create({
           data: {
             salesBillId: salesBill.id,
-            ...transportData
+            transportName: transportData.transportName,
+            lorryNo: transportData.lorryNo,
+            freightPerQt: transportData.freightPerQt,
+            freightAmount: transportData.freightAmount,
+            advance: transportData.advance,
+            toPay: transportData.toPay,
+            otherAmount: transportData.otherAmount,
+            insuranceAmount: transportData.insuranceAmount,
           }
         })
       }
+
+      await replaceSalesAdditionalChargesForBill(tx, {
+        companyId,
+        salesBillId: salesBill.id,
+        transportBillId: transportBillRecord?.id || null,
+        charges: transportData?.additionalCharges || [],
+      })
 
       return tx.salesBill.findFirst({
         where: { id: salesBill.id },
@@ -499,7 +536,22 @@ export async function POST(request: NextRequest) {
       })
     })
 
-    return NextResponse.json({ success: true, salesBill: createdSalesBill }, { status: 201 })
+    const createdChargesMap = createdSalesBill?.id
+      ? await listSalesAdditionalChargesByBillIds(prisma, [createdSalesBill.id])
+      : new Map()
+
+    return NextResponse.json(
+      {
+        success: true,
+        salesBill: createdSalesBill
+          ? {
+              ...sanitizeSalesBill(createdSalesBill),
+              additionalCharges: createdChargesMap.get(createdSalesBill.id) || [],
+            }
+          : null,
+      },
+      { status: 201 }
+    )
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Internal server error'
     const status = message.includes('not found') || message.includes('required') ? 400 : 500
@@ -558,7 +610,11 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Sales bill not found' }, { status: 404 })
       }
 
-      return NextResponse.json(sanitizeSalesBill(bill))
+      const additionalChargesMap = await listSalesAdditionalChargesByBillIds(prisma, [bill.id])
+      return NextResponse.json({
+        ...sanitizeSalesBill(bill),
+        additionalCharges: additionalChargesMap.get(bill.id) || [],
+      })
     }
 
     const pagination = parsePaginationParams(searchParams, { defaultPageSize: 50, maxPageSize: 200 })
@@ -601,7 +657,14 @@ export async function GET(request: NextRequest) {
       pagination.enabled ? prisma.salesBill.count({ where: whereClause }) : Promise.resolve(0)
     ])
 
-    const safeSalesBills = salesBills.map((bill) => sanitizeSalesBill(bill))
+    const additionalChargesMap = await listSalesAdditionalChargesByBillIds(
+      prisma,
+      salesBills.map((bill) => bill.id)
+    )
+    const safeSalesBills = salesBills.map((bill) => ({
+      ...sanitizeSalesBill(bill),
+      additionalCharges: additionalChargesMap.get(bill.id) || [],
+    }))
 
     if (pagination.enabled) {
       return NextResponse.json({
@@ -796,19 +859,56 @@ export async function PUT(request: NextRequest) {
         if (existingTransportBill) {
           await tx.transportBill.update({
             where: { id: existingTransportBill.id },
-            data: transportData
+            data: {
+              transportName: transportData.transportName,
+              lorryNo: transportData.lorryNo,
+              freightPerQt: transportData.freightPerQt,
+              freightAmount: transportData.freightAmount,
+              advance: transportData.advance,
+              toPay: transportData.toPay,
+              otherAmount: transportData.otherAmount,
+              insuranceAmount: transportData.insuranceAmount,
+            }
           })
         } else {
-          await tx.transportBill.create({
+          const createdTransportBill = await tx.transportBill.create({
             data: {
               salesBillId: existing.id,
-              ...transportData
+              transportName: transportData.transportName,
+              lorryNo: transportData.lorryNo,
+              freightPerQt: transportData.freightPerQt,
+              freightAmount: transportData.freightAmount,
+              advance: transportData.advance,
+              toPay: transportData.toPay,
+              otherAmount: transportData.otherAmount,
+              insuranceAmount: transportData.insuranceAmount,
             }
+          })
+          await replaceSalesAdditionalChargesForBill(tx, {
+            companyId,
+            salesBillId: existing.id,
+            transportBillId: createdTransportBill.id,
+            charges: transportData.additionalCharges,
+          })
+        }
+
+        if (existingTransportBill) {
+          await replaceSalesAdditionalChargesForBill(tx, {
+            companyId,
+            salesBillId: existing.id,
+            transportBillId: existingTransportBill.id,
+            charges: transportData.additionalCharges,
           })
         }
       } else if (body.transportBill && existingTransportBill) {
         await tx.transportBill.delete({
           where: { id: existingTransportBill.id }
+        })
+        await replaceSalesAdditionalChargesForBill(tx, {
+          companyId,
+          salesBillId: existing.id,
+          transportBillId: null,
+          charges: [],
         })
       }
 
@@ -826,7 +926,19 @@ export async function PUT(request: NextRequest) {
       })
     })
 
-    return NextResponse.json({ success: true, salesBill: updated })
+    const updatedChargesMap = updated?.id
+      ? await listSalesAdditionalChargesByBillIds(prisma, [updated.id])
+      : new Map()
+
+    return NextResponse.json({
+      success: true,
+      salesBill: updated
+        ? {
+            ...sanitizeSalesBill(updated),
+            additionalCharges: updatedChargesMap.get(updated.id) || [],
+          }
+        : null,
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Internal server error'
     const status = message.includes('not found') || message.includes('required') ? 400 : 500

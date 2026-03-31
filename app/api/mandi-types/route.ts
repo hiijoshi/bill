@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { cleanString } from '@/lib/field-validation'
 import { ensureMandiSchema } from '@/lib/mandi-schema'
+import { formatMandiTypeUsageMessage, getMandiTypeUsageMap } from '@/lib/mandi-type-utils'
 import { prisma } from '@/lib/prisma'
 
 function normalizeCompanyId(raw: string | null): string | null {
@@ -70,7 +71,24 @@ export async function GET(request: NextRequest) {
       orderBy: [{ isActive: 'desc' }, { name: 'asc' }]
     })
 
-    return NextResponse.json(rows)
+    const usageMap = await getMandiTypeUsageMap(
+      prisma,
+      rows.map((row) => row.id)
+    )
+
+    return NextResponse.json(
+      rows.map((row) => {
+        const usage = usageMap.get(row.id)
+        return {
+          ...row,
+          linkedPartyCount: usage?.linkedPartyCount || 0,
+          linkedFarmerCount: usage?.linkedFarmerCount || 0,
+          linkedAccountingHeadCount: usage?.linkedAccountingHeadCount || 0,
+          linkedBillChargeCount: usage?.linkedBillChargeCount || 0,
+          totalLinkedCount: usage?.totalLinkedCount || 0
+        }
+      })
+    )
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
   }
@@ -204,6 +222,27 @@ export async function DELETE(request: NextRequest) {
     if (denied) return denied
 
     if (all) {
+      const rows = await prisma.mandiType.findMany({
+        where: { companyId },
+        select: {
+          id: true,
+          name: true
+        }
+      })
+      const usageMap = await getMandiTypeUsageMap(
+        prisma,
+        rows.map((row) => row.id)
+      )
+      const linkedRows = rows.filter((row) => (usageMap.get(row.id)?.totalLinkedCount || 0) > 0)
+      if (linkedRows.length > 0) {
+        return NextResponse.json(
+          {
+            error: `Some mandi types are linked and cannot be deleted: ${linkedRows.slice(0, 3).map((row) => row.name).join(', ')}`
+          },
+          { status: 400 }
+        )
+      }
+
       const deleted = await prisma.mandiType.deleteMany({
         where: { companyId }
       })
@@ -219,13 +258,35 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Mandi type ID required' }, { status: 400 })
     }
 
+    const mandiType = await prisma.mandiType.findFirst({
+      where: {
+        id,
+        companyId
+      },
+      select: {
+        id: true,
+        name: true
+      }
+    })
+
+    if (!mandiType) {
+      return NextResponse.json({ error: 'Mandi type not found' }, { status: 404 })
+    }
+
+    const usageMap = await getMandiTypeUsageMap(prisma, [mandiType.id])
+    const usage = usageMap.get(mandiType.id)
+    if (usage && usage.totalLinkedCount > 0) {
+      return NextResponse.json(
+        {
+          error: formatMandiTypeUsageMessage(mandiType.name, usage)
+        },
+        { status: 400 }
+      )
+    }
+
     const deleted = await prisma.mandiType.deleteMany({
       where: { id, companyId }
     })
-
-    if (deleted.count === 0) {
-      return NextResponse.json({ error: 'Mandi type not found' }, { status: 404 })
-    }
 
     return NextResponse.json({ success: true, message: 'Mandi type deleted successfully' })
   } catch (error) {

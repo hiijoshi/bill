@@ -496,6 +496,10 @@ export default function PaymentDashboardPage() {
                 <Plus className="w-4 h-4 mr-1" />
                 Cash / Bank Payment
               </Button>
+              <Button variant="outline" onClick={() => router.push('/payment/journal-voucher/entry')}>
+                <Plus className="w-4 h-4 mr-1" />
+                Journal Voucher
+              </Button>
               <Button variant="outline" onClick={() => router.push('/payment/bank-statement/upload')}>
                 <Upload className="w-4 h-4 mr-1" />
                 Upload Bank Statement

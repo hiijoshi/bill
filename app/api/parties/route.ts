@@ -13,6 +13,7 @@ import {
 } from '@/lib/party-opening-balance'
 import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-schema'
 import { ensureMandiSchema } from '@/lib/mandi-schema'
+import { assertMandiTypeBelongsToCompany, normalizeOptionalMandiTypeId } from '@/lib/mandi-type-utils'
 
 function normalizeCompanyId(raw: string | null): string | null {
   if (!raw) return null
@@ -249,6 +250,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Secondary phone must be exactly 10 digits' }, { status: 400 })
     }
 
+    let mandiTypeId: string | null = null
+    try {
+      mandiTypeId = await assertMandiTypeBelongsToCompany(
+        prisma,
+        companyId,
+        normalizeOptionalMandiTypeId(parsed.data.mandiTypeId)
+      )
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'Invalid mandi type' }, { status: 400 })
+    }
+
     const party = await prisma.$transaction(async (tx) => {
       const createdParty = await tx.party.create({
         data: {
@@ -269,7 +281,6 @@ export async function POST(request: NextRequest) {
         }
       })
 
-      const mandiTypeId = normalizeCompanyId(parsed.data.mandiTypeId || null)
       if (mandiTypeId) {
         await tx.partyMandiProfile.create({
           data: {
@@ -348,6 +359,17 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Secondary phone must be exactly 10 digits' }, { status: 400 })
     }
 
+    let mandiTypeId: string | null = null
+    try {
+      mandiTypeId = await assertMandiTypeBelongsToCompany(
+        prisma,
+        companyId,
+        normalizeOptionalMandiTypeId(parsed.data.mandiTypeId)
+      )
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'Invalid mandi type' }, { status: 400 })
+    }
+
     const updatedParty = await prisma.$transaction(async (tx) => {
       const changedParty = await tx.party.update({
         where: { id },
@@ -368,7 +390,6 @@ export async function PUT(request: NextRequest) {
         }
       })
 
-      const mandiTypeId = normalizeCompanyId(parsed.data.mandiTypeId || null)
       if (mandiTypeId) {
         await tx.partyMandiProfile.upsert({
           where: { partyId: id },

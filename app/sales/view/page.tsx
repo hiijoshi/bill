@@ -9,6 +9,7 @@ import DashboardLayout from '@/app/components/DashboardLayout'
 import { ArrowLeft, Edit, Ban, Printer, FileText } from 'lucide-react'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
+import { summarizeSalesAdditionalCharges } from '@/lib/sales-additional-charges'
 
 interface SalesBill {
   id: string
@@ -43,6 +44,12 @@ interface SalesBill {
     toPay?: number | null
     otherAmount?: number | null
     insuranceAmount?: number | null
+  }>
+  additionalCharges?: Array<{
+    id: string
+    chargeType: string
+    amount: number
+    remark?: string | null
   }>
   totalAmount: number
   receivedAmount: number
@@ -90,6 +97,12 @@ interface RawSalesBill {
   }
   salesItems?: RawSalesItem[]
   transportBills?: RawTransportBill[]
+  additionalCharges?: Array<{
+    id?: unknown
+    chargeType?: unknown
+    amount?: unknown
+    remark?: unknown
+  }>
   totalAmount?: unknown
   receivedAmount?: unknown
   createdAt?: unknown
@@ -145,6 +158,16 @@ function normalizeSalesBill(raw: RawSalesBill): SalesBill {
           otherAmount: clampNonNegative(item?.otherAmount),
           insuranceAmount: clampNonNegative(item?.insuranceAmount)
         }))
+      : [],
+    additionalCharges: Array.isArray(raw?.additionalCharges)
+      ? raw.additionalCharges
+          .map((item) => ({
+            id: String(item?.id || ''),
+            chargeType: String(item?.chargeType || ''),
+            amount: clampNonNegative(item?.amount),
+            remark: item?.remark == null ? null : String(item.remark),
+          }))
+          .filter((item) => item.chargeType && item.amount > 0)
       : [],
     totalAmount,
     receivedAmount,
@@ -296,6 +319,7 @@ function SalesViewPageContent() {
     (sum, item) => sum + clampNonNegative(item.weight ?? item.qty ?? 0),
     0
   )
+  const additionalChargeSummary = summarizeSalesAdditionalCharges(salesBill.additionalCharges || [])
 
   return (
     <DashboardLayout companyId={companyId || ''}>
@@ -457,11 +481,11 @@ function SalesViewPageContent() {
                       </div>
                       <div>
                         <p className="text-sm text-gray-600">Other Amount</p>
-                        <p className="font-semibold">₹{clampNonNegative(transport?.otherAmount).toFixed(2)}</p>
+                        <p className="font-semibold">₹{additionalChargeSummary.otherAmount.toFixed(2)}</p>
                       </div>
                       <div>
                         <p className="text-sm text-gray-600">Insurance Amount</p>
-                        <p className="font-semibold">₹{clampNonNegative(transport?.insuranceAmount).toFixed(2)}</p>
+                        <p className="font-semibold">₹{additionalChargeSummary.insuranceAmount.toFixed(2)}</p>
                       </div>
                       <div>
                         <p className="text-sm text-gray-600">Advance</p>
@@ -477,6 +501,24 @@ function SalesViewPageContent() {
               ) : (
                 <p className="text-sm text-gray-500">No transport details available for this bill.</p>
               )}
+              {salesBill.additionalCharges && salesBill.additionalCharges.length > 0 ? (
+                <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm font-semibold text-slate-900">Additional Charge Buckets</p>
+                  <div className="mt-3 space-y-2">
+                    {salesBill.additionalCharges.map((charge) => (
+                      <div key={charge.id} className="flex items-start justify-between gap-4 rounded-md bg-white px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="font-medium text-slate-900">{charge.chargeType}</p>
+                          {charge.remark ? (
+                            <p className="text-xs text-slate-500">{charge.remark}</p>
+                          ) : null}
+                        </div>
+                        <p className="font-semibold text-slate-900">₹{charge.amount.toFixed(2)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 

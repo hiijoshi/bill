@@ -41,6 +41,20 @@ type MandiType = {
   isActive?: boolean
 }
 
+function getVisibleMandiTypes(allRows: MandiType[], selectedId: string): MandiType[] {
+  const activeRows = allRows.filter((row) => row.isActive !== false)
+  if (!selectedId) return activeRows
+  const selectedRow = allRows.find((row) => row.id === selectedId)
+  if (!selectedRow || selectedRow.isActive !== false || activeRows.some((row) => row.id === selectedId)) {
+    return activeRows
+  }
+  return [...activeRows, selectedRow]
+}
+
+function getMandiTypeOptionLabel(row: MandiType): string {
+  return row.isActive === false ? `${row.name} (Inactive)` : row.name
+}
+
 const DEFAULT_FORM = {
   name: '',
   category: '',
@@ -65,6 +79,11 @@ export default function AccountingHeadMasterPage() {
   const [editingRow, setEditingRow] = useState<AccountingHead | null>(null)
   const [search, setSearch] = useState('')
   const [formData, setFormData] = useState(DEFAULT_FORM)
+
+  const visibleMandiTypes = useMemo(
+    () => getVisibleMandiTypes(mandiTypes, formData.mandiTypeId),
+    [formData.mandiTypeId, mandiTypes]
+  )
 
   const fetchAccountingHeadPermissions = useCallback(async (resolvedCompanyId: string) => {
     const denied = { canRead: false, canWrite: false }
@@ -115,7 +134,7 @@ export default function AccountingHeadMasterPage() {
       }
 
       setRows(Array.isArray(headsPayload) ? headsPayload : [])
-      setMandiTypes(Array.isArray(mandiTypesPayload) ? mandiTypesPayload.filter((row) => row.isActive !== false) : [])
+      setMandiTypes(Array.isArray(mandiTypesPayload) ? mandiTypesPayload : [])
       setErrorMessage('')
     } catch (error) {
       setRows([])
@@ -476,13 +495,16 @@ export default function AccountingHeadMasterPage() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="__all__">All Mandi Types</SelectItem>
-                          {mandiTypes.map((mandiType) => (
+                          {visibleMandiTypes.map((mandiType) => (
                             <SelectItem key={mandiType.id} value={mandiType.id}>
-                              {mandiType.name}
+                              {getMandiTypeOptionLabel(mandiType)}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
+                      {formData.mandiTypeId && mandiTypes.find((row) => row.id === formData.mandiTypeId)?.isActive === false ? (
+                        <p className="mt-1 text-xs text-amber-700">This accounting head is linked to an inactive mandi type.</p>
+                      ) : null}
                     </div>
                     <div>
                       <Label htmlFor="accountingHeadCalculationBasis">Calculation Basis</Label>

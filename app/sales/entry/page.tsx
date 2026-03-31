@@ -6,14 +6,19 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { AlertTriangle, MessageCircle, Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { AlertTriangle, MessageCircle, Pencil, Plus, Trash2 } from 'lucide-react'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { SearchableSelect, type SearchableSelectOption } from '@/components/ui/searchable-select'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { deleteClientCacheByPrefix } from '@/lib/client-fetch-cache'
 import { calculateMandiCharges, getCalculationBasisLabel } from '@/lib/mandi-charge-engine'
+import {
+  DEFAULT_SALES_ADDITIONAL_CHARGE_TYPES,
+  normalizeSalesAdditionalCharges,
+  summarizeSalesAdditionalCharges,
+} from '@/lib/sales-additional-charges'
 import { openWhatsappChat } from '@/lib/whatsapp'
 
 interface Party {
@@ -94,6 +99,20 @@ const createEmptyCurrentItem = () => ({
   pricingMode: 'rate' as ItemPricingMode
 })
 
+interface SalesAdditionalChargeBucket {
+  id: string
+  chargeType: string
+  amount: string
+  remark: string
+}
+
+const createEmptyAdditionalChargeBucket = (): SalesAdditionalChargeBucket => ({
+  id: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+  chargeType: '',
+  amount: '',
+  remark: ''
+})
+
 interface ExistingSalesBill {
   id: string
   billNo: string
@@ -131,6 +150,12 @@ interface ExistingSalesBill {
     toPay?: number | null
     otherAmount?: number | null
     insuranceAmount?: number | null
+  }>
+  additionalCharges?: Array<{
+    id?: string
+    chargeType?: string | null
+    amount?: number | null
+    remark?: string | null
   }>
 }
 
@@ -176,13 +201,6 @@ function formatRemainingLimitText(value: number | null): string {
   return amountText
 }
 
-function normalizeSearchText(value: unknown): string {
-  return String(value || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase()
-}
-
 export default function SalesEntryPage() {
   const router = useRouter()
   const itemIdSequence = useRef(0)
@@ -193,20 +211,13 @@ export default function SalesEntryPage() {
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
 
-  // Transport search state
-  const [transportSearchTerm, setTransportSearchTerm] = useState('')
   const [transports, setTransports] = useState<TransportOption[]>([])
-  const [filteredTransports, setFilteredTransports] = useState<TransportOption[]>([])
-  const [showTransportDropdown, setShowTransportDropdown] = useState(false)
+  const [selectedTransportId, setSelectedTransportId] = useState('')
 
   // Sales Items state
   const [salesItems, setSalesItems] = useState<SalesItemMasterOption[]>([])
   const [currentFormItems, setCurrentFormItems] = useState<SalesItem[]>([])
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
-  const [partySearchTerm, setPartySearchTerm] = useState('')
-  const [showPartyDropdown, setShowPartyDropdown] = useState(false)
-  const [salesItemSearchTerm, setSalesItemSearchTerm] = useState('')
-  const [showSalesItemDropdown, setShowSalesItemDropdown] = useState(false)
 
   // Invoice Tab 1 - Basic Info
   const [invoiceNo, setInvoiceNo] = useState('')
@@ -233,8 +244,9 @@ export default function SalesEntryPage() {
   const [totalNoOfBags, setTotalNoOfBags] = useState(0)
   const [totalWeight, setTotalWeight] = useState(0)
   const [totalAmount, setTotalAmount] = useState(0)
-  const [advanceExpense, setAdvanceExpense] = useState('')
-  const [insurance, setInsurance] = useState('')
+  const [additionalChargeBuckets, setAdditionalChargeBuckets] = useState<SalesAdditionalChargeBucket[]>([
+    createEmptyAdditionalChargeBucket()
+  ])
   const [manualGrandTotal, setManualGrandTotal] = useState('')
   const [manualGrandTotalTouched, setManualGrandTotalTouched] = useState(false)
   const [partyRisk, setPartyRisk] = useState<PartyRiskResponse | null>(null)
@@ -252,7 +264,22 @@ export default function SalesEntryPage() {
   }
 
   const freightTotal = parseFloat(freightAmount) || 0
-  const extraChargesTotal = (parseFloat(advanceExpense) || 0) + (parseFloat(insurance) || 0)
+  const normalizedAdditionalCharges = useMemo(
+    () =>
+      normalizeSalesAdditionalCharges(
+        additionalChargeBuckets.map((bucket) => ({
+          chargeType: bucket.chargeType,
+          amount: bucket.amount,
+          remark: bucket.remark,
+        }))
+      ),
+    [additionalChargeBuckets]
+  )
+  const extraChargesSummary = useMemo(
+    () => summarizeSalesAdditionalCharges(normalizedAdditionalCharges),
+    [normalizedAdditionalCharges]
+  )
+  const extraChargesTotal = extraChargesSummary.totalAmount
   const additionalTotal = freightTotal + extraChargesTotal
   const totalGstAmount = useMemo(
     () => roundCurrency(currentFormItems.reduce((sum, item) => sum + (item.gstAmount || 0), 0)),
@@ -263,45 +290,80 @@ export default function SalesEntryPage() {
     [additionalTotal, totalAmount, totalGstAmount]
   )
 
-  const filteredParties = useMemo(() => {
-    const query = normalizeSearchText(partySearchTerm)
-    if (!query) return parties
-    return parties.filter((party) => {
-      const haystack = [
-        party.name,
-        party.address,
-        party.phone1,
-        party.phone2,
-        party.type,
-        party.mandiTypeName
-      ]
-        .map((value) => normalizeSearchText(value))
-        .filter(Boolean)
-        .join(' ')
-
-      return haystack.includes(query)
-    })
-  }, [parties, partySearchTerm])
-
-  const filteredSalesItems = useMemo(() => {
-    const query = normalizeSearchText(salesItemSearchTerm)
-    if (!query) return salesItems
-    return salesItems.filter((salesItem) => {
-      if (salesItem.id === currentItem.salesItemId) return true
-      const label = normalizeSearchText(`${salesItem.salesItemName || ''} ${salesItem.product?.name || ''}`)
-      return label.includes(query)
-    })
-  }, [salesItems, salesItemSearchTerm, currentItem.salesItemId])
-
   const selectedPartyRecord = useMemo(
     () => parties.find((party) => party.id === selectedParty) || null,
     [parties, selectedParty]
+  )
+
+  const selectedTransportRecord = useMemo(
+    () => transports.find((transport) => transport.id === selectedTransportId) || null,
+    [selectedTransportId, transports]
   )
 
   const selectedCurrentSalesItem = useMemo(
     () => salesItems.find((item) => item.id === currentItem.salesItemId) || null,
     [currentItem.salesItemId, salesItems]
   )
+
+  const partyOptions = useMemo<SearchableSelectOption[]>(
+    () =>
+      parties.map((party) => ({
+        value: party.id,
+        label: party.name,
+        description: [party.address, party.phone1].filter(Boolean).join(' | ') || party.type || 'Party',
+        keywords: [party.name, party.address, party.phone1, party.phone2, party.type, party.mandiTypeName].filter(Boolean) as string[],
+      })),
+    [parties]
+  )
+
+  const transportOptions = useMemo<SearchableSelectOption[]>(
+    () =>
+      transports.map((transport) => ({
+        value: transport.id,
+        label: String(transport.transporterName || 'Transport'),
+        description: transport.vehicleNumber ? `Vehicle: ${transport.vehicleNumber}` : 'Transport master',
+        keywords: [transport.transporterName, transport.vehicleNumber].filter(Boolean) as string[],
+      })),
+    [transports]
+  )
+
+  const salesItemOptions = useMemo<SearchableSelectOption[]>(
+    () =>
+      salesItems.map((salesItem) => ({
+        value: salesItem.id,
+        label: salesItem.salesItemName || salesItem.product?.name || 'Sales Item',
+        description: salesItem.product?.name ? `Product: ${salesItem.product.name}` : 'Sales item master',
+        keywords: [salesItem.salesItemName, salesItem.product?.name].filter(Boolean) as string[],
+      })),
+    [salesItems]
+  )
+
+  const additionalChargeTypeOptions = useMemo<SearchableSelectOption[]>(() => {
+    const dynamicNames = accountingHeads
+      .map((head) => String(head.name || '').trim())
+      .filter(Boolean)
+
+    const labels = Array.from(
+      new Set(
+        [...DEFAULT_SALES_ADDITIONAL_CHARGE_TYPES, ...dynamicNames].map((label) => label.trim()).filter(Boolean)
+      )
+    )
+
+    return labels.map((label) => {
+      const matchedHead = accountingHeads.find(
+        (head) => String(head.name || '').trim().toLowerCase() === label.toLowerCase()
+      )
+
+      return {
+        value: label,
+        label,
+        description: matchedHead
+          ? [matchedHead.category, matchedHead.accountGroup || ''].filter(Boolean).join(' | ') || 'Accounting Head'
+          : 'Additional charge type',
+        keywords: [label, matchedHead?.category, matchedHead?.accountGroup].filter(Boolean) as string[],
+      }
+    })
+  }, [accountingHeads])
 
   const mandiChargePreview = useMemo(() => {
     return calculateMandiCharges({
@@ -412,37 +474,6 @@ export default function SalesEntryPage() {
     setAdvanceError('')
   }
 
-  // Filter transports based on search term
-  useEffect(() => {
-    if (transportSearchTerm) {
-      const filtered = transports.filter(transport =>
-        transport.transporterName && transport.transporterName.toLowerCase().includes(transportSearchTerm.toLowerCase())
-      )
-      setFilteredTransports(filtered)
-    } else {
-      setFilteredTransports(transports)
-    }
-  }, [transportSearchTerm, transports])
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement
-      if (
-        !target.closest('.transport-search-dropdown-container') &&
-        !target.closest('.party-search-dropdown-container') &&
-        !target.closest('.sales-item-search-dropdown-container')
-      ) {
-        setShowTransportDropdown(false)
-        setShowPartyDropdown(false)
-        setShowSalesItemDropdown(false)
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
-
   useEffect(() => {
     if (!selectedParty || !companyId) {
       setPartyRisk(null)
@@ -467,8 +498,6 @@ export default function SalesEntryPage() {
       setPartyName(party.name) // For display only
       setPartyAddress(party.address || '')
       setPartyContact(party.phone1 || '')
-      setPartySearchTerm(party.name || '')
-      setShowPartyDropdown(false)
     } else {
       setPartyName('')
       setPartyAddress('')
@@ -476,23 +505,53 @@ export default function SalesEntryPage() {
     }
   }
 
-  const handlePartySearch = (term: string) => {
-    setPartySearchTerm(term)
-    setShowPartyDropdown(true)
-  }
-
-  const handleSalesItemSearch = (term: string) => {
-    setSalesItemSearchTerm(term)
-    setShowSalesItemDropdown(true)
+  const handleClearPartySelection = () => {
+    setSelectedParty('')
+    setPartyRisk(null)
   }
 
   const handleSalesItemSelect = (salesItemId: string) => {
-    const selected = salesItems.find((item) => item.id === salesItemId) || null
     setCurrentItem((prev) => ({ ...prev, salesItemId }))
-    if (selected) {
-      setSalesItemSearchTerm(selected.salesItemName || selected.product?.name || '')
+  }
+
+  const handleTransportSelect = (transportId: string) => {
+    setSelectedTransportId(transportId)
+    const transport = transports.find((entry) => entry.id === transportId)
+    if (transport) {
+      setTransportName(transport.transporterName || '')
+      setLorryNo(transport.vehicleNumber || '')
+      return
     }
-    setShowSalesItemDropdown(false)
+
+    setTransportName('')
+  }
+
+  const handleAddAdditionalChargeRow = () => {
+    setAdditionalChargeBuckets((current) => [...current, createEmptyAdditionalChargeBucket()])
+  }
+
+  const handleAdditionalChargeRowChange = (
+    bucketId: string,
+    field: keyof Omit<SalesAdditionalChargeBucket, 'id'>,
+    value: string
+  ) => {
+    setAdditionalChargeBuckets((current) =>
+      current.map((bucket) =>
+        bucket.id === bucketId
+          ? {
+              ...bucket,
+              [field]: field === 'amount' ? toNonNegative(value) : value,
+            }
+          : bucket
+      )
+    )
+  }
+
+  const handleRemoveAdditionalChargeRow = (bucketId: string) => {
+    setAdditionalChargeBuckets((current) => {
+      const next = current.filter((bucket) => bucket.id !== bucketId)
+      return next.length > 0 ? next : [createEmptyAdditionalChargeBucket()]
+    })
   }
 
   // Handle new party addition
@@ -537,7 +596,6 @@ export default function SalesEntryPage() {
         setPartyName(newParty.name || '')
         setPartyAddress(newParty.address || '')
         setPartyContact(newParty.phone1 || '')
-        setPartySearchTerm(newParty.name || '')
         alert('Party added successfully!')
       } else {
         const error = await parseApiJson<{ error?: string }>(response, {}, 'Add party API error')
@@ -547,19 +605,6 @@ export default function SalesEntryPage() {
       console.error('Error:', error)
       alert('Error adding party: ' + (error instanceof Error ? error.message : 'Unknown error'))
     }
-  }
-
-  const handleTransportSearch = (term: string) => {
-    setTransportSearchTerm(term)
-    setTransportName(term.trim())
-    setShowTransportDropdown(true)
-  }
-
-  const handleTransportSelect = (transport: TransportOption) => {
-    setTransportName(transport.transporterName || '')
-    setTransportSearchTerm(transport.transporterName || '')
-    setLorryNo(transport.vehicleNumber || '')
-    setShowTransportDropdown(false)
   }
 
   const handleAddNewTransport = () => {
@@ -609,11 +654,14 @@ export default function SalesEntryPage() {
 
   const resetCurrentItemForm = useCallback(() => {
     setCurrentItem(createEmptyCurrentItem())
-    setSalesItemSearchTerm('')
     setEditingItemId(null)
   }, [])
 
-  const populateFromExistingBill = useCallback((bill: ExistingSalesBill, allSalesItems: SalesItemMasterOption[]) => {
+  const populateFromExistingBill = useCallback((
+    bill: ExistingSalesBill,
+    allSalesItems: SalesItemMasterOption[],
+    allTransports: TransportOption[]
+  ) => {
     setEditBillId(bill.id)
     setInvoiceNo(String(bill.billNo || ''))
     {
@@ -627,19 +675,45 @@ export default function SalesEntryPage() {
     setPartyName(String(bill.party?.name || ''))
     setPartyAddress(String(bill.party?.address || ''))
     setPartyContact(String(bill.party?.phone1 || ''))
-    setPartySearchTerm(String(bill.party?.name || ''))
 
     const firstTransport = Array.isArray(bill.transportBills) ? bill.transportBills[0] : undefined
     const transportLabel = String(firstTransport?.transportName || '')
+    const matchedTransport = allTransports.find((transport) => String(transport.transporterName || '') === transportLabel)
+    setSelectedTransportId(matchedTransport?.id || '')
     setTransportName(transportLabel)
-    setTransportSearchTerm(transportLabel)
     setLorryNo(String(firstTransport?.lorryNo || ''))
     setFreightPerQt(String(Math.max(0, Number(firstTransport?.freightPerQt || 0))))
     setFreightAmount(String(Math.max(0, Number(firstTransport?.freightAmount || 0))))
     setAdvance(String(Math.max(0, Number(firstTransport?.advance || 0))))
     setToPay(String(Math.max(0, Number(firstTransport?.toPay || 0))))
-    setAdvanceExpense(String(Math.max(0, Number(firstTransport?.otherAmount || 0))))
-    setInsurance(String(Math.max(0, Number(firstTransport?.insuranceAmount || 0))))
+
+    const nextAdditionalCharges =
+      Array.isArray(bill.additionalCharges) && bill.additionalCharges.length > 0
+        ? bill.additionalCharges.map((charge) => ({
+            id: String(charge.id || createEmptyAdditionalChargeBucket().id),
+            chargeType: String(charge.chargeType || ''),
+            amount: String(Math.max(0, Number(charge.amount || 0))),
+            remark: String(charge.remark || '')
+          }))
+        : [
+            ...(Math.max(0, Number(firstTransport?.otherAmount || 0)) > 0
+              ? [{
+                  id: createEmptyAdditionalChargeBucket().id,
+                  chargeType: 'Other Amount',
+                  amount: String(Math.max(0, Number(firstTransport?.otherAmount || 0))),
+                  remark: ''
+                }]
+              : []),
+            ...(Math.max(0, Number(firstTransport?.insuranceAmount || 0)) > 0
+              ? [{
+                  id: createEmptyAdditionalChargeBucket().id,
+                  chargeType: 'Insurance',
+                  amount: String(Math.max(0, Number(firstTransport?.insuranceAmount || 0))),
+                  remark: ''
+                }]
+              : [])
+          ]
+    setAdditionalChargeBuckets(nextAdditionalCharges.length > 0 ? nextAdditionalCharges : [createEmptyAdditionalChargeBucket()])
 
     const mappedItems: SalesItem[] = Array.isArray(bill.salesItems)
       ? bill.salesItems.map((item, index) => {
@@ -668,8 +742,9 @@ export default function SalesEntryPage() {
     const loadedComputedGrandTotal = roundCurrency(
       mappedItems.reduce((sum, item) => sum + (item.amount || 0) + (item.gstAmount || 0), 0) +
       Math.max(0, Number(firstTransport?.freightAmount || 0)) +
-      Math.max(0, Number(firstTransport?.otherAmount || 0)) +
-      Math.max(0, Number(firstTransport?.insuranceAmount || 0))
+      (Array.isArray(bill.additionalCharges) && bill.additionalCharges.length > 0
+        ? bill.additionalCharges.reduce((sum, charge) => sum + Math.max(0, Number(charge.amount || 0)), 0)
+        : Math.max(0, Number(firstTransport?.otherAmount || 0)) + Math.max(0, Number(firstTransport?.insuranceAmount || 0)))
     )
     const storedGrandTotal = roundCurrency(Math.max(0, Number(bill.totalAmount || 0)))
     const hasStoredManualOverride = Math.abs(storedGrandTotal - loadedComputedGrandTotal) >= 0.01
@@ -721,7 +796,6 @@ export default function SalesEntryPage() {
 
       setParties(nextParties)
       setTransports(nextTransports)
-      setFilteredTransports(nextTransports)
       setSalesItems(nextSalesItems)
       setAccountingHeads(nextAccountingHeads)
 
@@ -739,7 +813,7 @@ export default function SalesEntryPage() {
           return
         }
 
-        populateFromExistingBill(existingBill, nextSalesItems)
+        populateFromExistingBill(existingBill, nextSalesItems, nextTransports)
         setLoading(false)
         return
       }
@@ -888,7 +962,6 @@ export default function SalesEntryPage() {
       amount: nextPricingMode === 'amount' ? String(item.amount || '') : '',
       pricingMode: nextPricingMode
     })
-    setSalesItemSearchTerm(matchedSalesItem?.salesItemName || item.salesItemName || item.productName || '')
   }
 
   const saveSalesBill = useCallback(async (requestData: Record<string, unknown>) => {
@@ -1020,8 +1093,9 @@ export default function SalesEntryPage() {
         freightAmount: Math.max(0, parseFloat(freightAmount) || 0),
         advance: Math.max(0, parseFloat(advance) || 0),
         toPay: Math.max(0, parseFloat(toPay) || 0),
-        otherAmount: Math.max(0, parseFloat(advanceExpense) || 0),
-        insuranceAmount: Math.max(0, parseFloat(insurance) || 0)
+        otherAmount: extraChargesSummary.otherAmount,
+        insuranceAmount: extraChargesSummary.insuranceAmount,
+        additionalCharges: normalizedAdditionalCharges,
       }
     }
 
@@ -1141,44 +1215,26 @@ export default function SalesEntryPage() {
                         <Label htmlFor="party">Party</Label>
                         <div className="space-y-2">
                           <div className="flex flex-col gap-2 xl:flex-row">
-                            <div className="relative flex-1 party-search-dropdown-container">
-                              <Input
+                            <div className="flex-1">
+                              <SearchableSelect
                                 id="party"
-                                value={partySearchTerm}
-                                onChange={(e) => handlePartySearch(e.target.value)}
-                                onFocus={() => setShowPartyDropdown(true)}
-                                placeholder="Search party name, address, or phone..."
-                                className="pr-10"
+                                value={selectedParty}
+                                onValueChange={handlePartySelect}
+                                options={partyOptions}
+                                placeholder="Search and select party"
+                                searchPlaceholder="Search party name, address, or phone..."
+                                emptyText="No parties found."
                               />
-                              <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                              {showPartyDropdown && (
-                                <div className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-gray-200 bg-white shadow-lg">
-                                  {filteredParties.length > 0 ? (
-                                    filteredParties
-                                      .filter((party, index, self) => !!party?.id && index === self.findIndex((p) => p.id === party.id))
-                                      .map((party) => (
-                                        <div
-                                          key={party.id}
-                                          className="cursor-pointer border-b border-gray-100 px-3 py-2 last:border-b-0 hover:bg-gray-100"
-                                          onClick={() => handlePartySelect(party.id)}
-                                        >
-                                          <div className="font-medium">{party.name}</div>
-                                          {party.address ? (
-                                            <div className="text-sm text-gray-500">{party.address}</div>
-                                          ) : null}
-                                          {party.phone1 ? (
-                                            <div className="text-xs text-gray-500">Phone: {party.phone1}</div>
-                                          ) : null}
-                                        </div>
-                                      ))
-                                  ) : (
-                                    <div className="px-3 py-2 text-sm text-gray-500">
-                                      No parties found.
-                                    </div>
-                                  )}
-                                </div>
-                              )}
                             </div>
+                            {selectedParty ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={handleClearPartySelection}
+                              >
+                                Manual Entry
+                              </Button>
+                            ) : null}
                             <Button
                               type="button"
                               variant="outline"
@@ -1190,20 +1246,9 @@ export default function SalesEntryPage() {
                               WhatsApp Reminder
                             </Button>
                           </div>
-                          <Select value={selectedParty} onValueChange={handlePartySelect}>
-                            <SelectTrigger id="partySelect" className="flex-1">
-                              <SelectValue placeholder="Select Party" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {filteredParties
-                                .filter((party, index, self) => !!party?.id && index === self.findIndex((p) => p.id === party.id))
-                                .map((party, index) => (
-                                <SelectItem key={`${party.id}-${index}`} value={party.id}>
-                                  {party.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <p className="text-xs text-slate-500">
+                            Existing parties search se select karein. Naya party banana ho to manual fields fill karke `Add Party` use karein.
+                          </p>
                         </div>
                       </div>
 
@@ -1324,19 +1369,32 @@ export default function SalesEntryPage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                       <div>
                         <Label htmlFor="transportName">Transport Name</Label>
-                        <div className="relative transport-search-dropdown-container">
+                        <div className="space-y-2">
                           <div className="flex gap-2">
-                            <div className="relative flex-1">
-                              <Input
+                            <div className="flex-1">
+                              <SearchableSelect
                                 id="transportName"
-                                value={transportSearchTerm}
-                                onChange={(e) => handleTransportSearch(e.target.value)}
-                                onFocus={() => setShowTransportDropdown(true)}
-                                placeholder="Type to search transport..."
-                                className="pr-10"
+                                value={selectedTransportId}
+                                onValueChange={handleTransportSelect}
+                                options={transportOptions}
+                                placeholder="Search and select transport"
+                                searchPlaceholder="Search transport name or vehicle..."
+                                emptyText="No transport found."
                               />
-                              <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                             </div>
+                            {selectedTransportId ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setSelectedTransportId('')
+                                  setTransportName('')
+                                }}
+                              >
+                                Clear
+                              </Button>
+                            ) : null}
                             <Button
                               type="button"
                               variant="outline"
@@ -1348,29 +1406,14 @@ export default function SalesEntryPage() {
                               Add New
                             </Button>
                           </div>
-                          
-                          {showTransportDropdown && (
-                            <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
-                              {filteredTransports.length > 0 ? (
-                                filteredTransports.map((transport) => (
-                                  <div
-                                    key={transport.id}
-                                    className="px-3 py-2 hover:bg-gray-100 cursor-pointer border-b border-gray-100 last:border-b-0"
-                                    onClick={() => handleTransportSelect(transport)}
-                                  >
-                                    <div className="font-medium">{transport.transporterName || 'No Name'}</div>
-                                    {transport.vehicleNumber && (
-                                      <div className="text-sm text-gray-500">Vehicle: {transport.vehicleNumber}</div>
-                                    )}
-                                  </div>
-                                ))
-                              ) : (
-                                <div className="px-3 py-2 text-gray-500 text-sm">
-                                  No transports found. Click Add New to create one.
-                                </div>
-                              )}
-                            </div>
-                          )}
+                          <p className="text-xs text-slate-500">
+                            Transport master se select karne par name auto-fill hota hai. Lorry number aap yahan adjust kar sakte hain.
+                          </p>
+                          {selectedTransportRecord?.vehicleNumber ? (
+                            <p className="text-xs text-slate-500">
+                              Master vehicle: {selectedTransportRecord.vehicleNumber}
+                            </p>
+                          ) : null}
                         </div>
                       </div>
                       <div>
@@ -1452,62 +1495,24 @@ export default function SalesEntryPage() {
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-4">
                         <div className="lg:col-span-2">
                           <Label htmlFor="itemProduct">Sales Items</Label>
-                          <div className="relative mb-2 sales-item-search-dropdown-container">
-                            <Input
-                              id="itemProduct"
-                              value={salesItemSearchTerm}
-                              onChange={(e) => handleSalesItemSearch(e.target.value)}
-                              onFocus={() => setShowSalesItemDropdown(true)}
-                              placeholder="Search sales item or product..."
-                              className="pr-10"
-                            />
-                            <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                            {showSalesItemDropdown && (
-                              <div className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-gray-200 bg-white shadow-lg">
-                                {filteredSalesItems.length > 0 ? (
-                                  filteredSalesItems.map((salesItem) => (
-                                    <div
-                                      key={salesItem.id}
-                                      className="cursor-pointer border-b border-gray-100 px-3 py-2 last:border-b-0 hover:bg-gray-100"
-                                      onClick={() => handleSalesItemSelect(salesItem.id)}
-                                    >
-                                      <div className="font-medium">{salesItem.salesItemName}</div>
-                                      <div className="text-sm text-gray-500">
-                                        {salesItem.product?.name || 'No product'}
-                                      </div>
-                                    </div>
-                                  ))
-                                ) : (
-                                  <div className="px-3 py-2 text-sm text-gray-500">
-                                    No sales items found.
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                          <Select value={currentItem.salesItemId} onValueChange={handleSalesItemSelect}>
-                            <SelectTrigger id="itemProductSelect">
-                              <SelectValue placeholder="Select Sales Item" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {filteredSalesItems.length > 0 ? (
-                                filteredSalesItems.map((salesItem) => (
-                                  <SelectItem key={salesItem.id} value={salesItem.id}>
-                                    {salesItem.salesItemName} ({salesItem.product?.name || 'No product'})
-                                  </SelectItem>
-                                ))
-                              ) : (
-                                <div className="px-3 py-2 text-sm text-gray-500">
-                                  No Sales Item Master data found.
-                                </div>
-                              )}
-                            </SelectContent>
-                          </Select>
+                          <SearchableSelect
+                            id="itemProduct"
+                            value={currentItem.salesItemId}
+                            onValueChange={handleSalesItemSelect}
+                            options={salesItemOptions}
+                            placeholder="Search and select sales item"
+                            searchPlaceholder="Search sales item or product..."
+                            emptyText="No sales items found."
+                          />
                           {salesItems.length === 0 ? (
                             <p className="mt-1 text-xs text-gray-500">
                               Add entries in Master &gt; Sales Item to continue.
                             </p>
-                          ) : null}
+                          ) : (
+                            <p className="mt-1 text-xs text-slate-500">
+                              Search by sales item name or product name.
+                            </p>
+                          )}
                         </div>
                         <div>
                           <Label htmlFor="noOfBags">No. of Bags</Label>
@@ -1676,48 +1681,123 @@ export default function SalesEntryPage() {
                 {/* Section 4 - Additional Charges */}
                 <div className="mt-2">
                   <h3 className="text-lg font-semibold mb-2 pb-2 border-b">4. Additional Charges</h3>
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-                    <div>
+                  <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_2.1fr_0.9fr]">
+                    <div className="rounded-lg border bg-slate-50 p-4">
                       <Label htmlFor="freightAmountTotal">Freight Amount</Label>
                       <Input
                         id="freightAmountTotal"
                         value={freightTotal.toFixed(2)}
                         readOnly
-                        className="bg-gray-100"
+                        className="mt-2 bg-gray-100"
                       />
+                      <p className="mt-2 text-xs text-slate-500">
+                        Freight transport section se aata hai aur yahan summary ke liye dikh raha hai.
+                      </p>
                     </div>
-                    <div>
-                      <Label htmlFor="advanceExpense">Other Amount</Label>
-                      <Input
-                        id="advanceExpense"
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={advanceExpense}
-                        onChange={(e) => setAdvanceExpense(toNonNegative(e.target.value))}
-                        placeholder="Enter other amount"
-                      />
+                    <div className="rounded-lg border p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">Charge Buckets</p>
+                          <p className="text-xs text-slate-500">
+                            Type, amount, and remark ke saath multiple extra charges add karein.
+                          </p>
+                        </div>
+                        <Button type="button" variant="outline" onClick={handleAddAdditionalChargeRow}>
+                          Add Charge
+                        </Button>
+                      </div>
+
+                      <div className="mt-4 space-y-3">
+                        {additionalChargeBuckets.map((bucket, index) => (
+                          <div
+                            key={bucket.id}
+                            className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-[1.3fr_0.8fr_1.3fr_auto]"
+                          >
+                            <div>
+                              <Label htmlFor={`additional-charge-type-${bucket.id}`}>Type</Label>
+                              <SearchableSelect
+                                id={`additional-charge-type-${bucket.id}`}
+                                value={bucket.chargeType}
+                                onValueChange={(value) => handleAdditionalChargeRowChange(bucket.id, 'chargeType', value)}
+                                options={additionalChargeTypeOptions}
+                                placeholder="Search charge type"
+                                searchPlaceholder="Search charge type..."
+                                emptyText="No charge type found."
+                              />
+                            </div>
+                            <div>
+                              <Label htmlFor={`additional-charge-amount-${bucket.id}`}>Amount</Label>
+                              <Input
+                                id={`additional-charge-amount-${bucket.id}`}
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={bucket.amount}
+                                onChange={(e) => handleAdditionalChargeRowChange(bucket.id, 'amount', e.target.value)}
+                                placeholder="0.00"
+                              />
+                            </div>
+                            <div>
+                              <Label htmlFor={`additional-charge-remark-${bucket.id}`}>Remark</Label>
+                              <Input
+                                id={`additional-charge-remark-${bucket.id}`}
+                                value={bucket.remark}
+                                onChange={(e) => handleAdditionalChargeRowChange(bucket.id, 'remark', e.target.value)}
+                                placeholder="Enter remark"
+                              />
+                            </div>
+                            <div className="flex items-end justify-end">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleRemoveAdditionalChargeRow(bucket.id)}
+                                disabled={additionalChargeBuckets.length === 1 && index === 0 && !bucket.chargeType && !bucket.amount && !bucket.remark}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {normalizedAdditionalCharges.length > 0 ? (
+                        <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-white p-3">
+                          <p className="text-sm font-semibold text-slate-900">Charge Preview</p>
+                          <div className="mt-2 space-y-2 text-sm text-slate-600">
+                            {normalizedAdditionalCharges.map((charge, index) => (
+                              <div key={`${charge.chargeType}-${index}`} className="flex items-center justify-between gap-4">
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium text-slate-900">{charge.chargeType}</p>
+                                  {charge.remark ? (
+                                    <p className="truncate text-xs text-slate-500">{charge.remark}</p>
+                                  ) : null}
+                                </div>
+                                <span className="font-semibold text-slate-900">₹{charge.amount.toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
-                    <div>
-                      <Label htmlFor="insurance">Insurance</Label>
-                      <Input
-                        id="insurance"
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={insurance}
-                        onChange={(e) => setInsurance(toNonNegative(e.target.value))}
-                        placeholder="Enter insurance amount"
-                      />
-                    </div>
-                    <div>
+                    <div className="rounded-lg border bg-slate-50 p-4">
                       <Label htmlFor="additionalTotal">Additional Total</Label>
                       <Input
                         id="additionalTotal"
                         value={additionalTotal.toFixed(2)}
                         readOnly
-                        className="bg-gray-100"
+                        className="mt-2 bg-gray-100"
                       />
+                      <div className="mt-3 space-y-2 text-sm text-slate-600">
+                        <div className="flex items-center justify-between">
+                          <span>Freight</span>
+                          <span>₹{freightTotal.toFixed(2)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span>Charge Buckets</span>
+                          <span>₹{extraChargesTotal.toFixed(2)}</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1768,7 +1848,7 @@ export default function SalesEntryPage() {
                           <span>₹{freightTotal.toFixed(2)}</span>
                         </div>
                         <div className="flex items-center justify-between">
-                          <span>Other + insurance</span>
+                          <span>Additional charges</span>
                           <span>₹{extraChargesTotal.toFixed(2)}</span>
                         </div>
                         <div className="flex items-center justify-between">

@@ -1,4 +1,8 @@
 import { sanitizePrintCompanyAddress } from '@/lib/print-company'
+import {
+  summarizeSalesAdditionalCharges,
+  type SalesAdditionalChargeInput,
+} from '@/lib/sales-additional-charges'
 
 export interface SalesPrintItem {
   id: string
@@ -34,6 +38,12 @@ export interface SalesBillPrintData {
   toPay: number
   otherAmount: number
   insuranceAmount: number
+  additionalCharges: Array<{
+    chargeType: string
+    amount: number
+    remark: string | null
+  }>
+  additionalChargesTotal: number
   items: SalesPrintItem[]
   totalBags: number
   totalWeightQt: number
@@ -80,6 +90,8 @@ type SalesPrintPartySource = {
   phone1?: unknown
 }
 
+type SalesPrintAdditionalChargeSource = SalesAdditionalChargeInput
+
 type SalesPrintCompanySource = {
   name?: unknown
   address?: unknown
@@ -94,6 +106,7 @@ type SalesBillPrintSource = {
   party?: SalesPrintPartySource | null
   salesItems?: SalesPrintItemSource[] | null
   transportBills?: SalesPrintTransportSource[] | null
+  additionalCharges?: SalesPrintAdditionalChargeSource[] | null
   subTotalAmount?: unknown
   gstAmount?: unknown
   totalAmount?: unknown
@@ -156,9 +169,41 @@ function mapSalesItems(items: SalesPrintItemSource[] | null | undefined): SalesP
   })
 }
 
+function mapAdditionalCharges(
+  charges: SalesPrintAdditionalChargeSource[] | null | undefined,
+  fallbackTransport: SalesPrintTransportSource | null | undefined
+) {
+  if (Array.isArray(charges) && charges.length > 0) {
+    return charges
+      .map((charge) => ({
+        chargeType: String(charge?.chargeType || '').trim(),
+        amount: toNonNegativeNumber(charge?.amount, 0),
+        remark: charge?.remark == null ? null : String(charge.remark).trim() || null,
+      }))
+      .filter((charge) => charge.chargeType && charge.amount > 0)
+  }
+
+  const legacyCharges = [
+    {
+      chargeType: 'Other Amount',
+      amount: toNonNegativeNumber(fallbackTransport?.otherAmount, 0),
+      remark: null,
+    },
+    {
+      chargeType: 'Insurance',
+      amount: toNonNegativeNumber(fallbackTransport?.insuranceAmount, 0),
+      remark: null,
+    },
+  ]
+
+  return legacyCharges.filter((charge) => charge.amount > 0)
+}
+
 export function mapSalesBillToPrintData(bill: SalesBillPrintSource | null | undefined): SalesBillPrintData {
   const items = mapSalesItems(bill?.salesItems)
   const primaryTransport = Array.isArray(bill?.transportBills) ? bill.transportBills[0] : null
+  const additionalCharges = mapAdditionalCharges(bill?.additionalCharges, primaryTransport)
+  const additionalChargeSummary = summarizeSalesAdditionalCharges(additionalCharges)
   const totalBags = items.reduce((sum, item) => sum + item.bags, 0)
   const totalWeightQt = items.reduce((sum, item) => sum + item.totalWeightQt, 0)
 
@@ -180,8 +225,10 @@ export function mapSalesBillToPrintData(bill: SalesBillPrintSource | null | unde
     freightAmount: toNonNegativeNumber(primaryTransport?.freightAmount, 0),
     advance: toNonNegativeNumber(primaryTransport?.advance, 0),
     toPay: toNonNegativeNumber(primaryTransport?.toPay, 0),
-    otherAmount: toNonNegativeNumber(primaryTransport?.otherAmount, 0),
-    insuranceAmount: toNonNegativeNumber(primaryTransport?.insuranceAmount, 0),
+    otherAmount: additionalChargeSummary.otherAmount,
+    insuranceAmount: additionalChargeSummary.insuranceAmount,
+    additionalCharges,
+    additionalChargesTotal: additionalChargeSummary.totalAmount,
     items,
     totalBags,
     totalWeightQt,

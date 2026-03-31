@@ -16,8 +16,22 @@ type MandiTypeRow = {
   name: string
   description?: string | null
   isActive: boolean
+  linkedPartyCount?: number
+  linkedFarmerCount?: number
+  linkedAccountingHeadCount?: number
+  linkedBillChargeCount?: number
+  totalLinkedCount?: number
   createdAt: string
   updatedAt: string
+}
+
+function formatLinkageSummary(row: MandiTypeRow): string {
+  const parts: string[] = []
+  if ((row.linkedPartyCount || 0) > 0) parts.push(`${row.linkedPartyCount} Parties`)
+  if ((row.linkedFarmerCount || 0) > 0) parts.push(`${row.linkedFarmerCount} Farmers`)
+  if ((row.linkedAccountingHeadCount || 0) > 0) parts.push(`${row.linkedAccountingHeadCount} Accounting Heads`)
+  if ((row.linkedBillChargeCount || 0) > 0) parts.push(`${row.linkedBillChargeCount} Bill Charges`)
+  return parts.length > 0 ? parts.join(' | ') : 'No active links'
 }
 
 export default function MandiTypeMasterPage() {
@@ -141,7 +155,17 @@ export default function MandiTypeMasterPage() {
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase()
     if (!query) return rows
-    return rows.filter((row) => [row.name, row.description || '', row.isActive ? 'active' : 'inactive'].join(' ').toLowerCase().includes(query))
+    return rows.filter((row) =>
+      [
+        row.name,
+        row.description || '',
+        row.isActive ? 'active' : 'inactive',
+        formatLinkageSummary(row)
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(query)
+    )
   }, [rows, search])
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -346,6 +370,7 @@ export default function MandiTypeMasterPage() {
                       <TableHead>Name</TableHead>
                       <TableHead>Description</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Linked Usage</TableHead>
                       <TableHead>Updated</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
@@ -353,13 +378,13 @@ export default function MandiTypeMasterPage() {
                   <TableBody>
                     {!canRead ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center text-slate-500">
+                        <TableCell colSpan={6} className="text-center text-slate-500">
                           No access to view mandi types.
                         </TableCell>
                       </TableRow>
                     ) : filteredRows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center text-slate-500">
+                        <TableCell colSpan={6} className="text-center text-slate-500">
                           No mandi types found.
                         </TableCell>
                       </TableRow>
@@ -369,6 +394,7 @@ export default function MandiTypeMasterPage() {
                           <TableCell className="font-medium">{row.name}</TableCell>
                           <TableCell>{row.description || '-'}</TableCell>
                           <TableCell>{row.isActive ? 'Active' : 'Inactive'}</TableCell>
+                          <TableCell>{formatLinkageSummary(row)}</TableCell>
                           <TableCell>{new Date(row.updatedAt).toLocaleDateString()}</TableCell>
                           <TableCell>
                             {canWrite ? (
@@ -376,7 +402,17 @@ export default function MandiTypeMasterPage() {
                                 <Button size="sm" variant="outline" onClick={() => handleEdit(row)}>
                                   <Edit className="h-4 w-4" />
                                 </Button>
-                                <Button size="sm" variant="destructive" onClick={() => handleDelete(row.id)}>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => handleDelete(row.id)}
+                                  disabled={(row.totalLinkedCount || 0) > 0}
+                                  title={
+                                    (row.totalLinkedCount || 0) > 0
+                                      ? 'This mandi type is linked to existing records and cannot be deleted'
+                                      : 'Delete mandi type'
+                                  }
+                                >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                               </div>

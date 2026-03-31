@@ -280,6 +280,10 @@ function PaymentPageContent() {
                 <Plus className="w-4 h-4 mr-2" />
                 Record Payment
               </Button>
+              <Button variant="outline" onClick={() => router.push('/payment/journal-voucher/entry')}>
+                <Plus className="w-4 h-4 mr-2" />
+                Journal Voucher
+              </Button>
               <Button variant="outline" onClick={() => router.push('/main/dashboard')}>
                 Back to Dashboard
               </Button>

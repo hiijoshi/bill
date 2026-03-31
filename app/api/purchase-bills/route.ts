@@ -17,6 +17,7 @@ import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 import { calculateTaxBreakdown } from '@/lib/billing-calculations'
 import { calculateBillMandiCharges, syncBillChargesAndLedger } from '@/lib/mandi-billing'
 import { ensureMandiSchema } from '@/lib/mandi-schema'
+import { assertMandiTypeBelongsToCompany, normalizeOptionalMandiTypeId } from '@/lib/mandi-type-utils'
 import { buildPurchasePaymentSyncNote } from '@/lib/purchase-payment-sync'
 
 type PaymentStatus = 'unpaid' | 'partial' | 'paid'
@@ -220,6 +221,20 @@ export async function POST(request: NextRequest) {
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
+    const hasMandiTypeField = Object.prototype.hasOwnProperty.call(body, 'mandiTypeId')
+    let normalizedMandiTypeId: string | null = null
+    if (hasMandiTypeField) {
+      try {
+        normalizedMandiTypeId = await assertMandiTypeBelongsToCompany(
+          prisma,
+          companyId,
+          normalizeOptionalMandiTypeId(body.mandiTypeId)
+        )
+      } catch (error) {
+        return NextResponse.json({ error: error instanceof Error ? error.message : 'Invalid mandi type' }, { status: 400 })
+      }
+    }
+
     const normalizedBillNumber = parseBillNumber(billNumber ?? billNo)
     if (normalizedBillNumber instanceof NextResponse) return normalizedBillNumber
 
@@ -294,6 +309,25 @@ export async function POST(request: NextRequest) {
             krashakAnubandhNumber: krashakAnubandhNumber || farmer.krashakAnubandhNumber
           }
         })
+      }
+
+      if (hasMandiTypeField) {
+        if (normalizedMandiTypeId) {
+          await tx.farmerMandiProfile.upsert({
+            where: { farmerId: farmer.id },
+            create: {
+              farmerId: farmer.id,
+              mandiTypeId: normalizedMandiTypeId
+            },
+            update: {
+              mandiTypeId: normalizedMandiTypeId
+            }
+          })
+        } else {
+          await tx.farmerMandiProfile.deleteMany({
+            where: { farmerId: farmer.id }
+          })
+        }
       }
 
       const tax = calculateTaxBreakdown(parsedPayable, product.gstRate)
@@ -596,6 +630,20 @@ export async function PUT(request: NextRequest) {
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
+    const hasMandiTypeField = Object.prototype.hasOwnProperty.call(body, 'mandiTypeId')
+    let normalizedMandiTypeId: string | null = null
+    if (hasMandiTypeField) {
+      try {
+        normalizedMandiTypeId = await assertMandiTypeBelongsToCompany(
+          prisma,
+          companyId,
+          normalizeOptionalMandiTypeId(body.mandiTypeId)
+        )
+      } catch (error) {
+        return NextResponse.json({ error: error instanceof Error ? error.message : 'Invalid mandi type' }, { status: 400 })
+      }
+    }
+
     const normalizedBillNumber = parseBillNumber(billNumber ?? billNo)
     if (normalizedBillNumber instanceof NextResponse) return normalizedBillNumber
 
@@ -694,6 +742,25 @@ export async function PUT(request: NextRequest) {
             krashakAnubandhNumber: krashakAnubandhNumber || farmer.krashakAnubandhNumber
           }
         })
+      }
+
+      if (hasMandiTypeField) {
+        if (normalizedMandiTypeId) {
+          await tx.farmerMandiProfile.upsert({
+            where: { farmerId: farmer.id },
+            create: {
+              farmerId: farmer.id,
+              mandiTypeId: normalizedMandiTypeId
+            },
+            update: {
+              mandiTypeId: normalizedMandiTypeId
+            }
+          })
+        } else {
+          await tx.farmerMandiProfile.deleteMany({
+            where: { farmerId: farmer.id }
+          })
+        }
       }
 
       const tax = calculateTaxBreakdown(parsedPayable, product.gstRate)

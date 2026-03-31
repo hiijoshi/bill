@@ -67,6 +67,7 @@ interface RegularPurchaseBill {
   id: string
   billNo: string
   billDate: string
+  markaNo?: string | null
   totalAmount: number
   paidAmount: number
   balanceAmount: number
@@ -96,6 +97,7 @@ interface RawRegularPurchaseBill {
   id?: unknown
   billNo?: unknown
   billDate?: unknown
+  markaNo?: unknown
   totalAmount?: unknown
   paidAmount?: unknown
   balanceAmount?: unknown
@@ -194,12 +196,22 @@ function getRegularAnubandh(bill: RegularPurchaseBill): string {
   return String(bill.krashakAnubandhSnapshot || bill.farmer?.krashakAnubandhNumber || '')
 }
 
+function getBillMarka(bill: PurchaseBill): string {
+  if (bill.type !== 'regular') return ''
+  return String(bill.markaNo || '')
+}
+
+function getBillSelectionKey(bill: PurchaseBill): string {
+  return `${bill.type}:${bill.id}`
+}
+
 export default function PurchaseListPage() {
   const router = useRouter()
   const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>([])
   const [loading, setLoading] = useState(true)
   const [companyId, setCompanyId] = useState('')
   const [billView, setBillView] = useState<BillViewTab>('active')
+  const [selectedBillKeys, setSelectedBillKeys] = useState<string[]>([])
 
   // Filter states
   const [billNumber, setBillNumber] = useState('')
@@ -211,6 +223,7 @@ export default function PurchaseListPage() {
   const [rate, setRate] = useState('')
   const [registrationNumber, setRegistrationNumber] = useState('')
   const [payable, setPayable] = useState('')
+  const [markaNumber, setMarkaNumber] = useState('')
   const [purchaseType, setPurchaseType] = useState<PurchaseTypeFilter>('all')
 
   const fetchPurchaseBills = useCallback(async (isCancelled: () => boolean = () => false) => {
@@ -271,6 +284,7 @@ export default function PurchaseListPage() {
           id: String(bill.id || ''),
           billNo: String(bill.billNo || ''),
           billDate: String(bill.billDate || ''),
+          markaNo: typeof bill.markaNo === 'string' ? bill.markaNo : null,
           ...normalized,
           farmer: bill.farmer || null,
           farmerNameSnapshot: bill.farmerNameSnapshot || null,
@@ -432,6 +446,11 @@ export default function PurchaseListPage() {
       })
     }
 
+    if (markaNumber) {
+      const normalizedMarka = normalizeFilterText(markaNumber)
+      filtered = filtered.filter((bill) => normalizeFilterText(getBillMarka(bill)).includes(normalizedMarka))
+    }
+
     if (payable) {
       filtered = filtered.filter(bill => bill.totalAmount.toString().includes(payable))
     }
@@ -451,6 +470,22 @@ export default function PurchaseListPage() {
           ? filteredBills
           : activeBills
 
+  const selectedBillKeySet = new Set(selectedBillKeys)
+  const visibleBillKeySet = new Set(visibleBills.map((bill) => getBillSelectionKey(bill)))
+  const selectedVisibleBillCount = visibleBills.reduce(
+    (count, bill) => count + (selectedBillKeySet.has(getBillSelectionKey(bill)) ? 1 : 0),
+    0
+  )
+  const allVisibleSelected =
+    visibleBills.length > 0 && visibleBills.every((bill) => selectedBillKeySet.has(getBillSelectionKey(bill)))
+
+  useEffect(() => {
+    setSelectedBillKeys((current) => {
+      const next = current.filter((key) => visibleBillKeySet.has(key))
+      return next.length === current.length ? current : next
+    })
+  }, [visibleBills])
+
   const clearFilters = () => {
     setBillNumber('')
     setPartyName('')
@@ -461,6 +496,7 @@ export default function PurchaseListPage() {
     setRate('')
     setRegistrationNumber('')
     setPayable('')
+    setMarkaNumber('')
     setPurchaseType('all')
   }
 
@@ -568,6 +604,47 @@ export default function PurchaseListPage() {
     router.push(specialPrintPath)
   }
 
+  const handleToggleBillSelection = (bill: PurchaseBill) => {
+    const key = getBillSelectionKey(bill)
+    setSelectedBillKeys((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
+    )
+  }
+
+  const handleToggleSelectAllVisible = () => {
+    if (allVisibleSelected) {
+      setSelectedBillKeys((current) => current.filter((key) => !visibleBillKeySet.has(key)))
+      return
+    }
+
+    setSelectedBillKeys((current) => {
+      const next = new Set(current)
+      for (const bill of visibleBills) {
+        next.add(getBillSelectionKey(bill))
+      }
+      return Array.from(next)
+    })
+  }
+
+  const handleBulkPrint = () => {
+    const selectedBills = visibleBills.filter((bill) => selectedBillKeySet.has(getBillSelectionKey(bill)))
+    if (selectedBills.length === 0) {
+      alert('Select at least one purchase bill to bulk print')
+      return
+    }
+
+    const params = new URLSearchParams()
+    if (companyId) {
+      params.set('companyId', companyId)
+    }
+
+    for (const bill of selectedBills) {
+      params.append('selected', getBillSelectionKey(bill))
+    }
+
+    router.push(`/purchase/bulk-print?${params.toString()}`)
+  }
+
   const getBillWeightQt = (bill: PurchaseBill) => {
     if (bill.type === 'regular') {
       return bill.purchaseItems.reduce((sum, item) => sum + Number(item.qty || 0), 0)
@@ -623,6 +700,7 @@ export default function PurchaseListPage() {
         'Party Name',
         'Party Address',
         'Krashak Anubandh Number',
+        'Marka',
         'Bags',
         'Weight (Qt)',
         'Rate',
@@ -638,6 +716,7 @@ export default function PurchaseListPage() {
         bill.type === 'regular' ? getRegularFarmerName(bill) : bill.supplier.name,
         bill.type === 'regular' ? getRegularFarmerAddress(bill) : bill.supplier.address,
         bill.type === 'regular' ? getRegularAnubandh(bill) : bill.supplier.gstNumber,
+        getBillMarka(bill),
         getBillBags(bill).toFixed(0),
         getBillWeightQt(bill).toFixed(2),
         getBillRate(bill).toFixed(2),
@@ -671,6 +750,7 @@ export default function PurchaseListPage() {
           <td>${billNo}</td>
           <td>${new Date(bill.billDate).toLocaleDateString()}</td>
           <td>${partyName}</td>
+          <td>${getBillMarka(bill)}</td>
           <td style="text-align:right">${getBillBags(bill).toFixed(0)}</td>
           <td style="text-align:right">${getBillWeightQt(bill).toFixed(2)}</td>
           <td style="text-align:right">${getBillRate(bill).toFixed(2)}</td>
@@ -700,7 +780,7 @@ export default function PurchaseListPage() {
     <table>
       <thead>
         <tr>
-          <th>Type</th><th>Bill</th><th>Date</th><th>Party</th><th>Bags</th><th>Weight (Qt)</th><th>Rate</th><th>Payable</th><th>Paid</th><th>Balance</th><th>Status</th>
+          <th>Type</th><th>Bill</th><th>Date</th><th>Party</th><th>Marka</th><th>Bags</th><th>Weight (Qt)</th><th>Rate</th><th>Payable</th><th>Paid</th><th>Balance</th><th>Status</th>
         </tr>
       </thead>
       <tbody>${bodyRows}</tbody>
@@ -840,8 +920,17 @@ export default function PurchaseListPage() {
                   placeholder="Enter payable amount"
                 />
               </div>
+              <div>
+                <Label htmlFor="markaNumber">Marka Filter</Label>
+                <Input
+                  id="markaNumber"
+                  value={markaNumber}
+                  onChange={(e) => setMarkaNumber(e.target.value.toUpperCase())}
+                  placeholder="Filter by marka"
+                />
+              </div>
             </div>
-            <div className="flex gap-2 mt-4">
+            <div className="mt-4 flex flex-wrap items-center gap-2">
               <Button onClick={handleAutoFilters}>Auto</Button>
               <Button variant="outline" onClick={clearFilters}>Clear</Button>
               <Button variant="outline" onClick={exportToExcel}>
@@ -852,6 +941,13 @@ export default function PurchaseListPage() {
                 <FileText className="w-4 h-4 mr-2" />
                 PDF
               </Button>
+              <Button onClick={handleBulkPrint} disabled={selectedVisibleBillCount === 0}>
+                <Printer className="mr-2 h-4 w-4" />
+                Bulk Print / PDF
+              </Button>
+              <span className="text-sm text-slate-600">
+                {selectedVisibleBillCount} selected
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -880,16 +976,44 @@ export default function PurchaseListPage() {
             </div>
           </CardHeader>
           <CardContent>
+            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="text-sm text-slate-600">
+                {selectedVisibleBillCount} selected from current list
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={handleToggleSelectAllVisible}
+                  disabled={visibleBills.length === 0}
+                >
+                  {allVisibleSelected ? 'Clear Visible Selection' : 'Select All Visible'}
+                </Button>
+                <Button onClick={handleBulkPrint} disabled={selectedVisibleBillCount === 0}>
+                  <Printer className="mr-2 h-4 w-4" />
+                  Bulk Print / PDF
+                </Button>
+              </div>
+            </div>
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-12">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        onChange={handleToggleSelectAllVisible}
+                        aria-label="Select all visible purchase bills"
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                    </TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Bill/Invoice No</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Party Name</TableHead>
                     <TableHead>Party Address</TableHead>
                     <TableHead>Krashak Anubandh Number</TableHead>
+                    <TableHead>Marka</TableHead>
                     <TableHead>Bags</TableHead>
                     <TableHead>Weight</TableHead>
                     <TableHead>Rate</TableHead>
@@ -903,13 +1027,22 @@ export default function PurchaseListPage() {
                 <TableBody>
                   {visibleBills.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={14} className="py-8 text-center text-gray-500">
+                      <TableCell colSpan={16} className="py-8 text-center text-gray-500">
                         No bills found in this tab.
                       </TableCell>
                     </TableRow>
                   ) : (
                     visibleBills.map((bill) => (
                       <TableRow key={bill.id}>
+                        <TableCell>
+                          <input
+                            type="checkbox"
+                            checked={selectedBillKeySet.has(getBillSelectionKey(bill))}
+                            onChange={() => handleToggleBillSelection(bill)}
+                            aria-label={`Select purchase bill ${bill.type === 'regular' ? bill.billNo : bill.supplierInvoiceNo}`}
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                        </TableCell>
                         <TableCell>
                           <Badge variant={bill.type === 'regular' ? 'default' : 'secondary'}>
                             {bill.type === 'regular' ? 'Farmer' : 'Supplier'}
@@ -931,6 +1064,7 @@ export default function PurchaseListPage() {
                             : bill.supplier.gstNumber
                           }
                         </TableCell>
+                        <TableCell>{getBillMarka(bill) || '-'}</TableCell>
                         <TableCell>
                           {getBillBags(bill).toFixed(0)}
                         </TableCell>

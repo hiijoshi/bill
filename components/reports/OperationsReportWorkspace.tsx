@@ -120,6 +120,7 @@ type BankLedgerRow = {
   refNo: string
   partyName: string
   bankName: string
+  bankFilterValues?: string[]
   mode: string
   amountIn: number
   amountOut: number
@@ -727,6 +728,12 @@ export default function OperationsReportWorkspace({
   const parties = useMemo(() => reportData?.parties || [], [reportData?.parties])
   const bankOptions = reportData?.filterOptions?.banks || []
 
+  useEffect(() => {
+    if (bankFilter === 'all') return
+    if (bankOptions.includes(bankFilter)) return
+    setBankFilter('all')
+  }, [bankFilter, bankOptions])
+
   const filteredOutstanding = useMemo(() => {
     const query = searchTerm.trim().toLowerCase()
     const rows = (reportData?.outstanding || []).filter((row) => {
@@ -862,7 +869,11 @@ export default function OperationsReportWorkspace({
   const filteredBankLedger = useMemo(() => {
     const query = searchTerm.trim().toLowerCase()
     return (reportData?.bankLedger || []).filter((row) => {
-      if (bankFilter !== 'all' && row.bankName !== bankFilter) return false
+      const rowBankFilters =
+        Array.isArray(row.bankFilterValues) && row.bankFilterValues.length > 0
+          ? row.bankFilterValues
+          : [row.bankName].filter(Boolean)
+      if (bankFilter !== 'all' && !rowBankFilters.includes(bankFilter)) return false
       if (bankDirectionFilter !== 'all' && row.direction.toLowerCase() !== bankDirectionFilter) return false
       if (!query) return true
       return (

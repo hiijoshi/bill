@@ -261,6 +261,10 @@ export default function PaymentTab({
             <Plus className="w-4 h-4 mr-2" />
             Cash / Bank Payment
           </Button>
+          <Button onClick={() => router.push('/payment/journal-voucher/entry')}>
+            <Plus className="w-4 h-4 mr-2" />
+            Journal Voucher
+          </Button>
           <Button onClick={() => router.push('/payment/bank-statement/upload')}>
             <Upload className="w-4 h-4 mr-2" />
             Upload Bank Statement

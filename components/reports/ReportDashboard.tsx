@@ -326,11 +326,11 @@ const csvEscape = (value: string | number): string => `"${String(value ?? '').re
 
 const getHeaderLabel = (header: CsvHeader, reportType: ReportType): string => {
   const labels: Record<CsvHeader, string> = {
-    Party_Type: reportType === 'sales' ? 'Party Type' : 'Party Type',
+    Party_Type: reportType === 'sales' ? 'Party Type' : 'Farmer / Supplier Type',
     Bill_No: reportType === 'sales' ? 'Invoice No' : 'Bill / Invoice No',
-    Seller_Name: reportType === 'sales' ? 'Party Name' : 'Seller / Party Name',
-    Seller_Address: reportType === 'sales' ? 'Party Address' : 'Address',
-    SellerMob: reportType === 'sales' ? 'Party Mobile' : 'Mobile',
+    Seller_Name: reportType === 'sales' ? 'Party Name' : 'Farmer / Supplier Name',
+    Seller_Address: reportType === 'sales' ? 'Party Address' : 'Farmer / Supplier Address',
+    SellerMob: reportType === 'sales' ? 'Party Mobile' : 'Farmer / Supplier Mobile',
     Anubandh_No: reportType === 'sales' ? 'Reference No' : 'Anubandh / Ref No',
     Anubandh_Date: reportType === 'sales' ? 'Invoice Date' : 'Bill Date',
     Bhugtan_No: 'Payment Ref No',
@@ -1257,8 +1257,11 @@ export default function ReportDashboard({
         ? 'See total sales, received amount, pending amount, and collection details.'
         : 'See purchase, sales, paid, received, and pending amounts in one place.'
 
-  const searchLabel = reportType === 'sales' ? 'Search Party' : 'Search Seller'
-  const searchPlaceholder = reportType === 'sales' ? 'Party / Mobile / Invoice / Payment Ref' : 'Seller / Mobile / Anubandh'
+  const searchLabel = reportType === 'sales' ? 'Search Party' : 'Search Farmer / Supplier'
+  const searchPlaceholder =
+    reportType === 'sales'
+      ? 'Party / Mobile / Invoice / Payment Ref'
+      : 'Farmer / Supplier / Mobile / Anubandh'
   const surfaceCardClass = 'rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]'
   const mutedPillClass = 'rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-600'
 

@@ -239,6 +239,7 @@ export default function SalesListPage() {
   const [loading, setLoading] = useState(true)
   const [companyId, setCompanyId] = useState('')
   const [billView, setBillView] = useState<BillViewTab>('active')
+  const [selectedBillIds, setSelectedBillIds] = useState<string[]>([])
 
   // Filter states
   const [invoiceNumber, setInvoiceNumber] = useState('')
@@ -383,6 +384,20 @@ export default function SalesListPage() {
     return activeBills
   }, [activeBills, billView, cancelledBills, filteredBills, paidBills])
 
+  const visibleBillIdSet = useMemo(() => new Set(visibleBills.map((bill) => bill.id)), [visibleBills])
+  const selectedVisibleBillCount = useMemo(
+    () => visibleBills.reduce((count, bill) => count + (selectedBillIds.includes(bill.id) ? 1 : 0), 0),
+    [selectedBillIds, visibleBills]
+  )
+  const allVisibleSelected = visibleBills.length > 0 && visibleBills.every((bill) => selectedBillIds.includes(bill.id))
+
+  useEffect(() => {
+    setSelectedBillIds((current) => {
+      const next = current.filter((billId) => visibleBillIdSet.has(billId))
+      return next.length === current.length ? current : next
+    })
+  }, [visibleBillIdSet])
+
   const clearFilters = () => {
     setInvoiceNumber('')
     setPartyName('')
@@ -470,6 +485,47 @@ export default function SalesListPage() {
       ? `/sales/${billId}/print?type=invoice&companyId=${encodeURIComponent(companyId)}`
       : `/sales/${billId}/print?type=invoice`
     router.push(printPath)
+  }
+
+  const handleToggleBillSelection = (billId: string) => {
+    setSelectedBillIds((current) =>
+      current.includes(billId) ? current.filter((value) => value !== billId) : [...current, billId]
+    )
+  }
+
+  const handleToggleSelectAllVisible = () => {
+    if (allVisibleSelected) {
+      setSelectedBillIds((current) => current.filter((billId) => !visibleBillIdSet.has(billId)))
+      return
+    }
+
+    setSelectedBillIds((current) => {
+      const next = new Set(current)
+      for (const bill of visibleBills) {
+        next.add(bill.id)
+      }
+      return Array.from(next)
+    })
+  }
+
+  const handleBulkPrint = () => {
+    const selectedBills = visibleBills.filter((bill) => selectedBillIds.includes(bill.id))
+    if (selectedBills.length === 0) {
+      alert('Select at least one sales bill to bulk print')
+      return
+    }
+
+    const params = new URLSearchParams()
+    params.set('type', 'invoice')
+    if (companyId) {
+      params.set('companyId', companyId)
+    }
+
+    for (const bill of selectedBills) {
+      params.append('selected', bill.id)
+    }
+
+    router.push(`/sales/bulk-print?${params.toString()}`)
   }
 
   const csvEscape = (value: string | number) => {
@@ -726,7 +782,7 @@ export default function SalesListPage() {
                 Filter zero rate bills
               </label>
             </div>
-            <div className="flex gap-2 mt-4">
+            <div className="mt-4 flex flex-wrap items-center gap-2">
               <Button onClick={handleAutoFilters}>Auto</Button>
               <Button variant="outline" onClick={clearFilters}>Clear</Button>
               <Button variant="outline" onClick={exportToExcel}>
@@ -737,6 +793,13 @@ export default function SalesListPage() {
                 <FileText className="w-4 h-4 mr-2" />
                 PDF
               </Button>
+              <Button onClick={handleBulkPrint} disabled={selectedVisibleBillCount === 0}>
+                <Printer className="mr-2 h-4 w-4" />
+                Bulk Print / PDF
+              </Button>
+              <span className="text-sm text-slate-600">
+                {selectedVisibleBillCount} selected
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -765,10 +828,37 @@ export default function SalesListPage() {
             </div>
           </CardHeader>
           <CardContent>
+            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="text-sm text-slate-600">
+                {selectedVisibleBillCount} selected from current list
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={handleToggleSelectAllVisible}
+                  disabled={visibleBills.length === 0}
+                >
+                  {allVisibleSelected ? 'Clear Visible Selection' : 'Select All Visible'}
+                </Button>
+                <Button onClick={handleBulkPrint} disabled={selectedVisibleBillCount === 0}>
+                  <Printer className="mr-2 h-4 w-4" />
+                  Bulk Print / PDF
+                </Button>
+              </div>
+            </div>
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-12">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        onChange={handleToggleSelectAllVisible}
+                        aria-label="Select all visible sales bills"
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                    </TableHead>
                     <TableHead>Invoice No</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Party Name</TableHead>
@@ -790,13 +880,22 @@ export default function SalesListPage() {
                 <TableBody>
                   {visibleBills.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={16} className="py-8 text-center text-gray-500">
+                      <TableCell colSpan={17} className="py-8 text-center text-gray-500">
                         No bills found in this tab.
                       </TableCell>
                     </TableRow>
                   ) : (
                     visibleBills.map((bill) => (
                       <TableRow key={bill.id}>
+                        <TableCell>
+                          <input
+                            type="checkbox"
+                            checked={selectedBillIds.includes(bill.id)}
+                            onChange={() => handleToggleBillSelection(bill.id)}
+                            aria-label={`Select sales bill ${bill.invoiceNo || bill.id}`}
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                        </TableCell>
                         <TableCell>{bill.invoiceNo || '-'}</TableCell>
                         <TableCell>{formatDateSafe(bill.invoiceDate)}</TableCell>
                         <TableCell>

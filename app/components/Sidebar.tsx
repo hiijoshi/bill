@@ -81,6 +81,7 @@ const menuItems: MenuItem[] = [
       { title: 'Record Purchase Payment', href: '/payment/purchase/entry', permissionModule: 'PAYMENTS' },
       { title: 'Record Sales Receipt', href: '/payment/sales/entry', permissionModule: 'PAYMENTS' },
       { title: 'Record Cash / Bank Payment', href: '/payment/cash-bank/entry', permissionModule: 'PAYMENTS' },
+      { title: 'Journal Voucher Entry', href: '/payment/journal-voucher/entry', permissionModule: 'PAYMENTS' },
       { title: 'Record Self Transfer', href: '/payment/self-transfer/entry', permissionModule: 'PAYMENTS' },
       { title: 'Upload Bank Statement', href: '/payment/bank-statement/upload', permissionModule: 'PAYMENTS' },
       { title: 'Payment History', href: '/payment/dashboard', permissionModule: 'PAYMENTS' },

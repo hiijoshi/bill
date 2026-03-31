@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { cleanString, normalizeTenDigitPhone } from '@/lib/field-validation'
 import { ensureMandiSchema } from '@/lib/mandi-schema'
+import { assertMandiTypeBelongsToCompany, normalizeOptionalMandiTypeId } from '@/lib/mandi-type-utils'
 
 function normalizeCompanyId(raw: string | null): string | null {
   if (!raw) return null
@@ -98,6 +99,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Phone must be exactly 10 digits' }, { status: 400 })
     }
 
+    let mandiTypeId: string | null = null
+    try {
+      mandiTypeId = await assertMandiTypeBelongsToCompany(
+        prisma,
+        companyId,
+        normalizeOptionalMandiTypeId(parsed.data.mandiTypeId)
+      )
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'Invalid mandi type' }, { status: 400 })
+    }
+
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
@@ -127,7 +139,6 @@ export async function POST(request: NextRequest) {
         },
       })
 
-      const mandiTypeId = normalizeCompanyId(parsed.data.mandiTypeId || null)
       if (mandiTypeId) {
         await tx.farmerMandiProfile.create({
           data: {
@@ -225,6 +236,17 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Phone must be exactly 10 digits' }, { status: 400 })
     }
 
+    let mandiTypeId: string | null = null
+    try {
+      mandiTypeId = await assertMandiTypeBelongsToCompany(
+        prisma,
+        companyId,
+        normalizeOptionalMandiTypeId(parsed.data.mandiTypeId)
+      )
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'Invalid mandi type' }, { status: 400 })
+    }
+
     const farmer = await prisma.$transaction(async (tx) => {
       const updatedFarmer = await tx.farmer.update({
         where: { id },
@@ -236,7 +258,6 @@ export async function PUT(request: NextRequest) {
         },
       })
 
-      const mandiTypeId = normalizeCompanyId(parsed.data.mandiTypeId || null)
       if (mandiTypeId) {
         await tx.farmerMandiProfile.upsert({
           where: { farmerId: id },

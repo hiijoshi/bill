@@ -275,10 +275,10 @@ export default function PurchaseEntryPage() {
     const matchedFarmer = farmers.find((farmer) => String(farmer.name || '').trim().toLowerCase() === normalizedName)
     if (!matchedFarmer) return
 
-    setFarmerAddress((current) => current || String(matchedFarmer.address || ''))
-    setFarmerContact((current) => current || String(matchedFarmer.phone1 || ''))
-    setKrashakAnubandhNumber((current) => current || String(matchedFarmer.krashakAnubandhNumber || ''))
-    setSelectedMandiType((current) => current || String(matchedFarmer.mandiTypeId || ''))
+    setFarmerAddress(String(matchedFarmer.address || ''))
+    setFarmerContact(String(matchedFarmer.phone1 || ''))
+    setKrashakAnubandhNumber(String(matchedFarmer.krashakAnubandhNumber || ''))
+    setSelectedMandiType(String(matchedFarmer.mandiTypeId || ''))
   }, [farmerName, farmers])
 
   // Calculate hammali when noOfBags changes

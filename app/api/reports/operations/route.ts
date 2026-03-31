@@ -173,14 +173,77 @@ function normalizeTransferAccountLabel(value: string | null | undefined): string
   return String(value || '').trim()
 }
 
-function normalizeBankFilterValue(value: string | null | undefined): string {
-  const normalized = String(value || '').trim()
-  if (!normalized) return ''
-  const lowered = normalized.toLowerCase()
-  if (lowered === '-' || lowered === 'bank / online' || lowered === 'bank transfer') {
-    return ''
+type MasterBankFilterRecord = {
+  id: string
+  companyId: string
+  name: string
+  branch: string
+  ifscCode: string
+  accountNumber: string
+  label: string
+}
+
+function normalizeBankLookupValue(value: string | null | undefined): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+}
+
+function normalizeBankAccountLookupValue(value: string | null | undefined): string {
+  return String(value || '')
+    .replace(/\s+/g, '')
+    .trim()
+}
+
+function getMasterBankLabel(bank: { name?: string | null; branch?: string | null }): string {
+  const name = String(bank.name || '').trim()
+  const branch = String(bank.branch || '').trim()
+  if (!name) return ''
+  return branch ? `${name} (${branch})` : name
+}
+
+function matchMasterBankLabels(args: {
+  masterBanks: MasterBankFilterRecord[]
+  nameSnapshot?: string | null
+  branchSnapshot?: string | null
+  ifscCode?: string | null
+  accountNumber?: string | null
+}): string[] {
+  const normalizedName = normalizeBankLookupValue(args.nameSnapshot)
+  const normalizedBranch = normalizeBankLookupValue(args.branchSnapshot)
+  const normalizedIfsc = normalizeBankLookupValue(args.ifscCode)
+  const normalizedAccountNumber = normalizeBankAccountLookupValue(args.accountNumber)
+
+  let matchedBanks: MasterBankFilterRecord[] = []
+
+  if (normalizedIfsc) {
+    matchedBanks = args.masterBanks.filter((bank) => normalizeBankLookupValue(bank.ifscCode) === normalizedIfsc)
   }
-  return normalized
+
+  if (matchedBanks.length === 0 && normalizedAccountNumber) {
+    matchedBanks = args.masterBanks.filter(
+      (bank) => normalizeBankAccountLookupValue(bank.accountNumber) === normalizedAccountNumber
+    )
+  }
+
+  if (matchedBanks.length === 0 && normalizedName && normalizedBranch) {
+    matchedBanks = args.masterBanks.filter(
+      (bank) =>
+        normalizeBankLookupValue(bank.name) === normalizedName &&
+        normalizeBankLookupValue(bank.branch) === normalizedBranch
+    )
+  }
+
+  if (matchedBanks.length === 0 && normalizedName) {
+    matchedBanks = args.masterBanks.filter((bank) => {
+      const normalizedLabel = normalizeBankLookupValue(bank.label)
+      const normalizedBankName = normalizeBankLookupValue(bank.name)
+      return normalizedLabel === normalizedName || normalizedBankName === normalizedName
+    })
+  }
+
+  return Array.from(new Set(matchedBanks.map((bank) => bank.label).filter(Boolean)))
 }
 
 function isCashDescriptor(value: string | null | undefined): boolean {
@@ -553,6 +616,7 @@ export async function GET(request: NextRequest) {
       payments,
       stockAdjustments,
       parties,
+      masterBanks,
       bankSyncProviders,
       salesBillsAsOf,
       purchaseBillsAsOf,
@@ -797,6 +861,23 @@ export async function GET(request: NextRequest) {
       })
         : Promise.resolve([]),
       needsBankLedgerView
+        ? prisma.bank.findMany({
+            where: {
+              companyId: { in: targetCompanyIds },
+              isActive: true
+            },
+            select: {
+              id: true,
+              companyId: true,
+              name: true,
+              branch: true,
+              ifscCode: true,
+              accountNumber: true
+            },
+            orderBy: [{ name: 'asc' }, { branch: 'asc' }]
+          })
+        : Promise.resolve([]),
+      needsBankLedgerView
         ? Promise.all(
             SUPPORTED_BANK_SYNC_PROVIDERS.map((provider) =>
               createBankEntryProvider(provider).getStatus({ companyId: targetCompanyIds[0] || '' })
@@ -927,6 +1008,18 @@ export async function GET(request: NextRequest) {
       const purchaseBillNoMap = new Map(paymentPurchaseBills.map((bill) => [bill.id, bill.billNo]))
       const specialPurchaseBillNoMap = new Map(paymentSpecialPurchaseBills.map((bill) => [bill.id, bill.supplierInvoiceNo]))
       const salesBillNoMap = new Map(paymentSalesBills.map((bill) => [bill.id, bill.billNo]))
+      const masterBankRecords: MasterBankFilterRecord[] = masterBanks.map((bank) => ({
+        id: bank.id,
+        companyId: bank.companyId,
+        name: String(bank.name || '').trim(),
+        branch: String(bank.branch || '').trim(),
+        ifscCode: String(bank.ifscCode || '').trim().toUpperCase(),
+        accountNumber: String(bank.accountNumber || '').trim(),
+        label: getMasterBankLabel(bank)
+      }))
+      const masterBankFilterOptions = Array.from(
+        new Set(masterBankRecords.map((bank) => bank.label).filter(Boolean))
+      ).sort((left, right) => left.localeCompare(right))
       const cashBankReferenceLabelMap = new Map<string, string>([
         ...referencedAccountingHeads.map((head) => [`accounting-head:${head.id}`, head.name || ''] as const),
         ...referencedSuppliers.map((supplier) => [`supplier:${supplier.id}`, supplier.name || ''] as const)
@@ -1525,6 +1618,27 @@ export async function GET(request: NextRequest) {
             const isSelfTransfer = isSelfTransferPaymentType(payment.billType)
             const amount = roundCurrency(normalizeNonNegative(payment.amount))
             const selfTransferSide = isSelfTransfer ? resolveSelfTransferSide(payment, 'bank') : null
+            const matchedMasterBankLabels = isSelfTransfer
+              ? Array.from(
+                  new Set(
+                    [payment.bankNameSnapshot, payment.bankBranchSnapshot]
+                      .map((value) =>
+                        matchMasterBankLabels({
+                          masterBanks: masterBankRecords,
+                          nameSnapshot: value
+                        })
+                      )
+                      .flat()
+                      .filter((value) => value && !isCashDescriptor(value))
+                  )
+                )
+              : matchMasterBankLabels({
+                  masterBanks: masterBankRecords,
+                  nameSnapshot: payment.bankNameSnapshot,
+                  branchSnapshot: payment.bankBranchSnapshot,
+                  ifscCode: payment.ifscCode,
+                  accountNumber: payment.beneficiaryBankAccount
+                })
             const billNo = isIncomingReceipt
               ? String(salesBillNoMap.get(payment.billId) || '')
               : payment.billType === 'purchase'
@@ -1537,18 +1651,9 @@ export async function GET(request: NextRequest) {
               ? roundCurrency(amount * Number(selfTransferSide?.amountOut || 0))
               : roundCurrency(isOutgoingPayment ? amount : 0)
             const bankLabel = isSelfTransfer
-              ? selfTransferSide?.accountName || 'Bank Transfer'
-              : String(payment.bankNameSnapshot || '').trim() || 'Bank / Online'
-            const bankFilterValues = Array.from(
-              new Set(
-                (isSelfTransfer
-                  ? [payment.bankNameSnapshot, payment.bankBranchSnapshot]
-                  : [payment.bankNameSnapshot]
-                )
-                  .map((value) => normalizeBankFilterValue(value))
-                  .filter((value) => value && !isCashDescriptor(value))
-              )
-            )
+              ? matchedMasterBankLabels.join(' -> ') || selfTransferSide?.accountName || 'Bank Transfer'
+              : matchedMasterBankLabels[0] || String(payment.bankNameSnapshot || '').trim() || 'Bank / Online'
+            const bankFilterValues = matchedMasterBankLabels
             return {
               id: payment.id,
               date: dateKey(payment.payDate),
@@ -1698,13 +1803,7 @@ export async function GET(request: NextRequest) {
       cashLedger: needsCashLedgerView ? cashLedgerRows : [],
       filterOptions: {
         banks: needsBankLedgerView
-          ? Array.from(
-              new Set(
-                bankLedgerRows.flatMap((row) =>
-                  Array.isArray(row.bankFilterValues) ? row.bankFilterValues : []
-                )
-              )
-            ).sort((a, b) => a.localeCompare(b))
+          ? masterBankFilterOptions
           : []
       },
       meta: {

@@ -41,7 +41,7 @@ export default function RootLayout({
 }>) {
   // Add global fetch interceptor for authentication with automatic token refresh
   useEffect(() => {
-    const defaultApiTimeoutMs = process.env.NODE_ENV === 'development' ? 20000 : 15000
+    const defaultApiTimeoutMs = process.env.NODE_ENV === 'development' ? 25000 : 20000
     const defaultSuperAdminApiTimeoutMs = process.env.NODE_ENV === 'development' ? 45000 : 30000
     const apiTimeoutMs = Math.max(
       8000,
@@ -91,6 +91,16 @@ export default function RootLayout({
         return false;
       }
     };
+
+    const isTimeoutResponse = async (response: Response): Promise<boolean> => {
+      if (response.status !== 504) return false
+      try {
+        const payload = await response.clone().json()
+        return payload?.timedOut === true || typeof payload?.error === 'string'
+      } catch {
+        return true
+      }
+    }
     
     window.fetch = async (...args) => {
       const [url, options = {}] = args;
@@ -113,6 +123,14 @@ export default function RootLayout({
       const isSuperAdminAuthEndpoint =
         urlString === '/api/super-admin/auth' ||
         urlString === `${window.location.origin}/api/super-admin/auth`
+      const timeoutMsForRequest = (() => {
+        if (isSuperAdminApi) return superAdminApiTimeoutMs
+        if (urlString.includes('/api/reports/')) {
+          return Math.max(apiTimeoutMs, 45000)
+        }
+        return apiTimeoutMs
+      })()
+      const shouldRetryTimedGet = isInternalApi && ['GET', 'HEAD'].includes(method)
       
       // Skip for external URLs and auth bootstrap endpoints.
       if (typeof url === 'string' && url.startsWith('http')) {
@@ -212,8 +230,17 @@ export default function RootLayout({
         url,
         requestInit,
         isInternalApi,
-        isSuperAdminApi ? superAdminApiTimeoutMs : apiTimeoutMs
+        timeoutMsForRequest
       );
+
+      if (shouldRetryTimedGet && await isTimeoutResponse(response)) {
+        response = await safeFetch(
+          url,
+          requestInit,
+          isInternalApi,
+          Math.min(timeoutMsForRequest + 15000, isSuperAdminApi ? 120000 : 90000)
+        )
+      }
 
       // Preserve /api/super-admin/auth 401 to show in-page login errors.
       if (response.status === 401 && isSuperAdminApi && isSuperAdminAuthEndpoint) {
@@ -236,7 +263,7 @@ export default function RootLayout({
             url,
             requestInit,
             isInternalApi,
-            isSuperAdminApi ? superAdminApiTimeoutMs : apiTimeoutMs
+            timeoutMsForRequest
           );
           if (response.status !== 401) {
             return response;
