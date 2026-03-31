@@ -30,6 +30,7 @@ interface Supplier {
 }
 
 interface PurchaseItem {
+  bags: number
   qty: number
   rate: number
   hammali: number
@@ -37,6 +38,7 @@ interface PurchaseItem {
 }
 
 interface RawPurchaseItem {
+  bags?: unknown
   qty?: unknown
   rate?: unknown
   hammali?: unknown
@@ -276,6 +278,7 @@ export default function PurchaseListPage() {
           krashakAnubandhSnapshot: bill.krashakAnubandhSnapshot || null,
           purchaseItems: Array.isArray(bill?.purchaseItems)
             ? bill.purchaseItems.map((item) => ({
+                bags: clampNonNegative(Number(item?.bags || 0)),
                 qty: clampNonNegative(Number(item?.qty || 0)),
                 rate: clampNonNegative(Number(item?.rate || 0)),
                 hammali: clampNonNegative(Number(item?.hammali || 0)),
@@ -572,6 +575,13 @@ export default function PurchaseListPage() {
     return bill.specialPurchaseItems.reduce((sum, item) => sum + Number(item.weight || 0), 0)
   }
 
+  const getBillBags = (bill: PurchaseBill) => {
+    if (bill.type === 'regular') {
+      return bill.purchaseItems.reduce((sum, item) => sum + Number(item.bags || 0), 0)
+    }
+    return bill.specialPurchaseItems.reduce((sum, item) => sum + Number(item.noOfBags || 0), 0)
+  }
+
   const getBillRate = (bill: PurchaseBill) => {
     if (bill.type === 'regular') {
       return bill.purchaseItems.length > 0 ? Number(bill.purchaseItems[0].rate || 0) : 0
@@ -613,6 +623,7 @@ export default function PurchaseListPage() {
         'Party Name',
         'Party Address',
         'Krashak Anubandh Number',
+        'Bags',
         'Weight (Qt)',
         'Rate',
         'Payable',
@@ -627,6 +638,7 @@ export default function PurchaseListPage() {
         bill.type === 'regular' ? getRegularFarmerName(bill) : bill.supplier.name,
         bill.type === 'regular' ? getRegularFarmerAddress(bill) : bill.supplier.address,
         bill.type === 'regular' ? getRegularAnubandh(bill) : bill.supplier.gstNumber,
+        getBillBags(bill).toFixed(0),
         getBillWeightQt(bill).toFixed(2),
         getBillRate(bill).toFixed(2),
         Number(bill.totalAmount || 0).toFixed(2),
@@ -659,6 +671,7 @@ export default function PurchaseListPage() {
           <td>${billNo}</td>
           <td>${new Date(bill.billDate).toLocaleDateString()}</td>
           <td>${partyName}</td>
+          <td style="text-align:right">${getBillBags(bill).toFixed(0)}</td>
           <td style="text-align:right">${getBillWeightQt(bill).toFixed(2)}</td>
           <td style="text-align:right">${getBillRate(bill).toFixed(2)}</td>
           <td style="text-align:right">₹${Number(bill.totalAmount || 0).toFixed(2)}</td>
@@ -687,7 +700,7 @@ export default function PurchaseListPage() {
     <table>
       <thead>
         <tr>
-          <th>Type</th><th>Bill</th><th>Date</th><th>Party</th><th>Weight (Qt)</th><th>Rate</th><th>Payable</th><th>Paid</th><th>Balance</th><th>Status</th>
+          <th>Type</th><th>Bill</th><th>Date</th><th>Party</th><th>Bags</th><th>Weight (Qt)</th><th>Rate</th><th>Payable</th><th>Paid</th><th>Balance</th><th>Status</th>
         </tr>
       </thead>
       <tbody>${bodyRows}</tbody>
@@ -703,6 +716,7 @@ export default function PurchaseListPage() {
   const totalAmount = visibleBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
   const regularBillsCount = visibleBills.filter((bill) => bill.type === 'regular').length
   const specialBillsCount = visibleBills.filter((bill) => bill.type === 'special').length
+  const totalBags = visibleBills.reduce((sum, bill) => sum + getBillBags(bill), 0)
   const totalWeightQt = visibleBills.reduce((sum, bill) => sum + getBillWeightQt(bill), 0)
   const totalWeightKg = totalWeightQt * 100
 
@@ -876,6 +890,7 @@ export default function PurchaseListPage() {
                     <TableHead>Party Name</TableHead>
                     <TableHead>Party Address</TableHead>
                     <TableHead>Krashak Anubandh Number</TableHead>
+                    <TableHead>Bags</TableHead>
                     <TableHead>Weight</TableHead>
                     <TableHead>Rate</TableHead>
                     <TableHead>Payable</TableHead>
@@ -888,7 +903,7 @@ export default function PurchaseListPage() {
                 <TableBody>
                   {visibleBills.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={13} className="py-8 text-center text-gray-500">
+                      <TableCell colSpan={14} className="py-8 text-center text-gray-500">
                         No bills found in this tab.
                       </TableCell>
                     </TableRow>
@@ -915,6 +930,9 @@ export default function PurchaseListPage() {
                             ? getRegularAnubandh(bill)
                             : bill.supplier.gstNumber
                           }
+                        </TableCell>
+                        <TableCell>
+                          {getBillBags(bill).toFixed(0)}
                         </TableCell>
                         <TableCell>
                           {getBillWeightQt(bill).toFixed(2)}
@@ -1012,10 +1030,16 @@ export default function PurchaseListPage() {
               </div>
             </div>
             <div className="mt-4 pt-4 border-t">
-              <div className="text-center">
-                <div className="text-sm text-gray-600">Total Weight</div>
-                <div className="text-lg font-semibold">{totalWeightQt.toFixed(2)} qt</div>
-                <div className="text-xs text-gray-500">{totalWeightKg.toFixed(2)} kg</div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="text-center">
+                  <div className="text-sm text-gray-600">Total Bags</div>
+                  <div className="text-lg font-semibold">{totalBags.toFixed(0)}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-sm text-gray-600">Total Weight</div>
+                  <div className="text-lg font-semibold">{totalWeightQt.toFixed(2)} qt</div>
+                  <div className="text-xs text-gray-500">{totalWeightKg.toFixed(2)} kg</div>
+                </div>
               </div>
             </div>
           </CardContent>
