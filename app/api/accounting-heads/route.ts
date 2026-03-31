@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client'
 
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { ensureAccountingHeadSchema } from '@/lib/accounting-head-schema'
+import { ensureDefaultAccountingHeads } from '@/lib/default-accounting-heads'
 import { cleanString, parseNonNegativeNumber } from '@/lib/field-validation'
 import { ensureMandiSchema } from '@/lib/mandi-schema'
 import { assertMandiTypeBelongsToCompany, normalizeOptionalMandiTypeId } from '@/lib/mandi-type-utils'
@@ -118,6 +119,8 @@ export async function GET(request: NextRequest) {
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
+
+    await ensureDefaultAccountingHeads(prisma, companyId)
 
     const rows = await prisma.accountingHead.findMany({
       where: { companyId },
