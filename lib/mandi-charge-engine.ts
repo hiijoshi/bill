@@ -9,6 +9,11 @@ export const MANDI_CALCULATION_BASIS_OPTIONS = [
 export const ACCOUNT_GROUP_OPTIONS = [
   { value: 'DIRECT_EXPENSE', label: 'Direct Expense' },
   { value: 'INDIRECT_EXPENSE', label: 'Indirect Expense' },
+  { value: 'DIRECT_INCOME', label: 'Direct Income' },
+  { value: 'INDIRECT_INCOME', label: 'Indirect Income' },
+  { value: 'DUTIES', label: 'Duties' },
+  { value: 'TAXES', label: 'Taxes' },
+  { value: 'ASSETS', label: 'Assets' },
   { value: 'LIABILITY', label: 'Liability' }
 ] as const
 
