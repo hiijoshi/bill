@@ -35,6 +35,7 @@ interface PurchaseItem {
   rate: number
   hammali: number
   amount: number
+  markaNo?: string | null
 }
 
 interface RawPurchaseItem {
@@ -43,6 +44,7 @@ interface RawPurchaseItem {
   rate?: unknown
   hammali?: unknown
   amount?: unknown
+  markaNo?: unknown
 }
 
 interface SpecialPurchaseItem {
@@ -198,7 +200,15 @@ function getRegularAnubandh(bill: RegularPurchaseBill): string {
 
 function getBillMarka(bill: PurchaseBill): string {
   if (bill.type !== 'regular') return ''
-  return String(bill.markaNo || '')
+  const markas = bill.purchaseItems
+    .map((item) => String(item.markaNo || '').trim())
+    .filter(Boolean)
+
+  if (markas.length === 0) {
+    return String(bill.markaNo || '')
+  }
+
+  return Array.from(new Set(markas)).join(', ')
 }
 
 function getBillSelectionKey(bill: PurchaseBill): string {
@@ -296,7 +306,8 @@ export default function PurchaseListPage() {
                 qty: clampNonNegative(Number(item?.qty || 0)),
                 rate: clampNonNegative(Number(item?.rate || 0)),
                 hammali: clampNonNegative(Number(item?.hammali || 0)),
-                amount: clampNonNegative(Number(item?.amount || 0))
+                amount: clampNonNegative(Number(item?.amount || 0)),
+                markaNo: typeof item?.markaNo === 'string' ? item.markaNo : null
               }))
             : [],
           type: 'regular' as const

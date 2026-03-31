@@ -21,6 +21,8 @@ type Props = {
   searchPlaceholder?: string
   emptyText?: string
   disabled?: boolean
+  triggerClassName?: string
+  contentClassName?: string
 }
 
 function normalizeText(value: unknown): string {
@@ -35,7 +37,9 @@ export function SearchableSelect({
   placeholder = 'Select option',
   searchPlaceholder = 'Search...',
   emptyText = 'No options found.',
-  disabled = false
+  disabled = false,
+  triggerClassName,
+  contentClassName
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
@@ -104,17 +108,17 @@ export function SearchableSelect({
         role="combobox"
         aria-expanded={open}
         aria-controls={`${id}-listbox`}
-        className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-left text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+        className={`flex h-10 w-full min-w-0 items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-left text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 ${triggerClassName || ''}`}
         onClick={() => setOpen((current) => !current)}
       >
-        <span className={selectedOption ? 'text-foreground' : 'text-muted-foreground'}>
+        <span className={`min-w-0 flex-1 truncate ${selectedOption ? 'text-foreground' : 'text-muted-foreground'}`}>
           {selectedOption?.label || placeholder}
         </span>
         <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
       </button>
 
       {open ? (
-        <div className="absolute z-50 mt-1 w-full rounded-md border border-slate-200 bg-white shadow-lg">
+        <div className={`absolute z-50 mt-1 w-full min-w-0 rounded-md border border-slate-200 bg-white shadow-lg ${contentClassName || ''}`}>
           <div className="border-b border-slate-200 p-2">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -153,9 +157,9 @@ export function SearchableSelect({
                     }}
                   >
                     <span className="min-w-0">
-                      <span className="block truncate">{option.label}</span>
+                      <span className="block break-words">{option.label}</span>
                       {option.description ? (
-                        <span className="mt-0.5 block truncate text-xs text-slate-500">{option.description}</span>
+                        <span className="mt-0.5 block break-words text-xs text-slate-500">{option.description}</span>
                       ) : null}
                     </span>
                     {selected ? <Check className="mt-0.5 h-4 w-4 shrink-0 text-slate-900" /> : null}

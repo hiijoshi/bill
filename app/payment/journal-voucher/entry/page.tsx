@@ -472,7 +472,8 @@ function JournalVoucherEntryPageContent() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-[2.3fr_0.95fr_0.95fr_1.5fr_72px] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4 text-xl font-medium text-slate-700">
+                  <div className="hidden gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4 text-base font-semibold text-slate-700 lg:grid lg:grid-cols-[180px_minmax(320px,1.65fr)_160px_160px_minmax(240px,1.1fr)_72px]">
+                    <div>Ledger Type</div>
                     <div>Ledger Account</div>
                     <div>Debit (Dr)</div>
                     <div>Credit (Cr)</div>
@@ -485,8 +486,14 @@ function JournalVoucherEntryPageContent() {
                       const ledgerOptions = getLedgerOptions(line.ledgerType)
 
                       return (
-                        <div key={line.id} className="grid grid-cols-[2.3fr_0.95fr_0.95fr_1.5fr_72px] gap-4 px-5 py-4">
-                          <div className="grid grid-cols-[220px_1fr] gap-3">
+                        <div
+                          key={line.id}
+                          className="grid gap-4 px-5 py-5 lg:grid-cols-[180px_minmax(320px,1.65fr)_160px_160px_minmax(240px,1.1fr)_72px] lg:items-start"
+                        >
+                          <div className="grid gap-2">
+                            <Label htmlFor={`ledgerType-${line.id}`} className="text-sm font-medium text-slate-600 lg:hidden">
+                              Ledger Type
+                            </Label>
                             <Select
                               value={line.ledgerType}
                               onValueChange={(value) =>
@@ -499,7 +506,7 @@ function JournalVoucherEntryPageContent() {
                                 }))
                               }
                             >
-                              <SelectTrigger id={`ledgerType-${line.id}`} className="h-12 text-lg">
+                              <SelectTrigger id={`ledgerType-${line.id}`} className="h-12 w-full min-w-0 text-base font-medium">
                                 <SelectValue placeholder="Ledger Type" />
                               </SelectTrigger>
                               <SelectContent>
@@ -510,7 +517,12 @@ function JournalVoucherEntryPageContent() {
                                 ))}
                               </SelectContent>
                             </Select>
+                          </div>
 
+                          <div className="grid gap-2">
+                            <Label htmlFor={`ledger-${line.id}`} className="text-sm font-medium text-slate-600 lg:hidden">
+                              Ledger Account
+                            </Label>
                             <SearchableSelect
                               id={`ledger-${line.id}`}
                               value={line.ledgerId}
@@ -524,63 +536,83 @@ function JournalVoucherEntryPageContent() {
                               placeholder="Search and select ledger"
                               searchPlaceholder="Search ledger..."
                               emptyText="No ledgers found."
+                              triggerClassName="h-12 text-base"
+                              contentClassName="min-w-[320px]"
                             />
                           </div>
 
-                          <Input
-                            id={`debit-${line.id}`}
-                            type="text"
-                            inputMode="decimal"
-                            value={line.debitAmount}
-                            onChange={(event) =>
-                              updateLine(line.id, (current) => ({
-                                ...current,
-                                debitAmount: normalizeMoneyInput(event.target.value),
-                                creditAmount: event.target.value ? '' : current.creditAmount
-                              }))
-                            }
-                            placeholder="0.00"
-                            className="h-12 text-lg"
-                          />
+                          <div className="grid gap-2">
+                            <Label htmlFor={`debit-${line.id}`} className="text-sm font-medium text-slate-600 lg:hidden">
+                              Debit (Dr)
+                            </Label>
+                            <Input
+                              id={`debit-${line.id}`}
+                              type="text"
+                              inputMode="decimal"
+                              value={line.debitAmount}
+                              onChange={(event) =>
+                                updateLine(line.id, (current) => ({
+                                  ...current,
+                                  debitAmount: normalizeMoneyInput(event.target.value),
+                                  creditAmount: event.target.value ? '' : current.creditAmount
+                                }))
+                              }
+                              placeholder="0.00"
+                              className="h-12 text-base"
+                            />
+                          </div>
 
-                          <Input
-                            id={`credit-${line.id}`}
-                            type="text"
-                            inputMode="decimal"
-                            value={line.creditAmount}
-                            onChange={(event) =>
-                              updateLine(line.id, (current) => ({
-                                ...current,
-                                creditAmount: normalizeMoneyInput(event.target.value),
-                                debitAmount: event.target.value ? '' : current.debitAmount
-                              }))
-                            }
-                            placeholder="0.00"
-                            className="h-12 text-lg"
-                          />
+                          <div className="grid gap-2">
+                            <Label htmlFor={`credit-${line.id}`} className="text-sm font-medium text-slate-600 lg:hidden">
+                              Credit (Cr)
+                            </Label>
+                            <Input
+                              id={`credit-${line.id}`}
+                              type="text"
+                              inputMode="decimal"
+                              value={line.creditAmount}
+                              onChange={(event) =>
+                                updateLine(line.id, (current) => ({
+                                  ...current,
+                                  creditAmount: normalizeMoneyInput(event.target.value),
+                                  debitAmount: event.target.value ? '' : current.debitAmount
+                                }))
+                              }
+                              placeholder="0.00"
+                              className="h-12 text-base"
+                            />
+                          </div>
 
-                          <Input
-                            id={`lineRemark-${line.id}`}
-                            value={line.remark}
-                            onChange={(event) =>
-                              updateLine(line.id, (current) => ({
-                                ...current,
-                                remark: event.target.value
-                              }))
-                            }
-                            placeholder="Remark"
-                            className="h-12 text-lg"
-                          />
+                          <div className="grid gap-2">
+                            <Label htmlFor={`lineRemark-${line.id}`} className="text-sm font-medium text-slate-600 lg:hidden">
+                              Remark
+                            </Label>
+                            <Input
+                              id={`lineRemark-${line.id}`}
+                              value={line.remark}
+                              onChange={(event) =>
+                                updateLine(line.id, (current) => ({
+                                  ...current,
+                                  remark: event.target.value
+                                }))
+                              }
+                              placeholder="Remark"
+                              className="h-12 text-base"
+                            />
+                          </div>
 
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="h-12 w-[72px] border-slate-200 text-slate-500 hover:text-red-500"
-                            onClick={() => removeRow(line.id)}
-                            disabled={lines.length <= 2}
-                          >
-                            <X className="h-5 w-5" />
-                          </Button>
+                          <div className="grid gap-2">
+                            <Label className="text-sm font-medium text-slate-600 lg:hidden">Action</Label>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-12 w-full border-slate-200 text-slate-500 hover:text-red-500 lg:w-[72px]"
+                              onClick={() => removeRow(line.id)}
+                              disabled={lines.length <= 2}
+                            >
+                              <X className="h-5 w-5" />
+                            </Button>
+                          </div>
                         </div>
                       )
                     })}
