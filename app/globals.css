@@ -163,7 +163,7 @@
     transform: translateY(0);
   }
   50% {
-    transform: translateY(-8px);
+    transform: translateY(-5px);
   }
 }
 
@@ -173,7 +173,7 @@
     transform: translateY(0) scale(1);
   }
   50% {
-    transform: translateY(-6px) scale(1.03);
+    transform: translateY(-4px) scale(1.02);
   }
 }
 
@@ -183,6 +183,83 @@
   }
   100% {
     background-position: -200% 0;
+  }
+}
+
+@keyframes task-loader-pulse-ring {
+  0% {
+    opacity: 0.12;
+    transform: scale(0.88);
+  }
+  55% {
+    opacity: 0.38;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.14);
+  }
+}
+
+@keyframes task-loader-satellite {
+  0%,
+  100% {
+    transform: translateY(0) scale(0.98);
+  }
+  50% {
+    transform: translateY(-4px) scale(1.08);
+  }
+}
+
+@keyframes task-loader-stream {
+  0% {
+    opacity: 0;
+    transform: translateX(-8%);
+  }
+  20%,
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(8%);
+  }
+}
+
+@keyframes task-loader-ticker {
+  0% {
+    opacity: 0;
+    transform: translateX(0);
+  }
+  15% {
+    opacity: 0.8;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(290%);
+  }
+}
+
+@keyframes task-loader-meter {
+  0%,
+  100% {
+    transform: scaleX(0.92);
+    transform-origin: left center;
+  }
+  50% {
+    transform: scaleX(1);
+    transform-origin: left center;
+  }
+}
+
+@keyframes task-loader-matrix {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.72;
+  }
+  50% {
+    transform: translateY(-3px);
+    opacity: 1;
   }
 }
 
@@ -208,6 +285,38 @@
 
 .task-loader-glow {
   pointer-events: none;
+}
+
+.task-loader-pulse-ring {
+  animation: task-loader-pulse-ring 2.8s ease-out infinite;
+}
+
+.task-loader-satellite {
+  animation: task-loader-satellite 2.4s ease-in-out infinite;
+}
+
+.task-loader-stream {
+  animation: task-loader-stream 2.6s ease-in-out infinite;
+}
+
+.task-loader-stream-dot {
+  animation: task-loader-satellite 2.2s ease-in-out infinite;
+}
+
+.task-loader-ticker {
+  animation: task-loader-ticker 2.6s ease-in-out infinite;
+}
+
+.task-loader-meter {
+  animation: task-loader-meter 2.4s ease-in-out infinite;
+}
+
+.task-loader-matrix-cell {
+  animation: task-loader-matrix 2.6s ease-in-out infinite;
+}
+
+.task-loader-matrix-cell-strong {
+  animation-duration: 2.1s;
 }
 
 .task-loader-shimmer {
