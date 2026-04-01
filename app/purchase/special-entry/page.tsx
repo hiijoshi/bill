@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { kgToQuintal, round4, toKg } from '@/lib/unit-conversion'
 import { getCompanyIdFromSearch, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
@@ -385,9 +386,13 @@ export default function SpecialPurchaseEntryPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId="">
-        <div className="flex justify-center items-center h-screen">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="purchase"
+        companyId=""
+        fullscreen
+        title="Preparing special purchase entry"
+        message="Loading supplier billing, products, and special purchase totals."
+      />
     )
   }
 

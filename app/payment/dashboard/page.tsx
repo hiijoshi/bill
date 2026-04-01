@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Edit, Eye, Plus, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
@@ -477,11 +478,12 @@ export default function PaymentDashboardPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex justify-center items-center h-64">
-          <div className="text-lg">Loading...</div>
-        </div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="payment"
+        companyId={companyId}
+        title="Opening payment history"
+        message="Collecting bill payments, self transfers, cash entries, and bank-linked movements."
+      />
     )
   }
 

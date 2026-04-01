@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Eye, Edit, Ban, Printer, FileText, Download, CreditCard } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
@@ -813,11 +814,12 @@ export default function PurchaseListPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex justify-center items-center h-64">
-          <div className="text-lg">Loading...</div>
-        </div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="purchase"
+        companyId={companyId}
+        title="Opening purchase list"
+        message="Collecting purchase bills, marka values, filters, and print selections."
+      />
     )
   }
 

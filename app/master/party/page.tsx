@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Upload, Users } from 'lucide-react'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId } from '@/lib/company-context'
@@ -508,9 +509,13 @@ export default function PartyMasterPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex justify-center items-center h-screen">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="master"
+        companyId={companyId}
+        fullscreen
+        title="Loading party master"
+        message="Preparing parties, balances, mandi linkage, and company-specific setup."
+      />
     )
   }
 

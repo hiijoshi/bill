@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import {
   ShoppingCart,
   Receipt,
@@ -1036,22 +1037,17 @@ export default function MainDashboardPage() {
   }
 
   if (loading || !dashboardAccessResolved) {
-    return (
-      <DashboardLayout companyId={primaryCompanyId}>
-        <div className="flex justify-center items-center h-64">
-          <div className="text-lg">Loading...</div>
-        </div>
-      </DashboardLayout>
-    )
+    return <AppLoaderShell kind="dashboard" companyId={primaryCompanyId} />
   }
 
   if (!hasDashboardAccess) {
     return (
-      <DashboardLayout companyId={primaryCompanyId}>
-        <div className="flex justify-center items-center h-64">
-          <div className="text-lg">Checking access...</div>
-        </div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="access"
+        companyId={primaryCompanyId}
+        title="Checking dashboard access"
+        message="Verifying privileges and company scope before showing sensitive dashboard insights."
+      />
     )
   }
 

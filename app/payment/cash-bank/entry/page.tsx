@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowLeft, Building2, Landmark, Wallet } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -76,7 +77,7 @@ function toNonNegativeAmount(value: string): string {
 
 export default function CashBankPaymentEntryPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="bank" fullscreen />}>
       <CashBankPaymentEntryPageContent />
     </Suspense>
   )
@@ -428,11 +429,12 @@ function CashBankPaymentEntryPageContent() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex h-64 items-center justify-center">
-          <div className="text-lg">Loading...</div>
-        </div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="bank"
+        companyId={companyId}
+        title="Preparing cash and bank payment"
+        message="Loading payment modes, bank master details, and account references."
+      />
     )
   }
 

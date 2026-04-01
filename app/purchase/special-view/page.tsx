@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { ArrowLeft, Edit, FileText, Printer, Ban } from 'lucide-react'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
@@ -56,7 +57,7 @@ const toMoney = (value: number): string => `₹${Math.max(0, Number(value || 0))
 
 export default function SpecialPurchaseViewPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="purchase" fullscreen />}>
       <SpecialPurchaseViewContent />
     </Suspense>
   )
@@ -160,9 +161,12 @@ function SpecialPurchaseViewContent() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex items-center justify-center h-64">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="purchase"
+        companyId={companyId}
+        title="Opening special purchase bill"
+        message="Loading supplier snapshots, items, and special purchase totals."
+      />
     )
   }
 

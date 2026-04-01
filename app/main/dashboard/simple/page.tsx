@@ -4,11 +4,12 @@ import { useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { ShoppingCart, Receipt, Package, CreditCard, FileText } from 'lucide-react'
 
 export default function SimpleDashboardPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="dashboard" fullscreen />}>
       <SimpleDashboardPageContent />
     </Suspense>
   )

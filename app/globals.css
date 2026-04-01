@@ -138,3 +138,80 @@
     min-height: 100dvh;
   }
 }
+
+@keyframes task-loader-orbit {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes task-loader-orbit-reverse {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes task-loader-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes task-loader-bob {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-6px) scale(1.03);
+  }
+}
+
+@keyframes task-loader-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.task-loader-orbit {
+  animation: task-loader-orbit 8s linear infinite;
+}
+
+.task-loader-orbit-reverse {
+  animation: task-loader-orbit-reverse 11s linear infinite;
+}
+
+.task-loader-float {
+  animation: task-loader-float 2.8s ease-in-out infinite;
+}
+
+.task-loader-bob {
+  animation: task-loader-bob 2.4s ease-in-out infinite;
+}
+
+.task-loader-card {
+  animation: task-loader-float 3.4s ease-in-out infinite;
+}
+
+.task-loader-glow {
+  pointer-events: none;
+}
+
+.task-loader-shimmer {
+  background-image: linear-gradient(90deg, rgba(226, 232, 240, 0.8) 0%, rgba(248, 250, 252, 0.98) 50%, rgba(226, 232, 240, 0.8) 100%);
+  background-size: 200% 100%;
+  animation: task-loader-shimmer 1.8s linear infinite;
+}

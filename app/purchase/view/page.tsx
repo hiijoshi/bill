@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { ArrowLeft, Edit, Ban, Printer, FileText } from 'lucide-react'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
@@ -55,7 +56,7 @@ interface PurchaseBill {
 
 export default function PurchaseViewPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="purchase" fullscreen />}>
       <PurchaseViewPageContent />
     </Suspense>
   )
@@ -170,9 +171,13 @@ function PurchaseViewPageContent() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId || ''}>
-        <div className="flex justify-center items-center h-screen">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="purchase"
+        companyId={companyId || ''}
+        fullscreen
+        title="Opening purchase bill"
+        message="Assembling purchase details, farmer snapshots, and printable bill sections."
+      />
     )
   }
 

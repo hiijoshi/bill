@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, CreditCard, DollarSign } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -174,7 +175,7 @@ function buildAllocationPreview(bills: PurchaseBill[], enteredAmount: number): A
 
 export default function PurchasePaymentEntryPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="payment" fullscreen />}>
       <PurchasePaymentEntryPageContent />
     </Suspense>
   )
@@ -803,11 +804,12 @@ function PurchasePaymentEntryPageContent() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex h-64 items-center justify-center">
-          <div className="text-lg">Loading...</div>
-        </div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="payment"
+        companyId={companyId}
+        title="Preparing purchase payment"
+        message="Matching open purchase bills, farmer balances, and payment allocation controls."
+      />
     )
   }
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Edit, Plus, Tags, Trash2 } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -258,9 +259,13 @@ export default function MandiTypeMasterPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex h-screen items-center justify-center">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="master"
+        companyId={companyId}
+        fullscreen
+        title="Loading mandi types"
+        message="Preparing mandi rule groups, linkage checks, and active company setup."
+      />
     )
   }
 

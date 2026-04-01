@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Truck, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
@@ -413,9 +414,13 @@ export default function SupplierMasterPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex h-screen items-center justify-center">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="master"
+        companyId={companyId}
+        fullscreen
+        title="Loading supplier master"
+        message="Fetching supplier records, GST details, and company-specific supplier setup."
+      />
     )
   }
 

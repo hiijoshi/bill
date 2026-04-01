@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { TaskLoader } from '@/components/loaders/task-loader'
 import { Plus, Eye, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import {
@@ -236,11 +237,7 @@ export default function PaymentTab({
   }
 
   if (isLoading) {
-    return (
-      <div className="flex justify-center items-center h-64">
-        <div className="text-lg">Loading...</div>
-      </div>
-    )
+    return <TaskLoader kind="payment" compact />
   }
 
   return (

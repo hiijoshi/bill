@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { useRouter } from 'next/navigation'
+import { TaskLoader } from '@/components/loaders/task-loader'
 
 type AuthStatus = {
   status: number | string
@@ -41,7 +42,7 @@ export default function AuthTestPage() {
   }
 
   if (loading) {
-    return <div>Loading...</div>
+    return <TaskLoader kind="access" fullscreen />
   }
 
   return (

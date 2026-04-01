@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Plus, Edit, Trash2, Package } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { isAbortError } from '@/lib/http'
@@ -303,9 +304,13 @@ export default function PurchaseItemMasterPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId="">
-        <div className="flex justify-center items-center h-screen">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="master"
+        companyId=""
+        fullscreen
+        title="Loading purchase items"
+        message="Fetching purchase item mappings, product references, and billing setup."
+      />
     )
   }
 

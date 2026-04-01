@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Activity, ArrowLeft, BarChart3, Package, Scale } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -446,9 +447,12 @@ export default function StockAdjustmentPage() {
 
   if (pageLoading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex h-64 items-center justify-center text-lg">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="stock"
+        companyId={companyId}
+        title="Preparing stock adjustment"
+        message="Loading products, stock ledger entries, and adjustment controls."
+      />
     )
   }
 

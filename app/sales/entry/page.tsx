@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertTriangle, MessageCircle, Pencil, Plus, Trash2 } from 'lucide-react'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { SearchableSelect, type SearchableSelectOption } from '@/components/ui/searchable-select'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
@@ -1118,9 +1119,13 @@ export default function SalesEntryPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex justify-center items-center h-screen">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="sales"
+        companyId={companyId}
+        fullscreen
+        title="Preparing sales entry"
+        message="Loading parties, sales items, transport choices, and invoice totals."
+      />
     )
   }
 
@@ -1188,7 +1193,8 @@ export default function SalesEntryPage() {
                         <Label htmlFor="invoiceNo">Invoice No. (Auto-generated)</Label>
                         <Input 
                           id="invoiceNo" 
-                          value={invoiceNo || 'Loading...'} 
+                          value={invoiceNo}
+                          placeholder="Generating invoice number"
                           readOnly 
                           className="bg-gray-100 font-semibold" 
                         />

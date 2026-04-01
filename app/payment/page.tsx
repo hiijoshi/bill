@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Plus, Eye } from 'lucide-react'
 import { isAbortError } from '@/lib/http'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
@@ -82,7 +83,7 @@ const parseApiJson = async <T,>(response: Response, fallback: T): Promise<T> => 
 
 export default function PaymentPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="payment" fullscreen />}>
       <PaymentPageContent />
     </Suspense>
   )
@@ -259,13 +260,7 @@ function PaymentPageContent() {
   }
 
   if (loading) {
-    return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex justify-center items-center h-64">
-          <div className="text-lg">Loading...</div>
-        </div>
-      </DashboardLayout>
-    )
+    return <AppLoaderShell kind="payment" companyId={companyId} />
   }
 
   return (

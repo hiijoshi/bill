@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BookOpenText, Edit, Plus, Trash2 } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -305,9 +306,13 @@ export default function AccountingHeadMasterPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex h-screen items-center justify-center">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="master"
+        companyId={companyId}
+        fullscreen
+        title="Loading accounting heads"
+        message="Preparing accounting head records and company master setup."
+      />
     )
   }
 

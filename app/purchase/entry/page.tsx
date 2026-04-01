@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { calculateMandiCharges, getCalculationBasisLabel } from '@/lib/mandi-charge-engine'
 import { kgToQuintal, round4, toKg } from '@/lib/unit-conversion'
@@ -440,9 +441,13 @@ export default function PurchaseEntryPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex justify-center items-center h-screen">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="purchase"
+        companyId={companyId}
+        fullscreen
+        title="Preparing purchase entry"
+        message="Loading farmers, mandi types, products, and purchase charge logic."
+      />
     )
   }
   const defaultProductName = products.find((product) => product.id === defaultProductId)?.name || ''

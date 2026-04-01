@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { ArrowLeft, CreditCard, DollarSign, MessageCircle, Search } from 'lucide-react'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isCashPaymentMode } from '@/lib/payment-mode-utils'
@@ -69,7 +70,7 @@ const formatDateSafe = (value: string): string => {
 
 export default function SalesPaymentEntryPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="payment" fullscreen />}>
       <SalesPaymentEntryPageContent />
     </Suspense>
   )
@@ -581,11 +582,12 @@ function SalesPaymentEntryPageContent() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex justify-center items-center h-64">
-          <div className="text-lg">Loading...</div>
-        </div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="payment"
+        companyId={companyId}
+        title="Preparing sales receipt"
+        message="Loading unpaid invoices, party balances, and receipt posting controls."
+      />
     )
   }
 

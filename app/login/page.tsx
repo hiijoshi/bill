@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Building2, User, Lock, AlertCircle } from 'lucide-react'
 import { clearClientCache } from '@/lib/client-fetch-cache'
 import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
@@ -15,7 +16,7 @@ const LOGIN_CLEANUP_THROTTLE_MS = 15_000
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-gray-50">Loading...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="access" fullscreen />}>
       <LoginPageContent />
     </Suspense>
   )

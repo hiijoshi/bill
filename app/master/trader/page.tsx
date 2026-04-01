@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Plus, Edit, Trash2, Users } from 'lucide-react'
 
 interface Trader {
@@ -124,9 +125,13 @@ export default function TraderMasterPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId="">
-        <div className="flex justify-center items-center h-screen">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="master"
+        companyId=""
+        fullscreen
+        title="Loading trader master"
+        message="Preparing trader profile data, company mapping, and account setup."
+      />
     )
   }
 

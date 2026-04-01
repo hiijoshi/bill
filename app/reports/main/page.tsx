@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { BarChart3, FileClock, Package, Receipt, ShoppingCart } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import OperationsReportWorkspace from '@/components/reports/OperationsReportWorkspace'
 import ReportDashboard from '@/components/reports/ReportDashboard'
 import StockReportDashboard from '@/components/reports/StockReportDashboard'
@@ -34,7 +35,7 @@ const normalizeOperationsView = (value: string | null): OperationsView => {
 
 export default function ReportsMainPage() {
   return (
-    <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-gray-50">Loading...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="reports" fullscreen />}>
       <ReportsMainPageContent />
     </Suspense>
   )
@@ -95,11 +96,7 @@ function ReportsMainPageContent() {
   }
 
   if (companyResolving) {
-    return (
-      <DashboardLayout companyId="" lockViewport>
-        <div className="flex h-64 items-center justify-center text-lg">Loading...</div>
-      </DashboardLayout>
-    )
+    return <AppLoaderShell kind="reports" companyId="" lockViewport />
   }
 
   return (

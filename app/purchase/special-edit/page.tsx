@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
@@ -50,7 +51,7 @@ interface SpecialPurchaseBill {
 
 export default function SpecialPurchaseEditPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="purchase" fullscreen />}>
       <SpecialPurchaseEditPageContent />
     </Suspense>
   )
@@ -341,11 +342,12 @@ function SpecialPurchaseEditPageContent() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId || ''}>
-        <div className="flex items-center justify-center h-64">
-          <div className="text-lg">Loading...</div>
-        </div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="purchase"
+        companyId={companyId || ''}
+        title="Preparing special purchase edit"
+        message="Loading supplier bills, products, and payable validation for editing."
+      />
     )
   }
 

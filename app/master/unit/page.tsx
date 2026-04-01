@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Ruler, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
@@ -278,9 +279,13 @@ export default function UnitMasterPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId="">
-        <div className="flex justify-center items-center h-screen">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="master"
+        companyId=""
+        fullscreen
+        title="Loading unit master"
+        message="Preparing conversion units, symbols, and quantity setup used across billing."
+      />
     )
   }
 

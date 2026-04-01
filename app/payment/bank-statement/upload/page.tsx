@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowLeft, CheckCircle2, Landmark, Search, Upload } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -87,7 +88,7 @@ function getStatusVariant(status: StatementStatus): 'default' | 'secondary' | 'd
 
 export default function BankStatementUploadPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="bank" fullscreen />}>
       <BankStatementUploadPageContent />
     </Suspense>
   )
@@ -291,11 +292,12 @@ function BankStatementUploadPageContent() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex h-64 items-center justify-center">
-          <div className="text-lg">Loading...</div>
-        </div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="bank"
+        companyId={companyId}
+        title="Preparing bank statement upload"
+        message="Bringing bank master accounts, upload parsing, and settlement matching together."
+      />
     )
   }
 

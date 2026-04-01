@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Eye, Edit, Ban, Printer, FileText, Download, MessageCircle } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
@@ -667,11 +668,12 @@ export default function SalesListPage() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId}>
-        <div className="flex justify-center items-center h-64">
-          <div className="text-lg">Loading...</div>
-        </div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="sales"
+        companyId={companyId}
+        title="Opening sales list"
+        message="Collecting invoices, party filters, dispatch details, and print selections."
+      />
     )
   }
 

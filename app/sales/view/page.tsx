@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { ArrowLeft, Edit, Ban, Printer, FileText } from 'lucide-react'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
@@ -180,7 +181,7 @@ function normalizeSalesBill(raw: RawSalesBill): SalesBill {
 
 export default function SalesViewPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="sales" fullscreen />}>
       <SalesViewPageContent />
     </Suspense>
   )
@@ -296,9 +297,13 @@ function SalesViewPageContent() {
 
   if (loading) {
     return (
-      <DashboardLayout companyId={companyId || ''}>
-        <div className="flex justify-center items-center h-screen">Loading...</div>
-      </DashboardLayout>
+      <AppLoaderShell
+        kind="sales"
+        companyId={companyId || ''}
+        fullscreen
+        title="Opening sales invoice"
+        message="Assembling party details, sales items, additional charges, and print sections."
+      />
     )
   }
 

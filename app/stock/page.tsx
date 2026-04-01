@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 
 function StockRedirect() {
   const router = useRouter()
@@ -12,12 +13,18 @@ function StockRedirect() {
     router.replace(query ? `/stock/adjustment?${query}` : '/stock/adjustment')
   }, [router, searchParams])
 
-  return <div className="flex h-64 items-center justify-center text-lg">Redirecting to stock adjustment...</div>
+  return (
+    <AppLoaderShell
+      kind="stock"
+      title="Opening stock workspace"
+      message="Routing you into stock adjustment with the right company scope."
+    />
+  )
 }
 
 export default function StockPage() {
   return (
-    <Suspense fallback={<div className="flex h-64 items-center justify-center text-lg">Loading stock adjustment...</div>}>
+    <Suspense fallback={<AppLoaderShell kind="stock" fullscreen />}>
       <StockRedirect />
     </Suspense>
   )

@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 
 export default function StockHistoryRedirectPage() {
   const router = useRouter()
@@ -17,5 +18,11 @@ export default function StockHistoryRedirectPage() {
     router.replace(query ? `/stock/adjustment?${query}` : '/stock/adjustment')
   }, [router])
 
-  return <div className="p-6 text-sm text-gray-500">Redirecting to stock adjustment...</div>
+  return (
+    <AppLoaderShell
+      kind="stock"
+      title="Opening stock history"
+      message="Routing you into the stock adjustment view with the selected company and product."
+    />
+  )
 }
