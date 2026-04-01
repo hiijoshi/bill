@@ -395,25 +395,25 @@ function JournalVoucherEntryPageContent() {
 
   return (
     <DashboardLayout companyId={companyId}>
-      <div className="p-6">
-        <div className="mx-auto max-w-7xl">
+      <div className="p-4 md:p-6">
+        <div className="mx-auto max-w-6xl">
           <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h1 className="text-3xl font-bold">Journal Voucher Entry</h1>
-              <p className="mt-1 text-sm text-slate-600">
+              <h1 className="text-2xl font-bold md:text-3xl">Journal Voucher Entry</h1>
+              <p className="mt-1 text-sm text-slate-600 md:text-base">
                 Record balanced debit and credit ledger postings with voucher-wise control.
               </p>
             </div>
-            <Button variant="outline" onClick={() => router.push('/payment/dashboard')}>
+            <Button variant="outline" onClick={() => router.push('/payment/dashboard')} className="h-11">
               <ArrowLeft className="mr-2 h-4 w-4" />
               Back
             </Button>
           </div>
 
           <Card className="overflow-hidden rounded-[28px] border border-slate-200 shadow-sm">
-            <CardContent className="p-8">
-              <form onSubmit={handleSubmit} className="space-y-8">
-                <div className="grid gap-5 lg:grid-cols-[1.3fr_0.45fr_0.95fr]">
+            <CardContent className="p-4 md:p-6">
+              <form onSubmit={handleSubmit} className="space-y-6">
+                <div className="grid gap-4 lg:grid-cols-[1.15fr_0.55fr_0.9fr]">
                   <div className="grid gap-2">
                     <Label htmlFor="voucherDate" className="text-base font-semibold text-slate-900">
                       Date
@@ -423,7 +423,7 @@ function JournalVoucherEntryPageContent() {
                       type="date"
                       value={voucherDate}
                       onChange={(event) => setVoucherDate(event.target.value)}
-                      className="h-14 text-xl"
+                      className="h-11 text-base"
                     />
                   </div>
                   <div className="grid gap-2">
@@ -434,7 +434,7 @@ function JournalVoucherEntryPageContent() {
                       id="voucherNo"
                       value={voucherNo}
                       onChange={(event) => setVoucherNo(event.target.value.toUpperCase())}
-                      className="h-14 text-xl"
+                      className="h-11 text-base"
                     />
                   </div>
                   <div className="grid gap-2">
@@ -446,7 +446,7 @@ function JournalVoucherEntryPageContent() {
                       value={referenceNo}
                       onChange={(event) => setReferenceNo(event.target.value)}
                       placeholder="Optional"
-                      className="h-14 text-xl"
+                      className="h-11 text-base"
                     />
                   </div>
                 </div>
@@ -460,131 +460,140 @@ function JournalVoucherEntryPageContent() {
                     value={remark}
                     onChange={(event) => setRemark(event.target.value)}
                     placeholder="Enter remark"
-                    className="h-14 text-xl"
+                    className="h-11 text-base"
                   />
                 </div>
 
                 <div className="rounded-3xl border border-slate-200">
-                  <div className="border-b border-slate-200 px-6 py-5">
-                    <div className="flex items-center gap-2 text-2xl font-semibold text-slate-900">
+                  <div className="border-b border-slate-200 px-4 py-4 md:px-6">
+                    <div className="flex items-center gap-2 text-xl font-semibold text-slate-900 md:text-2xl">
                       <ReceiptText className="h-6 w-6 text-slate-500" />
                       Ledger Entries
                     </div>
                   </div>
 
-                  <div className="hidden gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4 text-base font-semibold text-slate-700 lg:grid lg:grid-cols-[180px_minmax(320px,1.65fr)_160px_160px_minmax(240px,1.1fr)_72px]">
-                    <div>Ledger Type</div>
-                    <div>Ledger Account</div>
-                    <div>Debit (Dr)</div>
-                    <div>Credit (Cr)</div>
-                    <div>Remark</div>
-                    <div />
-                  </div>
-
-                  <div className="divide-y divide-slate-200">
-                    {lines.map((line) => {
+                  <div className="space-y-4 px-4 py-4 md:px-5 md:py-5">
+                    {lines.map((line, index) => {
                       const ledgerOptions = getLedgerOptions(line.ledgerType)
 
                       return (
                         <div
                           key={line.id}
-                          className="grid gap-4 px-5 py-5 lg:grid-cols-[180px_minmax(320px,1.65fr)_160px_160px_minmax(240px,1.1fr)_72px] lg:items-start"
+                          className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4"
                         >
-                          <div className="grid gap-2">
-                            <Label htmlFor={`ledgerType-${line.id}`} className="text-sm font-medium text-slate-600 lg:hidden">
-                              Ledger Type
-                            </Label>
-                            <Select
-                              value={line.ledgerType}
-                              onValueChange={(value) =>
-                                updateLine(line.id, (current) => ({
-                                  ...current,
-                                  ledgerType: value as JournalLedgerType,
-                                  ledgerId: value === 'CASH' ? 'cash' : '',
-                                  debitAmount: current.debitAmount,
-                                  creditAmount: current.creditAmount
-                                }))
-                              }
+                          <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                            <div className="text-sm font-semibold text-slate-700">
+                              Ledger Row {index + 1}
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-9 border-slate-200 px-3 text-slate-500 hover:text-red-500"
+                              onClick={() => removeRow(line.id)}
+                              disabled={lines.length <= 2}
                             >
-                              <SelectTrigger id={`ledgerType-${line.id}`} className="h-12 w-full min-w-0 text-base font-medium">
-                                <SelectValue placeholder="Ledger Type" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {ledgerTypeOptions.map((option) => (
-                                  <SelectItem key={option.value} value={option.value}>
-                                    {option.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                              <X className="mr-1 h-4 w-4" />
+                              Remove
+                            </Button>
                           </div>
 
-                          <div className="grid gap-2">
-                            <Label htmlFor={`ledger-${line.id}`} className="text-sm font-medium text-slate-600 lg:hidden">
-                              Ledger Account
-                            </Label>
-                            <SearchableSelect
-                              id={`ledger-${line.id}`}
-                              value={line.ledgerId}
-                              onValueChange={(value) =>
-                                updateLine(line.id, (current) => ({
-                                  ...current,
-                                  ledgerId: value
-                                }))
-                              }
-                              options={ledgerOptions}
-                              placeholder="Search and select ledger"
-                              searchPlaceholder="Search ledger..."
-                              emptyText="No ledgers found."
-                              triggerClassName="h-12 text-base"
-                              contentClassName="min-w-[320px]"
-                            />
+                          <div className="grid gap-4 xl:grid-cols-[180px_minmax(280px,1.2fr)_150px_150px]">
+                            <div className="grid gap-2">
+                              <Label htmlFor={`ledgerType-${line.id}`} className="text-sm font-medium text-slate-600">
+                                Ledger Type
+                              </Label>
+                              <Select
+                                value={line.ledgerType}
+                                onValueChange={(value) =>
+                                  updateLine(line.id, (current) => ({
+                                    ...current,
+                                    ledgerType: value as JournalLedgerType,
+                                    ledgerId: value === 'CASH' ? 'cash' : '',
+                                    debitAmount: current.debitAmount,
+                                    creditAmount: current.creditAmount
+                                  }))
+                                }
+                              >
+                                <SelectTrigger id={`ledgerType-${line.id}`} className="h-11 w-full min-w-0 text-base font-medium">
+                                  <SelectValue placeholder="Ledger Type" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {ledgerTypeOptions.map((option) => (
+                                    <SelectItem key={option.value} value={option.value}>
+                                      {option.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            <div className="grid gap-2">
+                              <Label htmlFor={`ledger-${line.id}`} className="text-sm font-medium text-slate-600">
+                                Ledger Account
+                              </Label>
+                              <SearchableSelect
+                                id={`ledger-${line.id}`}
+                                value={line.ledgerId}
+                                onValueChange={(value) =>
+                                  updateLine(line.id, (current) => ({
+                                    ...current,
+                                    ledgerId: value
+                                  }))
+                                }
+                                options={ledgerOptions}
+                                placeholder="Search and select ledger"
+                                searchPlaceholder="Search ledger..."
+                                emptyText="No ledgers found."
+                                triggerClassName="h-11 text-base"
+                                contentClassName="min-w-[320px]"
+                              />
+                            </div>
+
+                            <div className="grid gap-2">
+                              <Label htmlFor={`debit-${line.id}`} className="text-sm font-medium text-slate-600">
+                                Debit (Dr)
+                              </Label>
+                              <Input
+                                id={`debit-${line.id}`}
+                                type="text"
+                                inputMode="decimal"
+                                value={line.debitAmount}
+                                onChange={(event) =>
+                                  updateLine(line.id, (current) => ({
+                                    ...current,
+                                    debitAmount: normalizeMoneyInput(event.target.value),
+                                    creditAmount: event.target.value ? '' : current.creditAmount
+                                  }))
+                                }
+                                placeholder="0.00"
+                                className="h-11 text-base"
+                              />
+                            </div>
+
+                            <div className="grid gap-2">
+                              <Label htmlFor={`credit-${line.id}`} className="text-sm font-medium text-slate-600">
+                                Credit (Cr)
+                              </Label>
+                              <Input
+                                id={`credit-${line.id}`}
+                                type="text"
+                                inputMode="decimal"
+                                value={line.creditAmount}
+                                onChange={(event) =>
+                                  updateLine(line.id, (current) => ({
+                                    ...current,
+                                    creditAmount: normalizeMoneyInput(event.target.value),
+                                    debitAmount: event.target.value ? '' : current.debitAmount
+                                  }))
+                                }
+                                placeholder="0.00"
+                                className="h-11 text-base"
+                              />
+                            </div>
                           </div>
 
-                          <div className="grid gap-2">
-                            <Label htmlFor={`debit-${line.id}`} className="text-sm font-medium text-slate-600 lg:hidden">
-                              Debit (Dr)
-                            </Label>
-                            <Input
-                              id={`debit-${line.id}`}
-                              type="text"
-                              inputMode="decimal"
-                              value={line.debitAmount}
-                              onChange={(event) =>
-                                updateLine(line.id, (current) => ({
-                                  ...current,
-                                  debitAmount: normalizeMoneyInput(event.target.value),
-                                  creditAmount: event.target.value ? '' : current.creditAmount
-                                }))
-                              }
-                              placeholder="0.00"
-                              className="h-12 text-base"
-                            />
-                          </div>
-
-                          <div className="grid gap-2">
-                            <Label htmlFor={`credit-${line.id}`} className="text-sm font-medium text-slate-600 lg:hidden">
-                              Credit (Cr)
-                            </Label>
-                            <Input
-                              id={`credit-${line.id}`}
-                              type="text"
-                              inputMode="decimal"
-                              value={line.creditAmount}
-                              onChange={(event) =>
-                                updateLine(line.id, (current) => ({
-                                  ...current,
-                                  creditAmount: normalizeMoneyInput(event.target.value),
-                                  debitAmount: event.target.value ? '' : current.debitAmount
-                                }))
-                              }
-                              placeholder="0.00"
-                              className="h-12 text-base"
-                            />
-                          </div>
-
-                          <div className="grid gap-2">
-                            <Label htmlFor={`lineRemark-${line.id}`} className="text-sm font-medium text-slate-600 lg:hidden">
+                          <div className="mt-4 grid gap-2">
+                            <Label htmlFor={`lineRemark-${line.id}`} className="text-sm font-medium text-slate-600">
                               Remark
                             </Label>
                             <Input
@@ -597,36 +606,23 @@ function JournalVoucherEntryPageContent() {
                                 }))
                               }
                               placeholder="Remark"
-                              className="h-12 text-base"
+                              className="h-11 text-base"
                             />
-                          </div>
-
-                          <div className="grid gap-2">
-                            <Label className="text-sm font-medium text-slate-600 lg:hidden">Action</Label>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              className="h-12 w-full border-slate-200 text-slate-500 hover:text-red-500 lg:w-[72px]"
-                              onClick={() => removeRow(line.id)}
-                              disabled={lines.length <= 2}
-                            >
-                              <X className="h-5 w-5" />
-                            </Button>
                           </div>
                         </div>
                       )
                     })}
                   </div>
 
-                  <div className="px-5 py-4">
-                    <Button type="button" variant="outline" onClick={addRow} className="h-12 text-lg">
+                  <div className="border-t border-slate-200 px-4 py-4 md:px-5">
+                    <Button type="button" variant="outline" onClick={addRow} className="h-11 text-base">
                       <Plus className="mr-2 h-5 w-5" />
                       Add Row
                     </Button>
                   </div>
 
-                  <div className="border-t border-slate-200 px-5 py-6">
-                    <div className="ml-auto grid max-w-[520px] gap-3 text-2xl">
+                  <div className="border-t border-slate-200 px-4 py-5 md:px-5 md:py-6">
+                    <div className="ml-auto grid max-w-[420px] gap-3 text-lg md:text-xl">
                       <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                         <span className="font-medium text-slate-700">Total Debit:</span>
                         <span className="font-semibold text-slate-900">{formatCurrency(totalDebit)}</span>
@@ -646,10 +642,10 @@ function JournalVoucherEntryPageContent() {
                 </div>
 
                 <div className="flex items-center justify-end gap-3">
-                  <Button type="button" variant="outline" onClick={() => router.push('/payment/dashboard')} className="h-14 px-8 text-xl">
+                  <Button type="button" variant="outline" onClick={() => router.push('/payment/dashboard')} className="h-11 px-6 text-base">
                     Cancel
                   </Button>
-                  <Button type="submit" disabled={submitting || !isBalanced} className="h-14 px-8 text-xl">
+                  <Button type="submit" disabled={submitting || !isBalanced} className="h-11 px-6 text-base">
                     {submitting ? 'Saving...' : 'Save Voucher'}
                   </Button>
                 </div>
