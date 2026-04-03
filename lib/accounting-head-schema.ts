@@ -5,6 +5,17 @@ type AccountingHeadSchemaClient = Pick<PrismaClient, '$queryRawUnsafe' | '$execu
 let schemaReady = false
 let schemaPromise: Promise<void> | null = null
 
+function isSqliteLikeDatabase(): boolean {
+  const tursoUrl = String(process.env.TURSO_DATABASE_URL || '').trim()
+  const databaseUrl = String(process.env.DATABASE_URL || '').trim().toLowerCase()
+
+  return Boolean(
+    tursoUrl ||
+    databaseUrl.startsWith('file:') ||
+    databaseUrl.startsWith('libsql:')
+  )
+}
+
 function isAlreadyAppliedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error || '')
   const normalized = message.toLowerCase()
@@ -12,6 +23,10 @@ function isAlreadyAppliedError(error: unknown): boolean {
 }
 
 async function applyAccountingHeadSchema(prisma: AccountingHeadSchemaClient) {
+  if (!isSqliteLikeDatabase()) {
+    return
+  }
+
   const tableRows = await prisma.$queryRawUnsafe<Array<{ name?: string }>>('PRAGMA table_info("AccountingHead")')
   const existingColumns = new Set(
     Array.isArray(tableRows) ? tableRows.map((row) => String(row?.name || '').trim()).filter(Boolean) : []

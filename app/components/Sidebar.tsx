@@ -7,8 +7,10 @@ import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ChevronDown, ChevronLeft, ChevronRight, LayoutDashboard, ShoppingCart, TrendingUp, Menu, Package, CreditCard, FileText, Settings, Lock, type LucideIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { getClientCache } from '@/lib/client-fetch-cache'
 import { APP_COMPANY_CHANGED_EVENT, notifyAppCompanyChanged } from '@/lib/company-context'
+import { loadClientPermissions } from '@/lib/client-permissions'
+import { getReadablePermissionModules } from '@/lib/app-default-route'
 import type { PermissionModule as MenuPermissionModule } from '@/lib/permissions'
 
 type MenuChild = {
@@ -134,7 +136,6 @@ export default function Sidebar({
   const searchParams = useSearchParams()
   const [openItems, setOpenItems] = useState<string[]>([])
   const [allowedModules, setAllowedModules] = useState<Set<MenuPermissionModule> | null>(null)
-  const permissionsCacheKey = `permissions:${companyId || 'none'}`
 
   const withCompany = useCallback((href?: string) => {
     void companyId
@@ -143,6 +144,10 @@ export default function Sidebar({
 
   const syncActiveCompany = () => {
     if (!companyId) return
+    const activeCompanyId = getClientCache<string>('shell:active-company-id', 20_000)
+    if (activeCompanyId === companyId) {
+      return
+    }
     void (async () => {
       const response = await fetch('/api/auth/company', {
         method: 'POST',
@@ -172,29 +177,10 @@ export default function Sidebar({
       }
 
       try {
-        const cached = force ? null : getClientCache<string[]>(permissionsCacheKey, 60_000)
-        if (cached) {
-          setAllowedModules(new Set(cached as MenuPermissionModule[]))
-          return
-        }
-
-        const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}&includeMeta=true` : '?includeMeta=true'
-        const response = await fetch(`/api/auth/permissions${qs}`, { cache: 'no-store' })
-        if (cancelled) return
-        if (!response.ok) {
-          setAllowedModules(null)
-          return
-        }
-
-        const payload = await response.json().catch(() => ({}))
+        const payload = await loadClientPermissions(companyId, { force })
         if (cancelled) return
         const permissions = Array.isArray(payload.permissions) ? payload.permissions : []
-        const readableModules = permissions
-          .filter((row: { module?: string; canRead?: boolean; canWrite?: boolean }) => row.canRead || row.canWrite)
-          .map((row: { module?: string }) => row.module)
-          .filter((module: unknown): module is MenuPermissionModule => typeof module === 'string')
-        setClientCache(permissionsCacheKey, readableModules)
-        setAllowedModules(new Set(readableModules))
+        setAllowedModules(new Set(getReadablePermissionModules(permissions)))
       } catch {
         if (cancelled) return
         setAllowedModules(null)
@@ -228,7 +214,7 @@ export default function Sidebar({
       window.removeEventListener('sessionRefreshed', onSessionRefresh)
       window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
-  }, [companyId, pathname, permissionsCacheKey])
+  }, [companyId, pathname])
 
   const hasChildAccess = useCallback((child: MenuChild) => {
     if (!child.permissionModule) return true

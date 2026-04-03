@@ -249,6 +249,8 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
         throw new Error(typeof payload?.error === 'string' ? payload.error : 'Failed to switch company')
       }
 
+      setResolvedCompanyId(nextCompanyId)
+      setCurrentCompanyName(availableCompanies.find((company) => company.id === nextCompanyId)?.name || 'Selected company')
       clearClientCache()
       notifyAppCompanyChanged(nextCompanyId)
 

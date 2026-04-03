@@ -952,6 +952,13 @@ export async function GET(request: NextRequest) {
             .map((reference) => reference.referenceId)
         )
       )
+      const partyReferenceIds = Array.from(
+        new Set(
+          cashBankReferences
+            .filter((reference) => reference.referenceType === 'party')
+            .map((reference) => reference.referenceId)
+        )
+      )
       const supplierReferenceIds = Array.from(
         new Set(
           cashBankReferences
@@ -960,7 +967,7 @@ export async function GET(request: NextRequest) {
         )
       )
 
-      const [paymentPurchaseBills, paymentSpecialPurchaseBills, paymentSalesBills, referencedAccountingHeads, referencedSuppliers] = await Promise.all([
+      const [paymentPurchaseBills, paymentSpecialPurchaseBills, paymentSalesBills, referencedAccountingHeads, referencedParties, referencedSuppliers] = await Promise.all([
       purchasePaymentBillIds.length > 0
         ? prisma.purchaseBill.findMany({
             where: { id: { in: purchasePaymentBillIds }, companyId: { in: targetCompanyIds } },
@@ -984,6 +991,18 @@ export async function GET(request: NextRequest) {
             where: {
               companyId: { in: targetCompanyIds },
               id: { in: accountingHeadReferenceIds }
+            },
+            select: {
+              id: true,
+              name: true
+            }
+          })
+        : Promise.resolve([]),
+      partyReferenceIds.length > 0
+        ? prisma.party.findMany({
+            where: {
+              companyId: { in: targetCompanyIds },
+              id: { in: partyReferenceIds }
             },
             select: {
               id: true,
@@ -1022,6 +1041,7 @@ export async function GET(request: NextRequest) {
       ).sort((left, right) => left.localeCompare(right))
       const cashBankReferenceLabelMap = new Map<string, string>([
         ...referencedAccountingHeads.map((head) => [`accounting-head:${head.id}`, head.name || ''] as const),
+        ...referencedParties.map((party) => [`party:${party.id}`, party.name || ''] as const),
         ...referencedSuppliers.map((supplier) => [`supplier:${supplier.id}`, supplier.name || ''] as const)
       ])
 

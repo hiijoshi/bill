@@ -709,8 +709,8 @@ export default function PurchaseListPage() {
         'Type',
         'Bill/Invoice No',
         'Date',
-        'Party Name',
-        'Party Address',
+        'Farmer / Supplier Name',
+        'Farmer / Supplier Address',
         'Krashak Anubandh Number',
         'Marka',
         'Bags',
@@ -792,7 +792,7 @@ export default function PurchaseListPage() {
     <table>
       <thead>
         <tr>
-          <th>Type</th><th>Bill</th><th>Date</th><th>Party</th><th>Marka</th><th>Bags</th><th>Weight (Qt)</th><th>Rate</th><th>Payable</th><th>Paid</th><th>Balance</th><th>Status</th>
+          <th>Type</th><th>Bill</th><th>Date</th><th>Farmer / Supplier</th><th>Marka</th><th>Bags</th><th>Weight (Qt)</th><th>Rate</th><th>Payable</th><th>Paid</th><th>Balance</th><th>Status</th>
         </tr>
       </thead>
       <tbody>${bodyRows}</tbody>
@@ -860,7 +860,7 @@ export default function PurchaseListPage() {
                 />
               </div>
               <div>
-                <Label htmlFor="partyName">Party Name</Label>
+                <Label htmlFor="partyName">Farmer / Supplier Name</Label>
                 <Input
                   id="partyName"
                   value={partyName}
@@ -869,7 +869,7 @@ export default function PurchaseListPage() {
                 />
               </div>
               <div>
-                <Label htmlFor="partyAddress">Party Address</Label>
+                <Label htmlFor="partyAddress">Farmer / Supplier Address</Label>
                 <Input
                   id="partyAddress"
                   value={partyAddress}
@@ -1023,8 +1023,8 @@ export default function PurchaseListPage() {
                     <TableHead>Type</TableHead>
                     <TableHead>Bill/Invoice No</TableHead>
                     <TableHead>Date</TableHead>
-                    <TableHead>Party Name</TableHead>
-                    <TableHead>Party Address</TableHead>
+                    <TableHead>Farmer / Supplier Name</TableHead>
+                    <TableHead>Farmer / Supplier Address</TableHead>
                     <TableHead>Krashak Anubandh Number</TableHead>
                     <TableHead>Marka</TableHead>
                     <TableHead>Bags</TableHead>

@@ -47,32 +47,52 @@
     {
       "id": "d8d6fb78-d18c-498e-a7be-b995cb6618d8",
       "companyId": "cmm997iel00026l9r1uajahfk",
-      "name": "cash",
-      "code": "C",
-      "description": "none",
+      "name": "Cash",
+      "code": "CASH",
+      "description": "Universal cash payment mode",
       "isActive": true,
       "createdAt": "2026-03-03T05:25:49.497Z",
       "updatedAt": "2026-03-09T14:23:56.543Z"
     },
     {
-      "id": "669213ae-e695-471d-be70-0150fa5719dd",
-      "companyId": "cmm997iel00026l9r1uajahfk",
-      "name": "online",
-      "code": "O",
-      "description": null,
-      "isActive": true,
-      "createdAt": "2026-03-09T14:24:10.171Z",
-      "updatedAt": "2026-03-09T14:24:10.171Z"
-    },
-    {
       "id": "b3e37a17-56a3-4f4d-b7c6-09b33d32c7e5",
       "companyId": "cmm997iel00026l9r1uajahfk",
-      "name": "cheque",
-      "code": "CQ",
-      "description": null,
+      "name": "Cheque",
+      "code": "CHEQUE",
+      "description": "Universal cheque payment mode",
       "isActive": true,
       "createdAt": "2026-03-09T14:24:28.893Z",
       "updatedAt": "2026-03-09T14:24:28.893Z"
+    },
+    {
+      "id": "12a3014d-a90e-48ba-bdf5-a0f4cd6786a0",
+      "companyId": "cmm997iel00026l9r1uajahfk",
+      "name": "NEFT",
+      "code": "NEFT",
+      "description": "Universal NEFT payment mode",
+      "isActive": true,
+      "createdAt": "2026-03-09T14:24:28.893Z",
+      "updatedAt": "2026-03-09T14:24:28.893Z"
+    },
+    {
+      "id": "0d8445b8-0377-4ccd-b500-a5a6103a367e",
+      "companyId": "cmm997iel00026l9r1uajahfk",
+      "name": "RTGS",
+      "code": "RTGS",
+      "description": "Universal RTGS payment mode",
+      "isActive": true,
+      "createdAt": "2026-03-09T14:24:28.893Z",
+      "updatedAt": "2026-03-09T14:24:28.893Z"
+    },
+    {
+      "id": "669213ae-e695-471d-be70-0150fa5719dd",
+      "companyId": "cmm997iel00026l9r1uajahfk",
+      "name": "UPI",
+      "code": "UPI",
+      "description": "Universal UPI payment mode",
+      "isActive": true,
+      "createdAt": "2026-03-09T14:24:10.171Z",
+      "updatedAt": "2026-03-09T14:24:10.171Z"
     }
   ]
 }

@@ -10,6 +10,7 @@ import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Building2, User, Lock, AlertCircle } from 'lucide-react'
 import { clearClientCache } from '@/lib/client-fetch-cache'
 import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
+import { loadClientPermissions } from '@/lib/client-permissions'
 
 const LOGIN_CLEANUP_KEY = 'login-page-cleanup:app'
 const LOGIN_CLEANUP_THROTTLE_MS = 15_000
@@ -138,12 +139,8 @@ function LoginPageContent() {
         return
       }
 
-      const permissionsResponse = await fetch(
-        `/api/auth/permissions?companyId=${encodeURIComponent(companyId)}&includeMeta=true`,
-        { cache: 'no-store' }
-      )
-      const permissionsPayload = await permissionsResponse.json().catch(() => ({} as { permissions?: [] }))
-      const permissions = Array.isArray(permissionsPayload.permissions) ? permissionsPayload.permissions : []
+      const permissionsPayload = await loadClientPermissions(companyId, { force: true })
+      const permissions = permissionsPayload.permissions
       
       // Note: HttpOnly cookies are set automatically by the server
       // No need to store tokens client-side anymore for security

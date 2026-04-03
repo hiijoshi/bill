@@ -5,7 +5,22 @@ type MandiSchemaClient = Pick<PrismaClient, '$executeRawUnsafe'>
 let schemaReady = false
 let schemaPromise: Promise<void> | null = null
 
+function isSqliteLikeDatabase(): boolean {
+  const tursoUrl = String(process.env.TURSO_DATABASE_URL || '').trim()
+  const databaseUrl = String(process.env.DATABASE_URL || '').trim().toLowerCase()
+
+  return Boolean(
+    tursoUrl ||
+    databaseUrl.startsWith('file:') ||
+    databaseUrl.startsWith('libsql:')
+  )
+}
+
 async function applyMandiSchema(prisma: MandiSchemaClient) {
+  if (!isSqliteLikeDatabase()) {
+    return
+  }
+
   const statements = [
     `
       CREATE TABLE IF NOT EXISTS "MandiType" (

@@ -413,11 +413,14 @@ export async function GET(request: NextRequest) {
     const accountingHeadIds = [...new Set(cashBankReferences
       .filter((reference) => reference.referenceType === 'accounting-head')
       .map((reference) => reference.referenceId))]
+    const partyReferenceIds = [...new Set(cashBankReferences
+      .filter((reference) => reference.referenceType === 'party')
+      .map((reference) => reference.referenceId))]
     const supplierReferenceIds = [...new Set(cashBankReferences
       .filter((reference) => reference.referenceType === 'supplier')
       .map((reference) => reference.referenceId))]
 
-    const [purchaseBills, specialPurchaseBills, salesBills, accountingHeads, suppliers] = await Promise.all([
+    const [purchaseBills, specialPurchaseBills, salesBills, accountingHeads, parties, suppliers] = await Promise.all([
       purchaseBillIds.length > 0
         ? prisma.purchaseBill.findMany({
             where: { id: { in: purchaseBillIds } },
@@ -464,6 +467,18 @@ export async function GET(request: NextRequest) {
             }
           })
         : Promise.resolve([]),
+      partyReferenceIds.length > 0
+        ? prisma.party.findMany({
+            where: {
+              companyId: { in: permissionScopedIds },
+              id: { in: partyReferenceIds }
+            },
+            select: {
+              id: true,
+              name: true
+            }
+          })
+        : Promise.resolve([]),
       supplierReferenceIds.length > 0
         ? prisma.supplier.findMany({
             where: {
@@ -499,6 +514,7 @@ export async function GET(request: NextRequest) {
     const salesBillMap = new Map(salesBills.map((bill) => [bill.id, bill.billNo]))
     const cashBankReferenceLabelMap = new Map<string, string>([
       ...accountingHeads.map((head) => [`accounting-head:${head.id}`, head.name || ''] as const),
+      ...parties.map((party) => [`party:${party.id}`, party.name || ''] as const),
       ...suppliers.map((supplier) => [`supplier:${supplier.id}`, supplier.name || ''] as const)
     ])
 

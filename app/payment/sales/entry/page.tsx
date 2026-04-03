@@ -11,7 +11,7 @@ import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { ArrowLeft, CreditCard, DollarSign, MessageCircle, Search } from 'lucide-react'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
-import { isCashPaymentMode } from '@/lib/payment-mode-utils'
+import { DEFAULT_PAYMENT_MODES, isCashPaymentMode, type PaymentModeOption } from '@/lib/payment-mode-utils'
 import { getPartyOpeningBalanceReference } from '@/lib/party-opening-balance'
 import { openWhatsappChat } from '@/lib/whatsapp'
 
@@ -39,12 +39,7 @@ interface Bank {
   accountNumber?: string
 }
 
-interface PaymentMode {
-  id: string
-  name: string
-  code: string
-  isActive: boolean
-}
+type PaymentMode = PaymentModeOption
 
 interface PartyOutstandingRow {
   id: string
@@ -161,9 +156,13 @@ function SalesPaymentEntryPageContent() {
     () => salesBills.find((bill) => bill.id === selectedBill),
     [salesBills, selectedBill]
   )
+  const paymentModeOptions = useMemo<PaymentMode[]>(
+    () => (paymentModes.length > 0 ? paymentModes : DEFAULT_PAYMENT_MODES),
+    [paymentModes]
+  )
   const selectedPaymentModeObj = useMemo(
-    () => paymentModes.find((pm) => pm.code === selectedPaymentMode) || null,
-    [paymentModes, selectedPaymentMode]
+    () => paymentModeOptions.find((pm) => pm.code === selectedPaymentMode) || null,
+    [paymentModeOptions, selectedPaymentMode]
   )
   const isCashMode = useMemo(
     () => isCashPaymentMode(selectedPaymentModeObj?.code || selectedPaymentMode, selectedPaymentModeObj?.name || ''),
@@ -207,6 +206,12 @@ function SalesPaymentEntryPageContent() {
     () => selectedMultiBills.reduce((sum, bill) => sum + Number(bill.balanceAmount || 0), 0),
     [selectedMultiBills]
   )
+
+  useEffect(() => {
+    if (paymentModeOptions.length === 0) return
+    if (paymentModeOptions.some((paymentMode) => paymentMode.code === selectedPaymentMode)) return
+    setSelectedPaymentMode(paymentModeOptions[0]?.code || '')
+  }, [paymentModeOptions, selectedPaymentMode])
 
   const handleWhatsappReminder = () => {
     const partyPhone =
@@ -271,14 +276,27 @@ function SalesPaymentEntryPageContent() {
 
   const fetchPaymentModes = async (targetCompanyId: string) => {
     try {
-      const response = await fetch(`/api/payment-modes?companyId=${targetCompanyId}`)
-      if (response.ok) {
-        const data = await response.json()
-        const rows = Array.isArray(data) ? data : []
-        setPaymentModes(rows.filter((pm: PaymentMode) => pm.isActive))
+      const response = await fetch(`/api/payment-modes?companyId=${targetCompanyId}`, { cache: 'no-store' })
+      if (!response.ok) {
+        setPaymentModes([])
+        return
       }
+
+      const data = await response.json()
+      const rows = Array.isArray(data) ? data : []
+      setPaymentModes(
+        rows
+          .map((row) => ({
+            id: String(row?.id || ''),
+            name: String(row?.name || '').trim(),
+            code: String(row?.code || '').trim(),
+            isActive: row?.isActive !== false
+          }))
+          .filter((row) => row.id && row.name && row.code && row.isActive)
+      )
     } catch (error) {
       console.error('Error fetching payment modes:', error)
+      setPaymentModes([])
     }
   }
 
@@ -797,7 +815,7 @@ function SalesPaymentEntryPageContent() {
                         <SelectValue placeholder="Select payment mode" />
                       </SelectTrigger>
                       <SelectContent>
-                        {paymentModes.map((pm) => (
+                        {paymentModeOptions.map((pm) => (
                           <SelectItem key={pm.id} value={pm.code}>
                             {pm.name}
                           </SelectItem>

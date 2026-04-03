@@ -11,6 +11,7 @@ import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, CreditCard, Upload } from 'lucide-react'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
 interface PaymentMode {
@@ -25,6 +26,7 @@ interface PaymentMode {
 
 export default function PaymentModeMasterPage() {
   const importInputRef = useRef<HTMLInputElement | null>(null)
+  const [companyId, setCompanyId] = useState('')
   const [paymentModes, setPaymentModes] = useState<PaymentMode[]>([])
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
@@ -38,25 +40,69 @@ export default function PaymentModeMasterPage() {
     description: '',
     isActive: true
   })
-  const fetchPaymentModes = useCallback(async () => {
+
+  const fetchPaymentModes = useCallback(async (targetCompanyId: string) => {
+    if (!targetCompanyId) {
+      setPaymentModes([])
+      setErrorMessage('Company not selected. Please select company once.')
+      setLoading(false)
+      return
+    }
+
     try {
-      const response = await fetch('/api/payment-modes')
+      const response = await fetch(`/api/payment-modes?companyId=${encodeURIComponent(targetCompanyId)}`, {
+        cache: 'no-store'
+      })
       if (response.ok) {
         const data = await response.json()
-        setPaymentModes(data)
+        setPaymentModes(Array.isArray(data) ? data : [])
+        setErrorMessage('')
       } else {
+        const error = await response.json().catch(() => ({} as { error?: string }))
         setPaymentModes([])
+        setErrorMessage(error.error || 'Failed to load payment modes')
       }
     } catch (error) {
       console.error('Error fetching payment modes:', error)
       setPaymentModes([])
+      setErrorMessage('Failed to load payment modes')
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    void fetchPaymentModes()
+    let cancelled = false
+
+    const loadPaymentModeScope = async () => {
+      setLoading(true)
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (cancelled) return
+
+      if (!resolvedCompanyId) {
+        setCompanyId('')
+        setPaymentModes([])
+        setErrorMessage('Company not selected. Please select company once.')
+        setLoading(false)
+        return
+      }
+
+      setCompanyId(resolvedCompanyId)
+      stripCompanyParamsFromUrl()
+      await fetchPaymentModes(resolvedCompanyId)
+    }
+
+    void loadPaymentModeScope()
+
+    const onCompanyChanged = () => {
+      void loadPaymentModeScope()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    return () => {
+      cancelled = true
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
   }, [fetchPaymentModes])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -66,10 +112,14 @@ export default function PaymentModeMasterPage() {
       alert('Payment mode name and code are required')
       return
     }
+    if (!companyId) {
+      alert('Company not selected. Please select company once.')
+      return
+    }
     try {
       const url = editingPaymentMode 
-        ? `/api/payment-modes?id=${editingPaymentMode.id}`
-        : `/api/payment-modes`
+        ? `/api/payment-modes?id=${editingPaymentMode.id}&companyId=${encodeURIComponent(companyId)}`
+        : `/api/payment-modes?companyId=${encodeURIComponent(companyId)}`
       
       const method = editingPaymentMode ? 'PUT' : 'POST'
       
@@ -84,7 +134,7 @@ export default function PaymentModeMasterPage() {
       if (response.ok) {
         alert(editingPaymentMode ? 'Payment mode updated successfully!' : 'Payment mode created successfully!')
         resetForm()
-        fetchPaymentModes()
+        void fetchPaymentModes(companyId)
       } else {
         const error = await response.json()
         alert(error.error || 'Operation failed')
@@ -107,16 +157,20 @@ export default function PaymentModeMasterPage() {
   }
 
   const handleDelete = async (id: string) => {
+    if (!companyId) {
+      alert('Company not selected. Please select company once.')
+      return
+    }
     if (!confirm('Are you sure you want to delete this payment mode? This may affect existing transactions.')) return
 
     try {
-      const response = await fetch(`/api/payment-modes?id=${id}`, {
+      const response = await fetch(`/api/payment-modes?id=${id}&companyId=${encodeURIComponent(companyId)}`, {
         method: 'DELETE',
       })
 
       if (response.ok) {
         alert('Payment mode deleted successfully!')
-        fetchPaymentModes()
+        void fetchPaymentModes(companyId)
       } else {
         const error = await response.json()
         alert(error.error || 'Delete failed')
@@ -128,11 +182,15 @@ export default function PaymentModeMasterPage() {
   }
 
   const handleDeleteAll = async () => {
+    if (!companyId) {
+      alert('Company not selected. Please select company once.')
+      return
+    }
     if (!confirm('Delete all payment modes for this company?')) return
-    const response = await fetch('/api/payment-modes?all=true', { method: 'DELETE' })
+    const response = await fetch(`/api/payment-modes?all=true&companyId=${encodeURIComponent(companyId)}`, { method: 'DELETE' })
     const result = await response.json().catch(() => ({}))
     alert(result.message || result.error || 'Operation completed')
-    if (response.ok) fetchPaymentModes()
+    if (response.ok) void fetchPaymentModes(companyId)
   }
 
   const handleExportCsv = () => {
@@ -150,14 +208,19 @@ export default function PaymentModeMasterPage() {
   }
 
   const handleImportCsv = async (file: File) => {
-    const { ok, result } = await uploadMasterCsv('/api/payment-modes/import', file)
+    if (!companyId) {
+      alert('Company not selected. Please select company once.')
+      return
+    }
+
+    const { ok, result } = await uploadMasterCsv('/api/payment-modes/import', file, companyId)
     if (!ok) {
       alert(result.error || 'Payment mode import failed')
       return
     }
 
     alert(formatMasterImportSummary('Payment Mode', result))
-    await fetchPaymentModes()
+    await fetchPaymentModes(companyId)
   }
 
   const resetForm = () => {
@@ -170,7 +233,7 @@ export default function PaymentModeMasterPage() {
     return (
       <AppLoaderShell
         kind="master"
-        companyId=""
+        companyId={companyId}
         fullscreen
         title="Loading payment modes"
         message="Fetching payment mode master values and transaction options."
@@ -179,7 +242,7 @@ export default function PaymentModeMasterPage() {
   }
 
   return (
-    <DashboardLayout companyId="">
+    <DashboardLayout companyId={companyId}>
       <div className="p-6">
         <div className="max-w-6xl mx-auto">
           {errorMessage && (

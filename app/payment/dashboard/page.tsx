@@ -28,6 +28,7 @@ import {
   isPaymentEntryType,
   SELF_TRANSFER_PAYMENT_TYPE
 } from '@/lib/payment-entry-types'
+import { DEFAULT_PAYMENT_MODES, type PaymentModeOption } from '@/lib/payment-mode-utils'
 
 interface PurchaseBill {
   id: string
@@ -79,6 +80,8 @@ interface Payment {
   note?: string
   createdAt: string
 }
+
+type PaymentModeRecord = PaymentModeOption
 
 type PaymentApiRecord = {
   id: string
@@ -203,6 +206,7 @@ export default function PaymentDashboardPage() {
   const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>([])
   const [salesBills, setSalesBills] = useState<SalesBill[]>([])
   const [payments, setPayments] = useState<Payment[]>([])
+  const [paymentModes, setPaymentModes] = useState<PaymentModeRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [companyId, setCompanyId] = useState('')
   const [partyFilter, setPartyFilter] = useState('all')
@@ -216,12 +220,44 @@ export default function PaymentDashboardPage() {
   const [paymentDraft, setPaymentDraft] = useState({
     payDate: '',
     amount: '',
-    mode: 'cash' as 'cash' | 'online' | 'bank' | 'transfer',
+    mode: DEFAULT_PAYMENT_MODES[0]?.code || 'CASH',
     status: 'paid' as 'pending' | 'paid',
     txnRef: '',
     note: ''
   })
   const [savingPayment, setSavingPayment] = useState(false)
+
+  const paymentModeOptions = useMemo<PaymentModeRecord[]>(
+    () => (paymentModes.length > 0 ? paymentModes : DEFAULT_PAYMENT_MODES),
+    [paymentModes]
+  )
+
+  const paymentDraftModeOptions = useMemo<PaymentModeRecord[]>(() => {
+    const normalizedDraftMode = String(paymentDraft.mode || '').trim().toLowerCase()
+    if (!normalizedDraftMode || normalizedDraftMode === SELF_TRANSFER_PAYMENT_TYPE) {
+      return paymentModeOptions
+    }
+
+    const hasDraftModeOption = paymentModeOptions.some((paymentMode) => {
+      const normalizedCode = String(paymentMode.code || '').trim().toLowerCase()
+      const normalizedName = String(paymentMode.name || '').trim().toLowerCase()
+      return normalizedCode === normalizedDraftMode || normalizedName === normalizedDraftMode
+    })
+
+    if (hasDraftModeOption) {
+      return paymentModeOptions
+    }
+
+    return [
+      {
+        id: `legacy-${normalizedDraftMode}`,
+        name: getPaymentModeLabel(paymentDraft.mode),
+        code: paymentDraft.mode,
+        isActive: true
+      },
+      ...paymentModeOptions
+    ]
+  }, [paymentDraft.mode, paymentModeOptions])
 
   const fetchData = useCallback(async () => {
     try {
@@ -249,16 +285,18 @@ export default function PaymentDashboardPage() {
         setLoading(false)
       }
 
-      const [purchaseBillsResponse, salesBillsResponse, paymentsResponse] = await Promise.all([
+      const [purchaseBillsResponse, salesBillsResponse, paymentsResponse, paymentModesResponse] = await Promise.all([
         fetch(`/api/purchase-bills?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' }),
         fetch(`/api/sales-bills?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' }),
-        fetch(`/api/payments?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' })
+        fetch(`/api/payments?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' }),
+        fetch(`/api/payment-modes?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' })
       ])
 
       if (
         purchaseBillsResponse.status === 401 ||
         salesBillsResponse.status === 401 ||
-        paymentsResponse.status === 401
+        paymentsResponse.status === 401 ||
+        paymentModesResponse.status === 401
       ) {
         setLoading(false)
         router.push('/login')
@@ -270,14 +308,17 @@ export default function PaymentDashboardPage() {
         return
       }
 
-      const [purchaseBillsPayload, salesBillsPayload, paymentsPayload] = await Promise.all([
+      const [purchaseBillsPayload, salesBillsPayload, paymentsPayload, paymentModesPayload] = await Promise.all([
         purchaseBillsResponse.ok
           ? purchaseBillsResponse.json().catch(() => ([] as BillApiPayload<PurchaseBill>))
           : Promise.resolve([] as BillApiPayload<PurchaseBill>),
         salesBillsResponse.ok
           ? salesBillsResponse.json().catch(() => ([] as BillApiPayload<SalesBill>))
           : Promise.resolve([] as BillApiPayload<SalesBill>),
-        paymentsResponse.json().catch(() => ([] as PaymentsApiPayload))
+        paymentsResponse.json().catch(() => ([] as PaymentsApiPayload)),
+        paymentModesResponse.ok
+          ? paymentModesResponse.json().catch(() => ([] as PaymentModeRecord[]))
+          : Promise.resolve([] as PaymentModeRecord[])
       ])
       const nextPurchaseBills: PurchaseBill[] = normalizeBillCollection<PurchaseBill>(purchaseBillsPayload)
         .map((bill) => ({
@@ -295,6 +336,16 @@ export default function PaymentDashboardPage() {
           }))
       setPurchaseBills(nextPurchaseBills)
       setSalesBills(nextSalesBills)
+      setPaymentModes(
+        (Array.isArray(paymentModesPayload) ? paymentModesPayload : [])
+          .map((paymentMode) => ({
+            id: String(paymentMode?.id || ''),
+            name: String(paymentMode?.name || '').trim(),
+            code: String(paymentMode?.code || '').trim(),
+            isActive: paymentMode?.isActive !== false
+          }))
+          .filter((paymentMode) => paymentMode.id && paymentMode.name && paymentMode.code && paymentMode.isActive)
+      )
 
       const normalizedPayments: Payment[] = normalizePaymentsCollection(paymentsPayload).map((payment) => ({
         ...payment,
@@ -327,6 +378,7 @@ export default function PaymentDashboardPage() {
       setPurchaseBills([])
       setSalesBills([])
       setPayments([])
+      setPaymentModes([])
       setLoading(false)
     }
   }, [router])
@@ -356,11 +408,22 @@ export default function PaymentDashboardPage() {
   }
 
   const openPaymentEditor = (payment: Payment) => {
+    const rawMode = String(payment.mode || '').trim()
+    const matchedPaymentMode = paymentModeOptions.find((paymentMode) => {
+      const normalizedDraftMode = rawMode.toLowerCase()
+      return (
+        String(paymentMode.code || '').trim().toLowerCase() === normalizedDraftMode ||
+        String(paymentMode.name || '').trim().toLowerCase() === normalizedDraftMode
+      )
+    })
+
     setEditingPaymentId(payment.id)
     setPaymentDraft({
       payDate: toDateInputValue(payment.payDate),
       amount: String(clampNonNegative(payment.amount)),
-      mode: payment.mode.trim().toLowerCase().includes('transfer') ? 'transfer' : payment.modeCategory,
+      mode: rawMode.toLowerCase().includes('transfer')
+        ? SELF_TRANSFER_PAYMENT_TYPE
+        : matchedPaymentMode?.code || rawMode || payment.modeCategory,
       status: payment.status === 'pending' ? 'pending' : 'paid',
       txnRef: payment.txnRef || '',
       note: payment.note || ''
@@ -849,18 +912,18 @@ export default function PaymentDashboardPage() {
                     <Label htmlFor="editMode">Mode</Label>
                     <Select
                       value={paymentDraft.mode}
-                      onValueChange={(value: 'cash' | 'online' | 'bank' | 'transfer') =>
-                        setPaymentDraft((prev) => ({ ...prev, mode: value }))
-                      }
+                      onValueChange={(value) => setPaymentDraft((prev) => ({ ...prev, mode: value }))}
                     >
                       <SelectTrigger id="editMode">
                         <SelectValue placeholder="Select mode" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="cash">Cash</SelectItem>
-                        <SelectItem value="online">Online</SelectItem>
-                        <SelectItem value="bank">Bank Transfer</SelectItem>
-                        <SelectItem value="transfer">Self Transfer</SelectItem>
+                        {paymentDraftModeOptions.map((paymentMode) => (
+                          <SelectItem key={paymentMode.id} value={paymentMode.code}>
+                            {paymentMode.name}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value={SELF_TRANSFER_PAYMENT_TYPE}>Self Transfer</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

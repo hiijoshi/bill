@@ -37,6 +37,7 @@ import ReportsTab from './components/ReportsTab'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { notifyAppCompanyChanged, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { getReadablePermissionModules, resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
+import { loadClientPermissions } from '@/lib/client-permissions'
 
 type ActiveTab = 'purchase' | 'sales' | 'stock' | 'payment' | 'report'
 const DASHBOARD_CACHE_AGE_MS = 15_000
@@ -290,14 +291,8 @@ export default function MainDashboardPage() {
     }
 
     try {
-      const response = await fetch(
-        `/api/auth/permissions?companyId=${encodeURIComponent(normalizedCompanyId)}&includeMeta=true`,
-        { cache: 'no-store' }
-      )
-      const payload = await response.json().catch(() => ({} as {
-        permissions?: Array<{ module?: string; canRead?: boolean; canWrite?: boolean }>
-      }))
-      const permissions = Array.isArray(payload.permissions) ? payload.permissions : []
+      const payload = await loadClientPermissions(normalizedCompanyId)
+      const permissions = payload.permissions
       const nextRoute = resolveFirstAccessibleAppRoute(permissions, normalizedCompanyId)
       router.replace(nextRoute.startsWith('/main/dashboard') ? '/company/select' : nextRoute)
     } catch {
@@ -314,14 +309,8 @@ export default function MainDashboardPage() {
     }
 
     try {
-      const response = await fetch(
-        `/api/auth/permissions?companyId=${encodeURIComponent(normalizedCompanyId)}&includeMeta=true`,
-        { cache: 'no-store' }
-      )
-      const payload = await response.json().catch(() => ({} as {
-        permissions?: Array<{ module?: string; canRead?: boolean; canWrite?: boolean }>
-      }))
-      const permissions = Array.isArray(payload.permissions) ? payload.permissions : []
+      const payload = await loadClientPermissions(normalizedCompanyId)
+      const permissions = payload.permissions
       const allowed = new Set(getReadablePermissionModules(permissions)).has('DASHBOARD')
       setHasDashboardAccess(allowed)
       setDashboardAccessResolved(true)

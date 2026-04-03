@@ -12,6 +12,7 @@ import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Truck, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId } from '@/lib/company-context'
+import { getClientModulePermission, loadClientPermissions } from '@/lib/client-permissions'
 import { isAbortError } from '@/lib/http'
 import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
@@ -68,19 +69,8 @@ export default function SupplierMasterPage() {
   const fetchSupplierPermissions = useCallback(async (id: string) => {
     const denied = { canRead: false, canWrite: false }
     try {
-      const response = await fetch(`/api/auth/permissions?companyId=${encodeURIComponent(id)}&includeMeta=true`, {
-        cache: 'no-store'
-      })
-      if (!response.ok) {
-        setCanReadSupplier(false)
-        setCanWriteSupplier(false)
-        return denied
-      }
-      const payload = await response.json().catch(() => ({}))
-      const permissions = Array.isArray(payload?.permissions) ? payload.permissions : []
-      const supplierPermission = permissions.find((row: { module?: string }) => row.module === 'MASTER_PARTIES')
-      const canRead = Boolean(supplierPermission?.canRead || supplierPermission?.canWrite)
-      const canWrite = Boolean(supplierPermission?.canWrite)
+      const payload = await loadClientPermissions(id)
+      const { canRead, canWrite } = getClientModulePermission(payload.permissions, 'MASTER_PARTIES')
       setCanReadSupplier(canRead)
       setCanWriteSupplier(canWrite)
       return { canRead, canWrite }
@@ -91,7 +81,7 @@ export default function SupplierMasterPage() {
     }
   }, [])
 
-  const fetchSuppliers = useCallback(async (id = companyId) => {
+  const fetchSuppliers = useCallback(async (id: string) => {
     if (!id) return
     const cacheKey = `master-suppliers:${id}`
     const cached = getClientCache<{ data?: Supplier[] }>(cacheKey, 30_000)
@@ -170,7 +160,7 @@ export default function SupplierMasterPage() {
     } finally {
       setLoading(false)
     }
-  }, [applySuppliers, companyId])
+  }, [applySuppliers])
 
   useEffect(() => {
     let cancelled = false
@@ -294,7 +284,7 @@ export default function SupplierMasterPage() {
         text: editingSupplier ? 'Supplier updated successfully' : 'Supplier data stored successfully'
       })
       resetForm()
-      await fetchSuppliers()
+      await fetchSuppliers(companyId)
     } catch (error) {
       console.error('Error saving supplier:', error)
       setMessage({ type: 'error', text: 'Failed to save supplier' })
@@ -333,7 +323,7 @@ export default function SupplierMasterPage() {
       }
 
       setMessage({ type: 'success', text: result.message || 'Supplier deleted successfully' })
-      await fetchSuppliers()
+      await fetchSuppliers(companyId)
     } catch (error) {
       console.error('Error deleting supplier:', error)
       setMessage({ type: 'error', text: 'Failed to delete supplier' })
@@ -357,7 +347,7 @@ export default function SupplierMasterPage() {
       }
 
       setMessage({ type: 'success', text: result.message || 'All suppliers deleted successfully' })
-      await fetchSuppliers()
+      await fetchSuppliers(companyId)
     } catch (error) {
       console.error('Error deleting all suppliers:', error)
       setMessage({ type: 'error', text: 'Failed to delete suppliers' })
@@ -409,7 +399,7 @@ export default function SupplierMasterPage() {
     }
 
     setMessage({ type: 'success', text: formatMasterImportSummary('Supplier', result) })
-    await fetchSuppliers()
+    await fetchSuppliers(companyId)
   }
 
   if (loading) {

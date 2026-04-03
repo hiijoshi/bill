@@ -148,7 +148,7 @@ async function ensurePurchaseBillReadAccess(
     return unauthorized('Authentication required')
   }
 
-  const allowedCompany = await hasCompanyAccess(companyId, auth)
+  const allowedCompany = await hasCompanyAccess(companyId, auth, request)
   if (!allowedCompany) {
     return forbidden('Company access denied')
   }

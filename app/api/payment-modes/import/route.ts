@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess } from '@/lib/api-security'
 import { cleanString } from '@/lib/field-validation'
 import { getCsvValue, parseCsvBoolean, parseCsvObjects } from '@/lib/master-csv'
+import { ensureDefaultPaymentModes } from '@/lib/payment-mode-utils'
 import { resolveCompanyIdFromRequest } from '@/lib/request-company'
 
 export async function POST(request: NextRequest) {
@@ -71,6 +72,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    await ensureDefaultPaymentModes(prisma, companyId)
+
     return NextResponse.json({
       success: true,
       imported,
@@ -84,4 +87,3 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
-

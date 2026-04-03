@@ -120,7 +120,14 @@ export async function GET(request: NextRequest) {
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
-    await ensureDefaultAccountingHeads(prisma, companyId)
+    try {
+      await ensureDefaultAccountingHeads(prisma, companyId)
+    } catch (error) {
+      console.error('Failed to ensure default accounting heads', {
+        companyId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
 
     const rows = await prisma.accountingHead.findMany({
       where: { companyId },

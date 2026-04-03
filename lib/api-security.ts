@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { resolveRoutePermission } from '@/lib/permissions'
+import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
 
 export type AppRole = 'super_admin' | 'trader_admin' | 'company_admin' | 'company_user'
 
@@ -175,9 +176,18 @@ export function requireRoles(
 
 export async function hasCompanyAccess(
   companyId: string,
-  auth: RequestAuthContext
+  auth: RequestAuthContext,
+  request?: NextRequest
 ): Promise<boolean> {
   if (!companyId) return false
+
+  if (request) {
+    const supabaseSession = await resolveSupabaseAppSession(request, companyId)
+    if (supabaseSession) {
+      return supabaseSession.companies.some((company) => company.id === companyId && !company.locked)
+    }
+  }
+
   const scopedCompanyIds = await getScopedCompanyIds(auth, companyId)
   return scopedCompanyIds.includes(companyId)
 }
@@ -276,7 +286,7 @@ export async function ensureCompanyAccess(
     return authResult.response
   }
 
-  const allowed = await hasCompanyAccess(companyId, authResult.auth)
+  const allowed = await hasCompanyAccess(companyId, authResult.auth, request)
   if (!allowed) {
     return forbidden('Company access denied')
   }

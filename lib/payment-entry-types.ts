@@ -13,7 +13,7 @@ export const PAYMENT_ENTRY_TYPES = [
 ] as const
 
 export type PaymentEntryType = (typeof PAYMENT_ENTRY_TYPES)[number]
-export type CashBankReferenceType = 'accounting-head' | 'supplier'
+export type CashBankReferenceType = 'accounting-head' | 'party' | 'supplier'
 
 export function isPaymentEntryType(value: unknown): value is PaymentEntryType {
   return PAYMENT_ENTRY_TYPES.includes(String(value || '').trim() as PaymentEntryType)
@@ -77,7 +77,7 @@ export function parseCashBankPaymentReference(
   const referenceId = idParts.join(':').trim()
 
   if (!referenceId) return null
-  if (referenceType !== 'accounting-head' && referenceType !== 'supplier') {
+  if (referenceType !== 'accounting-head' && referenceType !== 'party' && referenceType !== 'supplier') {
     return null
   }
 

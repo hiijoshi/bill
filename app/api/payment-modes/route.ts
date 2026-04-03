@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
+import { ensureDefaultPaymentModes } from '@/lib/payment-mode-utils'
 import { getSupabaseClaimsFromRequest, hasSupabaseAppContext } from '@/lib/supabase/auth-bridge'
 
 function normalizeCompanyId(raw: string | null): string | null {
@@ -74,15 +75,15 @@ export async function GET(request: NextRequest) {
         normalizeCompanyId(supabaseContext.claims.default_company_id || null) ||
         getCompanyIdFromAuthenticatedRequest(request)
 
-      const { data, error } = await supabaseContext.supabase
-        .from('PaymentMode')
-        .select('*')
-        .eq('companyId', companyId)
-        .order('name', { ascending: true })
+      const denied = await ensureCompanyAccess(request, companyId)
+      if (denied) return supabaseContext.applyCookies(denied)
 
-      if (error) {
-        return supabaseContext.applyCookies(supabaseErrorResponse(error))
-      }
+      await ensureDefaultPaymentModes(prisma, companyId)
+
+      const data = await prisma.paymentMode.findMany({
+        where: { companyId },
+        orderBy: { name: 'asc' }
+      })
 
       return supabaseContext.applyCookies(NextResponse.json(data ?? []))
     }
@@ -93,6 +94,8 @@ export async function GET(request: NextRequest) {
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
+
+    await ensureDefaultPaymentModes(prisma, companyId)
 
     const rows = await prisma.paymentMode.findMany({
       where: { companyId },
@@ -116,6 +119,9 @@ export async function POST(request: NextRequest) {
         normalizeCompanyId(new URL(request.url).searchParams.get('companyId')) ||
         normalizeCompanyId(supabaseContext.claims.default_company_id || null) ||
         getCompanyIdFromAuthenticatedRequest(request)
+
+      const denied = await ensureCompanyAccess(request, companyId)
+      if (denied) return supabaseContext.applyCookies(denied)
 
       const name = clean(parsed.data.name)
       const code = clean(parsed.data.code)?.toUpperCase() || null
@@ -202,6 +208,9 @@ export async function PUT(request: NextRequest) {
         normalizeCompanyId(supabaseContext.claims.default_company_id || null) ||
         getCompanyIdFromAuthenticatedRequest(request)
 
+      const denied = await ensureCompanyAccess(request, companyId)
+      if (denied) return supabaseContext.applyCookies(denied)
+
       const code = parsed.data.code.toUpperCase()
       const { data, error } = await supabaseContext.supabase
         .from('PaymentMode')
@@ -281,6 +290,9 @@ export async function DELETE(request: NextRequest) {
         normalizeCompanyId(searchParams.get('companyId')) ||
         normalizeCompanyId(supabaseContext.claims.default_company_id || null) ||
         getCompanyIdFromAuthenticatedRequest(request)
+
+      const denied = await ensureCompanyAccess(request, companyId)
+      if (denied) return supabaseContext.applyCookies(denied)
 
       if (all) {
         const { error, count } = await supabaseContext.supabase

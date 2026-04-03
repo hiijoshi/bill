@@ -18,6 +18,7 @@ import {
   MANDI_CALCULATION_BASIS_OPTIONS
 } from '@/lib/mandi-charge-engine'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId } from '@/lib/company-context'
+import { getClientModulePermission, loadClientPermissions } from '@/lib/client-permissions'
 
 type AccountingHead = {
   id: string
@@ -89,20 +90,8 @@ export default function AccountingHeadMasterPage() {
   const fetchAccountingHeadPermissions = useCallback(async (resolvedCompanyId: string) => {
     const denied = { canRead: false, canWrite: false }
     try {
-      const response = await fetch(`/api/auth/permissions?companyId=${encodeURIComponent(resolvedCompanyId)}&includeMeta=true`, {
-        cache: 'no-store'
-      })
-      if (!response.ok) {
-        setCanReadAccountingHead(false)
-        setCanWriteAccountingHead(false)
-        return denied
-      }
-
-      const payload = await response.json().catch(() => ({}))
-      const permissions = Array.isArray(payload?.permissions) ? payload.permissions : []
-      const accountingHeadPermission = permissions.find((row: { module?: string }) => row.module === 'MASTER_ACCOUNTING_HEAD')
-      const canRead = Boolean(accountingHeadPermission?.canRead || accountingHeadPermission?.canWrite)
-      const canWrite = Boolean(accountingHeadPermission?.canWrite)
+      const payload = await loadClientPermissions(resolvedCompanyId)
+      const { canRead, canWrite } = getClientModulePermission(payload.permissions, 'MASTER_ACCOUNTING_HEAD')
 
       setCanReadAccountingHead(canRead)
       setCanWriteAccountingHead(canWrite)
@@ -114,7 +103,7 @@ export default function AccountingHeadMasterPage() {
     }
   }, [])
 
-  const fetchMasterData = useCallback(async (targetCompanyId = companyId) => {
+  const fetchMasterData = useCallback(async (targetCompanyId: string) => {
     if (!targetCompanyId) return
     try {
       const [headsResponse, mandiTypesResponse] = await Promise.all([
@@ -144,7 +133,7 @@ export default function AccountingHeadMasterPage() {
     } finally {
       setLoading(false)
     }
-  }, [companyId])
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -282,7 +271,7 @@ export default function AccountingHeadMasterPage() {
 
       alert(editingRow ? 'Accounting head updated successfully!' : 'Accounting head created successfully!')
       resetForm()
-      await fetchMasterData()
+      await fetchMasterData(companyId)
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to save accounting head')
     }
@@ -330,7 +319,7 @@ export default function AccountingHeadMasterPage() {
       }
 
       alert('Accounting head deleted successfully!')
-      await fetchMasterData()
+      await fetchMasterData(companyId)
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to delete accounting head')
     }
@@ -353,7 +342,7 @@ export default function AccountingHeadMasterPage() {
     const payload = await response.json().catch(() => ({} as { error?: string; message?: string }))
     alert(payload.message || payload.error || 'Operation completed')
     if (response.ok) {
-      await fetchMasterData()
+      await fetchMasterData(companyId)
     }
   }
 

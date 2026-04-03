@@ -335,24 +335,34 @@ async function upsertMasterData(config: SeedConfig, appUserDbId: string) {
     }
   })
 
-  await prisma.paymentMode.upsert({
-    where: { id: buildSeedId(companyId, 'payment-mode') },
-    update: {
-      companyId,
-      name: 'Cash',
-      code: 'CASH',
-      description: 'Seeded payment mode',
-      isActive: true
-    },
-    create: {
-      id: buildSeedId(companyId, 'payment-mode'),
-      companyId,
-      name: 'Cash',
-      code: 'CASH',
-      description: 'Seeded payment mode',
-      isActive: true
-    }
-  })
+  const seededPaymentModes = [
+    { name: 'Cash', code: 'CASH' },
+    { name: 'Cheque', code: 'CHEQUE' },
+    { name: 'NEFT', code: 'NEFT' },
+    { name: 'RTGS', code: 'RTGS' },
+    { name: 'UPI', code: 'UPI' }
+  ] as const
+
+  for (const paymentMode of seededPaymentModes) {
+    await prisma.paymentMode.upsert({
+      where: { id: buildSeedId(companyId, `payment-mode-${paymentMode.code.toLowerCase()}`) },
+      update: {
+        companyId,
+        name: paymentMode.name,
+        code: paymentMode.code,
+        description: 'Seeded payment mode',
+        isActive: true
+      },
+      create: {
+        id: buildSeedId(companyId, `payment-mode-${paymentMode.code.toLowerCase()}`),
+        companyId,
+        name: paymentMode.name,
+        code: paymentMode.code,
+        description: 'Seeded payment mode',
+        isActive: true
+      }
+    })
+  }
 
   await prisma.userPermission.deleteMany({
     where: {

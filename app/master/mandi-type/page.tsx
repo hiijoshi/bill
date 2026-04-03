@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId } from '@/lib/company-context'
+import { getClientModulePermission, loadClientPermissions } from '@/lib/client-permissions'
 
 type MandiTypeRow = {
   id: string
@@ -54,20 +55,11 @@ export default function MandiTypeMasterPage() {
   const fetchPermissions = useCallback(async (resolvedCompanyId: string) => {
     const denied = { canRead: false, canWrite: false }
     try {
-      const response = await fetch(`/api/auth/permissions?companyId=${encodeURIComponent(resolvedCompanyId)}&includeMeta=true`, {
-        cache: 'no-store'
-      })
-      if (!response.ok) {
-        setCanRead(false)
-        setCanWrite(false)
-        return denied
-      }
-
-      const payload = await response.json().catch(() => ({}))
-      const permissions = Array.isArray(payload?.permissions) ? payload.permissions : []
-      const permission = permissions.find((row: { module?: string }) => row.module === 'MASTER_ACCOUNTING_HEAD')
-      const nextRead = Boolean(permission?.canRead || permission?.canWrite)
-      const nextWrite = Boolean(permission?.canWrite)
+      const payload = await loadClientPermissions(resolvedCompanyId)
+      const { canRead: nextRead, canWrite: nextWrite } = getClientModulePermission(
+        payload.permissions,
+        'MASTER_ACCOUNTING_HEAD'
+      )
       setCanRead(nextRead)
       setCanWrite(nextWrite)
       return { canRead: nextRead, canWrite: nextWrite }
@@ -78,7 +70,7 @@ export default function MandiTypeMasterPage() {
     }
   }, [])
 
-  const fetchRows = useCallback(async (targetCompanyId = companyId) => {
+  const fetchRows = useCallback(async (targetCompanyId: string) => {
     if (!targetCompanyId) return
     try {
       const response = await fetch(`/api/mandi-types?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' })
@@ -94,7 +86,7 @@ export default function MandiTypeMasterPage() {
     } finally {
       setLoading(false)
     }
-  }, [companyId])
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -208,7 +200,7 @@ export default function MandiTypeMasterPage() {
 
       alert(editingRow ? 'Mandi type updated successfully!' : 'Mandi type created successfully!')
       resetForm()
-      await fetchRows()
+      await fetchRows(companyId)
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to save mandi type')
     }
@@ -251,7 +243,7 @@ export default function MandiTypeMasterPage() {
         throw new Error(payload.error || 'Failed to delete mandi type')
       }
       alert('Mandi type deleted successfully!')
-      await fetchRows()
+      await fetchRows(companyId)
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to delete mandi type')
     }

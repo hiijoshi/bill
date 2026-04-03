@@ -135,9 +135,13 @@ export function stripCompanyParamsFromUrl(): void {
 
 export function notifyAppCompanyChanged(companyId: string): void {
   if (typeof window === 'undefined') return
+  const normalizedCompanyId = companyId.trim()
+  if (normalizedCompanyId) {
+    setClientCache(ACTIVE_COMPANY_CACHE_KEY, normalizedCompanyId, { persist: true })
+  }
   window.dispatchEvent(
     new CustomEvent(APP_COMPANY_CHANGED_EVENT, {
-      detail: { companyId }
+      detail: { companyId: normalizedCompanyId }
     })
   )
 }
