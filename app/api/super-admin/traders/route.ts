@@ -5,6 +5,7 @@ import { parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { normalizeTraderLimitInput } from '@/lib/trader-limits'
 import { normalizePrismaApiError } from '@/lib/prisma-errors'
+import { markSuperAdminLiveUpdate } from '@/lib/live-update-state'
 
 const createTraderSchema = z
   .object({
@@ -123,6 +124,7 @@ export async function POST(request: NextRequest) {
       after: trader,
       requestMeta: getAuditRequestMeta(request)
     })
+    markSuperAdminLiveUpdate()
 
     return NextResponse.json(
       {

@@ -56,26 +56,54 @@ function normalizeScopes(scopes: AppDataScope[]): AppDataScope[] {
   )
 }
 
+async function syncAppDataChangeToServer(detail: AppDataChangeDetail): Promise<void> {
+  try {
+    await fetch('/api/live-updates', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      cache: 'no-store',
+      keepalive: true,
+      body: JSON.stringify({
+        companyId: detail.companyId
+      })
+    })
+  } catch {
+    // Best-effort sync only. Local tab and BroadcastChannel updates should keep working.
+  }
+}
+
 function getCachePrefixesForScope(companyId: string, scope: AppDataScope): string[] {
   switch (scope) {
     case 'purchase-bills':
       return [
+        'main-dashboard:',
         `purchase-bills:${companyId}`,
         `payment-purchase-bills:${companyId}:`,
         `purchase-entry:${companyId}`,
+        `dashboard-payment:${companyId}`,
+        `dashboard-stock:${companyId}`,
+        `dashboard-stock-ledger:${companyId}:`,
         `payment-page:${companyId}`,
         `payments-dashboard:${companyId}`
       ]
     case 'sales-bills':
       return [
+        'main-dashboard:',
         `sales-bills:${companyId}`,
         `payment-sales-bills:${companyId}`,
         `sales-entry:${companyId}:`,
+        `dashboard-payment:${companyId}`,
+        `dashboard-stock:${companyId}`,
+        `dashboard-stock-ledger:${companyId}:`,
         `payment-page:${companyId}`,
         `payments-dashboard:${companyId}`
       ]
     case 'payments':
       return [
+        'main-dashboard:',
+        `dashboard-payment:${companyId}`,
         `payment-page:${companyId}`,
         `payments-dashboard:${companyId}`,
         `purchase-bills:${companyId}`,
@@ -119,7 +147,12 @@ function getCachePrefixesForScope(companyId: string, scope: AppDataScope): strin
         `journal-voucher-references:${companyId}`
       ]
     case 'products':
-      return [`purchase-entry:${companyId}`]
+      return [
+        'main-dashboard:',
+        `purchase-entry:${companyId}`,
+        `dashboard-stock:${companyId}`,
+        `dashboard-stock-ledger:${companyId}:`
+      ]
     case 'mandi-types':
       return [`purchase-entry:${companyId}`]
     case 'units':
@@ -134,12 +167,16 @@ function getCachePrefixesForScope(companyId: string, scope: AppDataScope): strin
       ]
     case 'all':
       return [
+        'main-dashboard:',
         `purchase-bills:${companyId}`,
         `payment-purchase-bills:${companyId}:`,
         `purchase-entry:${companyId}`,
         `sales-bills:${companyId}`,
         `payment-sales-bills:${companyId}`,
         `sales-entry:${companyId}:`,
+        `dashboard-payment:${companyId}`,
+        `dashboard-stock:${companyId}`,
+        `dashboard-stock-ledger:${companyId}:`,
         `payment-page:${companyId}`,
         `payments-dashboard:${companyId}`,
         `payment-banks:${companyId}`,
@@ -169,6 +206,13 @@ export function invalidateAppDataCaches(companyId: string, scopes: AppDataScope[
   }
 }
 
+export function broadcastAppDataChanged(detail: AppDataChangeDetail): void {
+  if (typeof window === 'undefined') return
+
+  window.dispatchEvent(new CustomEvent<AppDataChangeDetail>(APP_DATA_CHANGED_EVENT, { detail }))
+  getLiveDataChannel()?.postMessage(detail)
+}
+
 export function notifyAppDataChanged(input: {
   companyId: string
   scopes: AppDataScope[]
@@ -183,8 +227,8 @@ export function notifyAppDataChanged(input: {
 
   if (!payload.companyId || payload.scopes.length === 0) return
 
-  window.dispatchEvent(new CustomEvent<AppDataChangeDetail>(APP_DATA_CHANGED_EVENT, { detail: payload }))
-  getLiveDataChannel()?.postMessage(payload)
+  broadcastAppDataChanged(payload)
+  void syncAppDataChangeToServer(payload)
 }
 
 export function subscribeAppDataChanged(listener: (detail: AppDataChangeDetail) => void): () => void {

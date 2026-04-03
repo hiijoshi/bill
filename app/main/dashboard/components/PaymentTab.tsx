@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { TaskLoader } from '@/components/loaders/task-loader'
 import { Plus, Eye, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { matchesAppDataChange, subscribeAppDataChanged } from '@/lib/app-live-data'
 import {
   getPaymentTypeLabel,
   isIncomingCashflowPaymentType,
@@ -109,11 +110,11 @@ export default function PaymentTab({
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
-  const fetchPaymentData = useCallback(async () => {
+  const fetchPaymentData = useCallback(async (force = false) => {
     try {
       setLoading(true)
 
-      const cached = getClientCache<PaymentCachePayload>(paymentCacheKey, PAYMENT_CACHE_AGE_MS)
+      const cached = force ? null : getClientCache<PaymentCachePayload>(paymentCacheKey, PAYMENT_CACHE_AGE_MS)
       if (cached) {
         setPurchaseBills(cached.purchaseBills)
         setSalesBills(cached.salesBills)
@@ -183,6 +184,20 @@ export default function PaymentTab({
     }
     return undefined
   }, [companyId, fetchPaymentData, hasInitialData])
+
+  useEffect(() => {
+    if (!companyId) return undefined
+
+    const unsubscribe = subscribeAppDataChanged((detail) => {
+      if (!matchesAppDataChange(detail, companyId, ['purchase-bills', 'sales-bills', 'payments', 'all'])) {
+        return
+      }
+
+      void fetchPaymentData(true)
+    })
+
+    return unsubscribe
+  }, [companyId, fetchPaymentData])
 
   const purchaseBillsData = useMemo(
     () => (hasInitialData ? initialPurchaseBills || [] : purchaseBills),

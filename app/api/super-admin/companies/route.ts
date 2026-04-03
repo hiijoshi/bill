@@ -6,6 +6,8 @@ import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { generateUniqueMandiAccountNumber } from '@/lib/mandi-account-number'
 import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
 import { normalizePrismaApiError } from '@/lib/prisma-errors'
+import { getConnectedUserCountsForCompanies } from '@/lib/super-admin-user-companies'
+import { markSuperAdminLiveUpdate } from '@/lib/live-update-state'
 
 const companyPayloadSchema = z
   .object({
@@ -88,6 +90,12 @@ export async function GET(request: NextRequest) {
       }
     })
 
+    const connectedUserCounts = await getConnectedUserCountsForCompanies(prisma, {
+      companyIds: companies.map((company) => company.id),
+      traderId: traderIdFilter,
+      includeDeletedUsers: includeDeleted
+    })
+
     const response = companies.map((company) => ({
       id: company.id,
       name: company.name,
@@ -101,7 +109,7 @@ export async function GET(request: NextRequest) {
       updatedAt: company.updatedAt,
       trader: company.trader,
       _count: {
-        users: company._count.users,
+        users: connectedUserCounts[company.id] ?? 0,
         parties: company._count.parties,
         farmers: company._count.farmers,
         suppliers: company._count.suppliers,
@@ -230,6 +238,7 @@ export async function POST(request: NextRequest) {
       after: company,
       requestMeta: getAuditRequestMeta(request)
     })
+    markSuperAdminLiveUpdate()
 
     return NextResponse.json(
       {

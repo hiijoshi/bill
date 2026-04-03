@@ -8,6 +8,7 @@ import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { syncSupabaseForLegacyUserMutationWithTimeout } from '@/lib/supabase/legacy-user-sync'
 import { normalizePrismaApiError } from '@/lib/prisma-errors'
 import { getLinkedCompaniesForUser } from '@/lib/super-admin-user-companies'
+import { markCompanyLiveUpdate, markSuperAdminLiveUpdate, markUserSessionLiveUpdate } from '@/lib/live-update-state'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'User ID is required') })
 
@@ -322,6 +323,9 @@ export async function PUT(
       requestMeta: getAuditRequestMeta(request),
       notes: 'User privilege matrix updated'
     })
+    markSuperAdminLiveUpdate()
+    markCompanyLiveUpdate(companyId)
+    markUserSessionLiveUpdate(user)
 
     // Supabase sync is best-effort — never let it fail the main response
     let cloudSyncWarning: string | null = null

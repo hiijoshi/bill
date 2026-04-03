@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { TaskLoader } from '@/components/loaders/task-loader'
 import { Plus, Eye, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { matchesAppDataChange, subscribeAppDataChanged } from '@/lib/app-live-data'
 
 interface Product {
   id: string
@@ -85,11 +86,11 @@ export default function StockManagementTab({
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
-  const fetchStockData = useCallback(async () => {
+  const fetchStockData = useCallback(async (force = false) => {
     try {
       setLoading(true)
 
-      const cached = getClientCache<StockCachePayload>(stockCacheKey, STOCK_CACHE_AGE_MS)
+      const cached = force ? null : getClientCache<StockCachePayload>(stockCacheKey, STOCK_CACHE_AGE_MS)
       if (cached) {
         setProducts(cached.products)
         setStockSummary(cached.stockSummary)
@@ -132,13 +133,13 @@ export default function StockManagementTab({
     }
   }, [companyId, stockCacheKey])
 
-  const fetchLedgerData = useCallback(async () => {
+  const fetchLedgerData = useCallback(async (force = false) => {
     if (!companyId) return
 
     const normalizedProductId = filterProduct !== 'all' ? filterProduct : ''
     const normalizedType = filterType !== 'all' ? filterType : ''
     const ledgerCacheKey = `dashboard-stock-ledger:${companyId}:${normalizedProductId}:${normalizedType}:${dateFrom}:${dateTo}`
-    const cached = getClientCache<StockLedgerCachePayload>(ledgerCacheKey, 15_000)
+    const cached = force ? null : getClientCache<StockLedgerCachePayload>(ledgerCacheKey, 15_000)
     if (cached) {
       setStockLedger(cached.stockLedger)
       setLedgerLoading(false)
@@ -198,6 +199,21 @@ export default function StockManagementTab({
     }, 0)
     return () => window.clearTimeout(timer)
   }, [companyId, dateFrom, dateTo, fetchLedgerData, filterProduct, filterType])
+
+  useEffect(() => {
+    if (!companyId) return undefined
+
+    const unsubscribe = subscribeAppDataChanged((detail) => {
+      if (!matchesAppDataChange(detail, companyId, ['purchase-bills', 'sales-bills', 'products', 'all'])) {
+        return
+      }
+
+      void fetchStockData(true)
+      void fetchLedgerData(true)
+    })
+
+    return unsubscribe
+  }, [companyId, fetchLedgerData, fetchStockData])
 
   const productsData = useMemo(
     () => (hasInitialData ? initialProducts || [] : products),

@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { parseBooleanParam, requireRoles } from '@/lib/api-security'
+import { invalidateAuthGuardStateForUser } from '@/lib/auth-guard-state'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { normalizeTraderLimitInput } from '@/lib/trader-limits'
 import { normalizePrismaApiError } from '@/lib/prisma-errors'
+import { markCompanyLiveUpdates, markSuperAdminLiveUpdate, markUserSessionLiveUpdates } from '@/lib/live-update-state'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'Trader ID is required') })
 
@@ -152,6 +154,35 @@ export async function PUT(
       }
     }
 
+    const affectedUsers =
+      parsedBody.data.locked !== undefined && parsedBody.data.locked !== existingTrader.locked
+        ? await prisma.user.findMany({
+            where: {
+              traderId,
+              deletedAt: null
+            },
+            select: {
+              id: true,
+              traderId: true,
+              userId: true
+            }
+          })
+        : []
+    const affectedCompanyIds =
+      parsedBody.data.locked !== undefined && parsedBody.data.locked !== existingTrader.locked
+        ? (
+            await prisma.company.findMany({
+              where: {
+                traderId,
+                deletedAt: null
+              },
+              select: {
+                id: true
+              }
+            })
+          ).map((company) => company.id)
+        : []
+
     const updatedTrader = await prisma.$transaction(async (tx) => {
       const updated = await tx.trader.update({
         where: { id: traderId },
@@ -208,6 +239,12 @@ export async function PUT(
       after: updatedTrader,
       requestMeta: getAuditRequestMeta(request)
     })
+    markSuperAdminLiveUpdate()
+    markCompanyLiveUpdates(affectedCompanyIds)
+    markUserSessionLiveUpdates(affectedUsers)
+    affectedUsers.forEach((user) => {
+      invalidateAuthGuardStateForUser(user)
+    })
 
     const response = await getTraderById(traderId, false)
     return NextResponse.json(response)
@@ -248,6 +285,28 @@ export async function DELETE(
     }
 
     const deletedAt = new Date()
+    const affectedUsers = await prisma.user.findMany({
+      where: {
+        traderId,
+        deletedAt: null
+      },
+      select: {
+        id: true,
+        traderId: true,
+        userId: true
+      }
+    })
+    const affectedCompanyIds = (
+      await prisma.company.findMany({
+        where: {
+          traderId,
+          deletedAt: null
+        },
+        select: {
+          id: true
+        }
+      })
+    ).map((company) => company.id)
 
     const deletedSnapshot = await prisma.$transaction(async (tx) => {
       const trader = await tx.trader.update({
@@ -295,6 +354,12 @@ export async function DELETE(
       before: existingTrader,
       after: deletedSnapshot,
       requestMeta: getAuditRequestMeta(request)
+    })
+    markSuperAdminLiveUpdate()
+    markCompanyLiveUpdates(affectedCompanyIds)
+    markUserSessionLiveUpdates(affectedUsers)
+    affectedUsers.forEach((user) => {
+      invalidateAuthGuardStateForUser(user)
     })
 
     return NextResponse.json({ success: true })

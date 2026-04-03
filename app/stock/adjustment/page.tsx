@@ -14,8 +14,9 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { deleteClientCacheByPrefix, getClientCache, setClientCache } from '@/lib/client-fetch-cache'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
+import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
 
 interface Product {
   id: string
@@ -300,7 +301,8 @@ export default function StockAdjustmentPage() {
   useEffect(() => {
     let cancelled = false
 
-    ;(async () => {
+    const loadStockScope = async () => {
+      setPageLoading(true)
       const paramsFromUrl = new URLSearchParams(window.location.search)
       preferredProductIdRef.current = paramsFromUrl.get('productId')?.trim() || ''
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
@@ -316,10 +318,19 @@ export default function StockAdjustmentPage() {
       setCompanyId(resolvedCompanyId)
       stripCompanyParamsFromUrl()
       await fetchStockContext(resolvedCompanyId, () => cancelled)
-    })()
+    }
+
+    void loadStockScope()
+
+    const onCompanyChanged = () => {
+      void loadStockScope()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
 
     return () => {
       cancelled = true
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
   }, [fetchStockContext, router])
 
@@ -427,6 +438,8 @@ export default function StockAdjustmentPage() {
       }
 
       deleteClientCacheByPrefix(`stock-overview:${companyId}`)
+      invalidateAppDataCaches(companyId, ['all'])
+      notifyAppDataChanged({ companyId, scopes: ['all'] })
       await fetchStockContext(companyId)
       setQuantity('')
       setRemark('')

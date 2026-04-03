@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Building2, Lock, RefreshCw, Shield, Store, Unlock, Users } from 'lucide-react'
+import { subscribeSuperAdminDataChanged } from '@/lib/super-admin-live-data'
 
 type SuperAdminOverviewClientProps = {
   initialStats: {
@@ -112,6 +113,9 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     () => users.find((row) => row.id === selectedUserId) || null,
     [users, selectedUserId]
   )
+  const traderSummaryCount = traders.length > 0 ? traders.length : initialStats.traders
+  const companySummaryCount = selectedTrader ? companies.length : initialStats.companies
+  const userSummaryCount = selectedCompany ? users.length : initialStats.users
 
   const filteredTraders = useMemo(() => {
     const query = traderQuery.trim().toLowerCase()
@@ -210,7 +214,7 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     setLoadingTraders(true)
     setError(null)
     try {
-      const response = await fetch('/api/super-admin/traders')
+      const response = await fetch('/api/super-admin/traders', { cache: 'no-store' })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) {
         throw new Error(payload.error || 'Failed to load traders')
@@ -227,7 +231,9 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     const requestId = ++companiesRequestRef.current
     setLoadingCompanies(true)
     try {
-      const response = await fetch(`/api/super-admin/companies?traderId=${encodeURIComponent(traderId)}`)
+      const response = await fetch(`/api/super-admin/companies?traderId=${encodeURIComponent(traderId)}`, {
+        cache: 'no-store'
+      })
       const payload = await response.json().catch(() => ({}))
       if (requestId !== companiesRequestRef.current) return
       if (!response.ok) {
@@ -244,11 +250,19 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     }
   }, [])
 
-  const fetchUsers = useCallback(async (companyId: string) => {
+  const fetchUsers = useCallback(async (companyId: string, traderId?: string | null) => {
     const requestId = ++usersRequestRef.current
     setLoadingUsers(true)
     try {
-      const response = await fetch(`/api/super-admin/users?companyId=${encodeURIComponent(companyId)}`)
+      const searchParams = new URLSearchParams({
+        companyId
+      })
+      if (traderId?.trim()) {
+        searchParams.set('traderId', traderId)
+      }
+      const response = await fetch(`/api/super-admin/users?${searchParams.toString()}`, {
+        cache: 'no-store'
+      })
       const payload = await response.json().catch(() => ({}))
       if (requestId !== usersRequestRef.current) return
       if (!response.ok) {
@@ -270,7 +284,9 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     setLoadingPermissions(true)
     try {
       const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''
-      const response = await fetch(`/api/super-admin/users/${userId}/permissions${qs}`)
+      const response = await fetch(`/api/super-admin/users/${userId}/permissions${qs}`, {
+        cache: 'no-store'
+      })
       const payload = await response.json().catch(() => ({}))
       if (requestId !== permissionsRequestRef.current) return
       if (!response.ok) {
@@ -329,6 +345,33 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     }
   }, [recalculateGraphPoints])
 
+  useEffect(() => {
+    if (!selectedTraderId) return
+    if (traders.some((row) => row.id === selectedTraderId)) return
+    setSelectedTraderId(null)
+    setSelectedCompanyId(null)
+    setSelectedUserId(null)
+    setCompanies([])
+    setUsers([])
+    setPermissionPreview(null)
+  }, [selectedTraderId, traders])
+
+  useEffect(() => {
+    if (!selectedCompanyId) return
+    if (companies.some((row) => row.id === selectedCompanyId)) return
+    setSelectedCompanyId(null)
+    setSelectedUserId(null)
+    setUsers([])
+    setPermissionPreview(null)
+  }, [companies, selectedCompanyId])
+
+  useEffect(() => {
+    if (!selectedUserId) return
+    if (users.some((row) => row.id === selectedUserId)) return
+    setSelectedUserId(null)
+    setPermissionPreview(null)
+  }, [selectedUserId, users])
+
   const handleSelectTrader = async (traderId: string) => {
     setSelectedTraderId(traderId)
     setSelectedCompanyId(null)
@@ -344,12 +387,13 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     setSelectedUserId(null)
     setUsers([])
     setPermissionPreview(null)
-    await fetchUsers(companyId)
+    await fetchUsers(companyId, selectedTraderId)
   }
 
-  const handleSelectUser = async (userId: string, companyId?: string | null) => {
+  const handleSelectUser = async (userId: string) => {
     setSelectedUserId(userId)
-    await fetchPermissionPreview(userId, companyId)
+    setPermissionPreview(null)
+    await fetchPermissionPreview(userId, selectedCompanyId)
   }
 
   const toggleTraderLock = async (row: TraderRow) => {
@@ -384,7 +428,7 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
       await fetchCompanies(selectedTraderId)
     }
     if (selectedCompanyId === row.id) {
-      await fetchUsers(row.id)
+      await fetchUsers(row.id, selectedTraderId)
     }
   }
 
@@ -400,27 +444,52 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
       return
     }
     if (selectedCompanyId) {
-      await fetchUsers(selectedCompanyId)
+      await fetchUsers(selectedCompanyId, selectedTraderId)
     }
     if (selectedUserId === row.id) {
-      await fetchPermissionPreview(row.id, row.companyId)
+      await fetchPermissionPreview(row.id, selectedCompanyId)
     }
   }
 
-  const refreshAll = async () => {
-    setRefreshing(true)
-    await fetchTraders()
-    if (selectedTraderId) {
-      await fetchCompanies(selectedTraderId)
+  const refreshAll = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setRefreshing(true)
     }
-    if (selectedCompanyId) {
-      await fetchUsers(selectedCompanyId)
+
+    try {
+      await fetchTraders()
+      if (selectedTraderId) {
+        await fetchCompanies(selectedTraderId)
+      }
+      if (selectedCompanyId) {
+        await fetchUsers(selectedCompanyId, selectedTraderId)
+      }
+      if (selectedUserId && selectedCompanyId) {
+        await fetchPermissionPreview(selectedUserId, selectedCompanyId)
+      }
+    } finally {
+      if (!options?.silent) {
+        setRefreshing(false)
+      }
     }
-    if (selectedUserId && selectedUser?.companyId) {
-      await fetchPermissionPreview(selectedUserId, selectedUser.companyId)
-    }
-    setRefreshing(false)
-  }
+  }, [fetchCompanies, fetchPermissionPreview, fetchTraders, fetchUsers, selectedCompanyId, selectedTraderId, selectedUserId])
+
+  useEffect(() => {
+    const unsubscribe = subscribeSuperAdminDataChanged(() => {
+      void refreshAll({ silent: true })
+    })
+
+    return unsubscribe
+  }, [refreshAll])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      void refreshAll({ silent: true })
+    }, 30000)
+
+    return () => window.clearInterval(intervalId)
+  }, [refreshAll])
 
   return (
     <SuperAdminShell
@@ -450,15 +519,15 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
 
             <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-center">
-                <p className="text-2xl font-semibold text-indigo-600">{traders.length || initialStats.traders}</p>
+                <p className="text-2xl font-semibold text-indigo-600">{traderSummaryCount}</p>
                 <p className="text-xs text-slate-500">Traders</p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-center">
-                <p className="text-2xl font-semibold text-blue-600">{companies.length || initialStats.companies}</p>
+                <p className="text-2xl font-semibold text-blue-600">{companySummaryCount}</p>
                 <p className="text-xs text-slate-500">Companies (selected scope)</p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-center">
-                <p className="text-2xl font-semibold text-emerald-600">{users.length || initialStats.users}</p>
+                <p className="text-2xl font-semibold text-emerald-600">{userSummaryCount}</p>
                 <p className="text-xs text-slate-500">Users (selected scope)</p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-center">
@@ -677,11 +746,11 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
                         ref={(node) => {
                           userNodeRefs.current[row.id] = node
                         }}
-                        onClick={() => void handleSelectUser(row.id, row.companyId)}
+                        onClick={() => void handleSelectUser(row.id)}
                         onKeyDown={(event) => {
                           if (event.key === 'Enter' || event.key === ' ') {
                             event.preventDefault()
-                            void handleSelectUser(row.id, row.companyId)
+                            void handleSelectUser(row.id)
                           }
                         }}
                         role="button"
