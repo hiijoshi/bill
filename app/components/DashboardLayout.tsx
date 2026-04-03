@@ -40,8 +40,8 @@ type CompanySummary = {
 const AUTH_CACHE_KEY = 'shell:auth-me'
 const COMPANIES_CACHE_KEY = 'shell:companies'
 const ACTIVE_COMPANY_CACHE_KEY = 'shell:active-company-id'
-const AUTH_CACHE_AGE_MS = 30_000
-const COMPANIES_CACHE_AGE_MS = 60_000
+const AUTH_CACHE_AGE_MS = 5 * 60_000
+const COMPANIES_CACHE_AGE_MS = 5 * 60_000
 const APP_SHELL_AUTH_LOADED_EVENT = 'app-shell-auth-loaded'
 
 export default function DashboardLayout({ children, companyId, headerActions, lockViewport = false }: DashboardLayoutProps) {

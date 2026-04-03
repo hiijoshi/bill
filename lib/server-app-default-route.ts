@@ -3,8 +3,8 @@ import 'server-only'
 import { cookies, headers } from 'next/headers'
 
 import { getAccessibleCompanies, normalizeAppRole, type RequestAuthContext } from '@/lib/api-security'
-import { resolveFirstAccessibleAppRoute, type PermissionAccessRow } from '@/lib/app-default-route'
-import { PERMISSION_MODULES } from '@/lib/permissions'
+import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
+import { loadPermissionAccessForCompany } from '@/lib/permission-access'
 import { prisma } from '@/lib/prisma'
 import { getSession } from '@/lib/session'
 import { getCompanyCookieNameCandidates } from '@/lib/session-cookies'
@@ -25,14 +25,6 @@ async function getCookieCompanyId(): Promise<string | null> {
       .map((cookieName) => normalizeCompanyId(cookieStore.get(cookieName)?.value))
       .find((value): value is string => Boolean(value)) || null
   )
-}
-
-function buildSuperAdminPermissions(): PermissionAccessRow[] {
-  return PERMISSION_MODULES.map((module) => ({
-    module,
-    canRead: true,
-    canWrite: true
-  }))
 }
 
 export async function resolveServerDefaultAppRoute(requestedCompanyId?: string | null): Promise<string | null> {
@@ -92,20 +84,11 @@ export async function resolveServerDefaultAppRoute(requestedCompanyId?: string |
     return '/company/select'
   }
 
-  const permissions =
-    auth.role === 'super_admin'
-      ? buildSuperAdminPermissions()
-      : await prisma.userPermission.findMany({
-          where: {
-            userId: user.id,
-            companyId: currentCompany.id
-          },
-          select: {
-            module: true,
-            canRead: true,
-            canWrite: true
-          }
-        })
+  const permissions = (await loadPermissionAccessForCompany({
+    role: auth.role,
+    userDbId: user.id,
+    companyId: currentCompany.id
+  })).permissions
 
   return resolveFirstAccessibleAppRoute(permissions, currentCompany.id)
 }

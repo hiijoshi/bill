@@ -7,11 +7,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
+import { LoaderMark } from '@/components/loaders/task-loader'
 import { Shield, User, Lock, AlertCircle } from 'lucide-react'
 import { clearClientCache } from '@/lib/client-fetch-cache'
-
-const LOGIN_CLEANUP_KEY = 'login-page-cleanup:super-admin'
-const LOGIN_CLEANUP_THROTTLE_MS = 15_000
 
 export default function SuperAdminLogin() {
   return (
@@ -32,22 +30,6 @@ function SuperAdminLoginContent() {
 
   useEffect(() => {
     clearClientCache()
-
-    try {
-      const now = Date.now()
-      const lastCleanupAt = Number(window.sessionStorage.getItem(LOGIN_CLEANUP_KEY) || 0)
-      if (Number.isFinite(lastCleanupAt) && now - lastCleanupAt < LOGIN_CLEANUP_THROTTLE_MS) {
-        return
-      }
-      window.sessionStorage.setItem(LOGIN_CLEANUP_KEY, String(now))
-    } catch {
-      // Ignore storage failures and still attempt a single cleanup request.
-    }
-
-    void fetch('/api/super-admin/logout', {
-      method: 'POST',
-      cache: 'no-store'
-    }).catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -95,7 +77,7 @@ function SuperAdminLoginContent() {
         throw new Error(err.error || 'Login failed')
       }
 
-      router.push('/super-admin/crud')
+      router.replace('/super-admin/crud')
     } catch (err) {
       
       setError(err instanceof Error ? err.message : 'Login failed')
@@ -184,10 +166,7 @@ function SuperAdminLoginContent() {
 
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading ? (
-                  <div className="flex items-center">
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                    Signing in...
-                  </div>
+                  <LoaderMark compact />
                 ) : (
                   'Sign in'
                 )}

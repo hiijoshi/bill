@@ -41,9 +41,9 @@ import { loadClientPermissions } from '@/lib/client-permissions'
 
 type ActiveTab = 'purchase' | 'sales' | 'stock' | 'payment' | 'report'
 const DASHBOARD_CACHE_AGE_MS = 15_000
-const COMPANIES_CACHE_AGE_MS = 60_000
-const AUTH_CACHE_AGE_MS = 30_000
-const ACTIVE_COMPANY_CACHE_AGE_MS = 20_000
+const COMPANIES_CACHE_AGE_MS = 5 * 60_000
+const AUTH_CACHE_AGE_MS = 5 * 60_000
+const ACTIVE_COMPANY_CACHE_AGE_MS = 5 * 60_000
 const COMPANIES_CACHE_KEY = 'shell:companies'
 const AUTH_CACHE_KEY = 'shell:auth-me'
 const ACTIVE_COMPANY_CACHE_KEY = 'shell:active-company-id'

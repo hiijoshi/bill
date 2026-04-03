@@ -30,6 +30,23 @@ function buildPermissionsCacheKey(companyId: string): string {
   return `permissions:${companyId || 'none'}`
 }
 
+export function primeClientPermissions(payload: ClientPermissionsPayload): void {
+  const normalizedCompanyId = String(payload.companyId || '').trim()
+  if (!normalizedCompanyId) return
+
+  const normalizedPayload: ClientPermissionsPayload = {
+    companyId: normalizedCompanyId,
+    permissions: Array.isArray(payload.permissions) ? payload.permissions : [],
+    grantedReadModules:
+      typeof payload.grantedReadModules === 'number' ? payload.grantedReadModules : undefined,
+    grantedWriteModules:
+      typeof payload.grantedWriteModules === 'number' ? payload.grantedWriteModules : undefined
+  }
+
+  permissionErrors.delete(buildPermissionsCacheKey(normalizedCompanyId))
+  setClientCache(buildPermissionsCacheKey(normalizedCompanyId), normalizedPayload, { persist: true })
+}
+
 function getPermissionsEndpoint(companyId: string): string {
   const searchParams = new URLSearchParams({
     includeMeta: 'true'

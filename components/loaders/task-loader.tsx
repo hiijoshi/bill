@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils'
+import type { CSSProperties } from 'react'
 
 export type TaskLoaderKind =
   | 'dashboard'
@@ -42,7 +43,15 @@ type TaskLoaderProps = {
   compact?: boolean
 }
 
-function LoaderMark({ compact = false }: { compact?: boolean }) {
+const DOT_POSITIONS = [
+  { x: '52%', y: '18%', delay: '0s' },
+  { x: '24%', y: '48%', delay: '0.12s' },
+  { x: '74%', y: '40%', delay: '0.24s' },
+  { x: '42%', y: '76%', delay: '0.36s' },
+  { x: '68%', y: '72%', delay: '0.48s' }
+] as const
+
+export function LoaderMark({ compact = false }: { compact?: boolean }) {
   return (
     <div
       className={cn(
@@ -51,43 +60,24 @@ function LoaderMark({ compact = false }: { compact?: boolean }) {
       )}
       aria-hidden="true"
     >
-      <svg
-        viewBox="0 0 88 88"
-        className={cn(compact ? 'h-9 w-9' : 'h-12 w-12')}
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <path
-          d="M18 20L69 22"
-          stroke="#0F2B4A"
-          strokeWidth="6"
-          strokeLinecap="round"
-        />
-        <path
-          d="M18 68L69 70"
-          stroke="#0F2B4A"
-          strokeWidth="6"
-          strokeLinecap="round"
-        />
-        <path
-          d="M26 24C29 35 34 39 39 44C34 50 29 54 26 64"
-          stroke="#0F2B4A"
-          strokeWidth="6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M61 24C58 35 53 39 48 44C53 50 58 54 61 64"
-          stroke="#0F2B4A"
-          strokeWidth="6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M39 49C42 44 47 43 51 46C55 49 55 55 50 57C45 59 38 57 37 52C36 51 37 50 39 49Z"
-          fill="#FF6F7C"
-        />
-      </svg>
+      <div className={cn('relative', compact ? 'h-8 w-8' : 'h-10 w-10')}>
+        {DOT_POSITIONS.map((dot, index) => (
+          <span
+            key={index}
+            className={cn(
+              'task-loader-dot absolute rounded-full bg-slate-950/85',
+              compact ? 'h-2.5 w-2.5' : 'h-3 w-3'
+            )}
+            style={
+              {
+                '--loader-x': dot.x,
+                '--loader-y': dot.y,
+                animationDelay: dot.delay
+              } as CSSProperties
+            }
+          />
+        ))}
+      </div>
     </div>
   )
 }

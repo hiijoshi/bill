@@ -7,13 +7,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
+import { LoaderMark } from '@/components/loaders/task-loader'
 import { Building2, User, Lock, AlertCircle } from 'lucide-react'
-import { clearClientCache } from '@/lib/client-fetch-cache'
+import { clearClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
-import { loadClientPermissions } from '@/lib/client-permissions'
-
-const LOGIN_CLEANUP_KEY = 'login-page-cleanup:app'
-const LOGIN_CLEANUP_THROTTLE_MS = 15_000
+import { primeClientPermissions } from '@/lib/client-permissions'
 
 export default function LoginPage() {
   return (
@@ -34,22 +32,6 @@ function LoginPageContent() {
 
   useEffect(() => {
     clearClientCache()
-
-    try {
-      const now = Date.now()
-      const lastCleanupAt = Number(window.sessionStorage.getItem(LOGIN_CLEANUP_KEY) || 0)
-      if (Number.isFinite(lastCleanupAt) && now - lastCleanupAt < LOGIN_CLEANUP_THROTTLE_MS) {
-        return
-      }
-      window.sessionStorage.setItem(LOGIN_CLEANUP_KEY, String(now))
-    } catch {
-      // Ignore storage failures and still attempt a single cleanup request.
-    }
-
-    void fetch('/api/auth/logout', {
-      method: 'POST',
-      cache: 'no-store'
-    }).catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -119,33 +101,87 @@ function LoginPageContent() {
         await response.text()
         throw new Error('Login failed: Invalid response format from server')
       }
-      
-      await response.json()
 
-      const authMeResponse = await fetch('/api/auth/me', { cache: 'no-store' })
-      const authMePayload = await authMeResponse.json().catch(() => ({} as {
-        company?: { id?: string | null } | null
-        user?: { companyId?: string | null; assignedCompanyId?: string | null } | null
-      }))
+      const loginPayload = (await response.json()) as {
+        user?: {
+          userId?: string | null
+          name?: string | null
+          role?: string | null
+        } | null
+        company?: {
+          id?: string | null
+          name?: string | null
+        } | null
+        bootstrap?: {
+          companyId?: string | null
+          defaultRoute?: string | null
+          permissions?: Array<{ module?: string | null; canRead?: boolean | null; canWrite?: boolean | null }>
+          grantedReadModules?: number
+          grantedWriteModules?: number
+          companies?: Array<{ id?: string | null; name?: string | null; locked?: boolean | null }>
+        } | null
+      }
       const companyId = String(
-        authMePayload.company?.id ||
-        authMePayload.user?.companyId ||
-        authMePayload.user?.assignedCompanyId ||
+        loginPayload.bootstrap?.companyId ||
+        loginPayload.company?.id ||
         ''
       ).trim()
+      const normalizedPermissions = Array.isArray(loginPayload.bootstrap?.permissions)
+        ? loginPayload.bootstrap.permissions
+        : []
+      const normalizedCompanies = Array.isArray(loginPayload.bootstrap?.companies)
+        ? loginPayload.bootstrap.companies
+            .map((company) => ({
+              id: String(company?.id || '').trim(),
+              name: String(company?.name || company?.id || '').trim() || String(company?.id || '').trim(),
+              locked: Boolean(company?.locked)
+            }))
+            .filter((company) => company.id.length > 0)
+        : []
+
+      setClientCache(
+        'shell:auth-me',
+        {
+          user: {
+            userId: loginPayload.user?.userId || null,
+            name: loginPayload.user?.name || null,
+            role: loginPayload.user?.role || null,
+            companyId: companyId || null
+          },
+          company: companyId
+            ? {
+                id: companyId,
+                name: String(loginPayload.company?.name || companyId).trim() || companyId
+              }
+            : null
+        },
+        { persist: true }
+      )
+
+      if (normalizedCompanies.length > 0) {
+        setClientCache('shell:companies', normalizedCompanies, { persist: true })
+      }
+
+      if (companyId) {
+        setClientCache('shell:active-company-id', companyId, { persist: true })
+        primeClientPermissions({
+          companyId,
+          permissions: normalizedPermissions,
+          grantedReadModules: loginPayload.bootstrap?.grantedReadModules,
+          grantedWriteModules: loginPayload.bootstrap?.grantedWriteModules
+        })
+      }
 
       if (!companyId) {
-        router.push('/company/select')
+        router.replace('/company/select')
         return
       }
 
-      const permissionsPayload = await loadClientPermissions(companyId, { force: true })
-      const permissions = permissionsPayload.permissions
-      
-      // Note: HttpOnly cookies are set automatically by the server
-      // No need to store tokens client-side anymore for security
-      
-      router.push(resolveFirstAccessibleAppRoute(permissions, companyId))
+      const nextRoute = String(
+        loginPayload.bootstrap?.defaultRoute ||
+        resolveFirstAccessibleAppRoute(normalizedPermissions, companyId)
+      ).trim() || '/main/dashboard'
+      router.replace(nextRoute)
     } catch (error) {
       
       setError(error instanceof Error ? error.message : 'Login failed. Please try again.')
@@ -248,10 +284,7 @@ function LoginPageContent() {
                 disabled={loading}
               >
                 {loading ? (
-                  <div className="flex items-center">
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                    Signing in...
-                  </div>
+                  <LoaderMark compact />
                 ) : (
                   'Sign in'
                 )}

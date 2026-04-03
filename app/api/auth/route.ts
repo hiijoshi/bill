@@ -6,12 +6,14 @@ import { verifyCaptcha, shouldRequireCaptcha } from '@/lib/captcha'
 import { auditLogger } from '@/lib/audit-logging'
 import { env } from '@/lib/config'
 import { loginSchema } from '@/lib/validation'
-import { getRequestIp } from '@/lib/api-security'
+import { getAccessibleCompanies, getRequestIp, normalizeAppRole, type RequestAuthContext } from '@/lib/api-security'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { createSupabaseRouteClient } from '@/lib/supabase/route'
 import { ensureSupabaseIdentityForLegacyUser, loadLegacyUserForSupabaseSync } from '@/lib/supabase/legacy-user-sync'
 import { getAppCompanyCookieOptions } from '@/lib/supabase/app-session'
 import { getCompanyCookieName } from '@/lib/session-cookies'
+import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
+import { loadPermissionAccessForCompany } from '@/lib/permission-access'
 
 // Simple in-memory rate limiting store
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
@@ -79,6 +81,73 @@ function resolveCorsOrigin(request: NextRequest) {
   }
 
   return fallbackOrigin
+}
+
+async function buildLoginBootstrap(
+  authResult: {
+    user?: {
+      id: string
+      userId: string
+      traderId: string
+      role?: string | null
+      name?: string | null
+    }
+    company?: {
+      id: string
+      name: string
+    }
+  },
+  preferredCompanyId: string | null
+) {
+  const auth: RequestAuthContext = {
+    userId: authResult.user!.userId,
+    traderId: authResult.user!.traderId,
+    role: normalizeAppRole(authResult.user?.role),
+    companyId: authResult.company?.id || null,
+    userDbId: authResult.user!.id
+  }
+
+  const accessibleCompanies = await getAccessibleCompanies(auth)
+  const unlockedCompanies = accessibleCompanies.filter((company) => !company.locked)
+  const activeCompany =
+    (preferredCompanyId ? unlockedCompanies.find((company) => company.id === preferredCompanyId) : null) ||
+    (authResult.company?.id ? unlockedCompanies.find((company) => company.id === authResult.company?.id) : null) ||
+    unlockedCompanies[0] ||
+    accessibleCompanies[0] ||
+    null
+  const companyId = activeCompany?.id || null
+  const permissionAccess = companyId
+    ? await loadPermissionAccessForCompany({
+        role: auth.role,
+        userDbId: auth.userDbId,
+        companyId
+      })
+    : {
+        permissions: [],
+        grantedReadModules: 0,
+        grantedWriteModules: 0
+      }
+
+  return {
+    companyId,
+    company: activeCompany
+      ? {
+          id: activeCompany.id,
+          name: activeCompany.name
+        }
+      : authResult.company,
+    defaultRoute: companyId
+      ? resolveFirstAccessibleAppRoute(permissionAccess.permissions, companyId)
+      : '/company/select',
+    permissions: permissionAccess.permissions,
+    grantedReadModules: permissionAccess.grantedReadModules,
+    grantedWriteModules: permissionAccess.grantedWriteModules,
+    companies: accessibleCompanies.map((company) => ({
+      id: company.id,
+      name: company.name,
+      locked: company.locked
+    }))
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -333,13 +402,24 @@ export async function POST(request: NextRequest) {
         )
       }
 
+      const bootstrap = await buildLoginBootstrap(authResult, preferredCompanyId)
+      preferredCompanyId = bootstrap.companyId || preferredCompanyId
+
       // Prepare success response so we can attach both Supabase and legacy compatibility cookies.
       const response = routeClient.applyCookies(
         NextResponse.json({
           success: true,
           user: authResult.user,
           trader: authResult.trader,
-          company: authResult.company
+          company: bootstrap.company,
+          bootstrap: {
+            companyId: bootstrap.companyId,
+            defaultRoute: bootstrap.defaultRoute,
+            permissions: bootstrap.permissions,
+            grantedReadModules: bootstrap.grantedReadModules,
+            grantedWriteModules: bootstrap.grantedWriteModules,
+            companies: bootstrap.companies
+          }
         }, {
           headers
         })
@@ -373,6 +453,9 @@ export async function POST(request: NextRequest) {
       return response
     }
 
+    const bootstrap = await buildLoginBootstrap(authResult, preferredCompanyId)
+    preferredCompanyId = bootstrap.companyId || preferredCompanyId
+
     // Record successful attempt (resets brute force counter)
     recordSuccessfulAttempt(request)
 
@@ -393,7 +476,15 @@ export async function POST(request: NextRequest) {
       success: true,
       user: authResult.user,
       trader: authResult.trader,
-      company: authResult.company
+      company: bootstrap.company,
+      bootstrap: {
+        companyId: bootstrap.companyId,
+        defaultRoute: bootstrap.defaultRoute,
+        permissions: bootstrap.permissions,
+        grantedReadModules: bootstrap.grantedReadModules,
+        grantedWriteModules: bootstrap.grantedWriteModules,
+        companies: bootstrap.companies
+      }
     }, {
       headers
     })

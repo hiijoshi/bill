@@ -115,7 +115,7 @@ type AuthCachePayload = {
 
 const APP_SHELL_AUTH_LOADED_EVENT = 'app-shell-auth-loaded'
 const AUTH_CACHE_KEY = 'shell:auth-me'
-const AUTH_CACHE_AGE_MS = 30_000
+const AUTH_CACHE_AGE_MS = 5 * 60_000
 
 interface SidebarProps {
   companyId: string
