@@ -296,7 +296,7 @@ export default function RootLayout({
 
   return (
     <html lang="en">
-      <body className="antialiased">
+      <body className="motion-minimal-app antialiased">
         <NetworkStatusBanner />
         <SessionProvider>
           <ErrorBoundary>

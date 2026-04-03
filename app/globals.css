@@ -1,6 +1,4 @@
 @import "tailwindcss";
-@import "tw-animate-css";
-
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -139,26 +137,36 @@
   }
 }
 
-@keyframes task-loader-dot {
-  0%,
-  100% {
-    transform: translateY(0) scale(0.88);
-    opacity: 0.48;
-  }
-  50% {
-    transform: translateY(-4px) scale(1);
-    opacity: 1;
-  }
+.motion-minimal-app {
+  scroll-behavior: auto;
 }
 
-.task-loader-dot {
-  animation: task-loader-dot 0.88s cubic-bezier(0.32, 0.72, 0.18, 1) infinite;
+.motion-minimal-app [class*="transition-"],
+.motion-minimal-app [class*="duration-"],
+.motion-minimal-app [class*="ease-"] {
+  transition-property: none !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+
+.motion-minimal-app [class*="animate-"] {
+  animation: none !important;
+}
+
+.project-loader-video {
+  display: block;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .task-loader-dot {
-    animation: none;
-    opacity: 1;
-    transform: none;
+  .motion-minimal-app [class*="transition-"],
+  .motion-minimal-app [class*="duration-"],
+  .motion-minimal-app [class*="ease-"] {
+    transition-property: none !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+  }
+
+  .motion-minimal-app [class*="animate-"] {
+    animation: none !important;
   }
 }
