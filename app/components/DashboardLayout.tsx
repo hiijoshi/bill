@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { isAbortError } from '@/lib/http'
 import { clearClientCache, getClientCache, setClientCache } from '@/lib/client-fetch-cache'
-import { APP_COMPANY_CHANGED_EVENT, notifyAppCompanyChanged } from '@/lib/company-context'
+import { APP_COMPANY_CHANGED_EVENT, notifyAppCompanyChanged, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 interface DashboardLayoutProps {
   children: React.ReactNode
@@ -251,13 +251,15 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
 
       setResolvedCompanyId(nextCompanyId)
       setCurrentCompanyName(availableCompanies.find((company) => company.id === nextCompanyId)?.name || 'Selected company')
-      clearClientCache()
+      setClientCache(ACTIVE_COMPANY_CACHE_KEY, nextCompanyId, { persist: true })
       notifyAppCompanyChanged(nextCompanyId)
-
       const currentUrl = new URL(window.location.href)
-      currentUrl.searchParams.delete('companyId')
+      currentUrl.searchParams.set('companyId', nextCompanyId)
       currentUrl.searchParams.delete('companyIds')
-      window.location.assign(`${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`)
+      router.replace(`${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`, { scroll: false })
+      window.setTimeout(() => {
+        stripCompanyParamsFromUrl()
+      }, 0)
       return
     } catch (error) {
       setCompanySwitchError(error instanceof Error ? error.message : 'Failed to switch company')

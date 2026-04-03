@@ -21,7 +21,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
+import { loadClientCachedValue } from '@/lib/client-cached-value'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import {
   DEFAULT_PAYMENT_MODES,
   isBankPaymentMode,
@@ -77,6 +79,9 @@ type AllocationPreviewRow = {
   allocatedAmount: number
   balanceAfter: number
 }
+
+const PAYMENT_ENTRY_REFERENCE_CACHE_AGE_MS = 30_000
+const PAYMENT_PURCHASE_BILLS_CACHE_AGE_MS = 15_000
 
 function formatDateSafe(value: string): string {
   const parsed = new Date(value)
@@ -340,44 +345,56 @@ function PurchasePaymentEntryPageContent() {
   const fetchPurchaseBills = useCallback(
     async (targetCompanyId: string) => {
       try {
-        let url = `/api/purchase-bills?companyId=${targetCompanyId}`
+        const filterKey = `${dateFrom || 'all'}:${dateTo || 'all'}`
+        const rows = await loadClientCachedValue<PurchaseBill[]>(
+          `payment-purchase-bills:${targetCompanyId}:${filterKey}`,
+          async () => {
+            let url = `/api/purchase-bills?companyId=${targetCompanyId}`
 
-        const params = new URLSearchParams()
-        if (dateFrom) params.append('dateFrom', dateFrom)
-        if (dateTo) params.append('dateTo', dateTo)
-        if (params.toString()) {
-          url += `&${params.toString()}`
-        }
+            const params = new URLSearchParams()
+            if (dateFrom) params.append('dateFrom', dateFrom)
+            if (dateTo) params.append('dateTo', dateTo)
+            if (params.toString()) {
+              url += `&${params.toString()}`
+            }
 
-        const response = await fetch(url)
+            const response = await fetch(url)
 
-        if (response.status === 401) {
-          setPurchaseBills([])
-          setLoading(false)
-          router.push('/login')
-          return
-        }
+            if (response.status === 401 || response.status === 403) {
+              const authError = new Error(`Failed to fetch purchase bills (${response.status})`) as Error & { status?: number }
+              authError.status = response.status
+              throw authError
+            }
 
-        if (response.status === 403) {
-          setPurchaseBills([])
-          setLoading(false)
-          return
-        }
+            if (!response.ok) {
+              throw new Error(`Failed to fetch purchase bills (${response.status})`)
+            }
 
-        if (!response.ok) {
-          throw new Error(`Failed to fetch purchase bills (${response.status})`)
-        }
+            const payload = await response.json().catch(() => [])
+            const allRows: PurchaseBill[] = Array.isArray(payload)
+              ? payload
+              : Array.isArray(payload?.data)
+                ? payload.data
+                : []
 
-        const payload = await response.json()
-        const rows: PurchaseBill[] = Array.isArray(payload)
-          ? payload
-          : Array.isArray(payload?.data)
-            ? payload.data
-            : []
+            return allRows.filter((bill) => Number(bill?.balanceAmount || 0) > 0)
+          },
+          { maxAgeMs: PAYMENT_PURCHASE_BILLS_CACHE_AGE_MS }
+        )
 
-        const pendingRows = rows.filter((bill) => Number(bill?.balanceAmount || 0) > 0)
-        setPurchaseBills(pendingRows)
+        setPurchaseBills(rows)
       } catch (error) {
+        if (error instanceof Error && 'status' in error) {
+          if (error.status === 401) {
+            setPurchaseBills([])
+            router.push('/login')
+            return
+          }
+          if (error.status === 403) {
+            setPurchaseBills([])
+            return
+          }
+        }
         console.error('Error fetching purchase bills:', error)
         setPurchaseBills([])
       } finally {
@@ -389,13 +406,19 @@ function PurchasePaymentEntryPageContent() {
 
   const fetchBanks = useCallback(async (targetCompanyId: string) => {
     try {
-      const response = await fetch(`/api/banks?companyId=${targetCompanyId}`)
-      if (!response.ok) {
-        setBanks([])
-        return
-      }
-      const payload = await response.json()
-      setBanks(Array.isArray(payload) ? payload : [])
+      const payload = await loadClientCachedValue<Bank[]>(
+        `payment-banks:${targetCompanyId}`,
+        async () => {
+          const response = await fetch(`/api/banks?companyId=${targetCompanyId}`)
+          if (!response.ok) {
+            return []
+          }
+          const rows = await response.json().catch(() => [])
+          return Array.isArray(rows) ? rows : []
+        },
+        { maxAgeMs: PAYMENT_ENTRY_REFERENCE_CACHE_AGE_MS }
+      )
+      setBanks(payload)
     } catch (error) {
       console.error('Error fetching banks:', error)
       setBanks([])
@@ -404,24 +427,28 @@ function PurchasePaymentEntryPageContent() {
 
   const fetchPaymentModes = useCallback(async (targetCompanyId: string) => {
     try {
-      const response = await fetch(`/api/payment-modes?companyId=${targetCompanyId}`)
-      if (!response.ok) {
-        setPaymentModes([])
-        return
-      }
+      const rows = await loadClientCachedValue<PaymentMode[]>(
+        `payment-modes:${targetCompanyId}`,
+        async () => {
+          const response = await fetch(`/api/payment-modes?companyId=${targetCompanyId}`)
+          if (!response.ok) {
+            return []
+          }
 
-      const payload = await response.json()
-      const rows = Array.isArray(payload) ? payload : []
-      setPaymentModes(
-        rows
-          .map((row) => ({
-            id: String(row?.id || ''),
-            name: String(row?.name || '').trim(),
-            code: String(row?.code || '').trim(),
-            isActive: row?.isActive !== false
-          }))
-          .filter((row) => row.id && row.name && row.code && row.isActive)
+          const payload = await response.json().catch(() => [])
+          const list = Array.isArray(payload) ? payload : []
+          return list
+            .map((row) => ({
+              id: String(row?.id || ''),
+              name: String(row?.name || '').trim(),
+              code: String(row?.code || '').trim(),
+              isActive: row?.isActive !== false
+            }))
+            .filter((row) => row.id && row.name && row.code && row.isActive)
+        },
+        { maxAgeMs: PAYMENT_ENTRY_REFERENCE_CACHE_AGE_MS }
       )
+      setPaymentModes(rows)
     } catch (error) {
       console.error('Error fetching payment modes:', error)
       setPaymentModes([])
@@ -449,6 +476,19 @@ function PurchasePaymentEntryPageContent() {
     void fetchBanks(companyId)
     void fetchPaymentModes(companyId)
   }, [companyId, fetchBanks, fetchPaymentModes, fetchPurchaseBills])
+
+  useEffect(() => {
+    const onCompanyChanged = (event: Event) => {
+      const nextCompanyId = (event as CustomEvent<{ companyId?: string }>).detail?.companyId?.trim() || ''
+      if (!nextCompanyId || nextCompanyId === companyId) return
+      setCompanyId(nextCompanyId)
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    return () => {
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
+  }, [companyId])
 
   useEffect(() => {
     if (paymentModeOptions.length === 0) return
@@ -703,6 +743,8 @@ function PurchasePaymentEntryPageContent() {
       setAmount('')
       setTxnRef('')
       setNote('')
+      invalidateAppDataCaches(companyId, ['payments'])
+      notifyAppDataChanged({ companyId, scopes: ['payments'] })
       await fetchPurchaseBills(companyId)
     } catch (error) {
       console.error('Error recording single payment:', error)
@@ -793,6 +835,8 @@ function PurchasePaymentEntryPageContent() {
       setNote('')
       setSelectedBillIds([])
 
+      invalidateAppDataCaches(companyId, ['payments'])
+      notifyAppDataChanged({ companyId, scopes: ['payments'] })
       await fetchPurchaseBills(companyId)
     } catch (error) {
       console.error('Error allocating payment across bills:', error)

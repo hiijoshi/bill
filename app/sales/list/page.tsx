@@ -12,8 +12,9 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Eye, Edit, Ban, Printer, FileText, Download, MessageCircle } from 'lucide-react'
+import { invalidateAppDataCaches, matchesAppDataChange, notifyAppDataChanged, subscribeAppDataChanged } from '@/lib/app-live-data'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
 import { openWhatsappChat } from '@/lib/whatsapp'
 
@@ -305,6 +306,25 @@ export default function SalesListPage() {
     return () => window.clearTimeout(timer)
   }, [fetchSalesBills])
 
+  useEffect(() => {
+    const unsubscribe = subscribeAppDataChanged((detail) => {
+      if (matchesAppDataChange(detail, companyId, ['sales-bills', 'payments'])) {
+        void fetchSalesBills()
+      }
+    })
+
+    const onCompanyChanged = () => {
+      void fetchSalesBills()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      unsubscribe()
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
+  }, [companyId, fetchSalesBills])
+
   const filteredBills = useMemo(() => {
     let filtered = salesBills
 
@@ -474,6 +494,8 @@ export default function SalesListPage() {
       }
 
       alert('Sales bill cancelled successfully!')
+      invalidateAppDataCaches(companyId, ['sales-bills'])
+      notifyAppDataChanged({ companyId, scopes: ['sales-bills'] })
       void fetchSalesBills()
     } catch (error) {
       console.error('Error cancelling sales bill:', error)

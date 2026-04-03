@@ -13,8 +13,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Eye, Edit, Ban, Printer, FileText, Download, CreditCard } from 'lucide-react'
+import { invalidateAppDataCaches, matchesAppDataChange, notifyAppDataChanged, subscribeAppDataChanged } from '@/lib/app-live-data'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 interface Farmer {
   id: string
@@ -371,6 +372,33 @@ export default function PurchaseListPage() {
     }
   }, [fetchPurchaseBills])
 
+  useEffect(() => {
+    let cancelled = false
+    const reload = () => {
+      void fetchPurchaseBills(() => cancelled)
+    }
+
+    const unsubscribe = subscribeAppDataChanged((detail) => {
+      if (cancelled) return
+      if (matchesAppDataChange(detail, companyId, ['purchase-bills', 'payments'])) {
+        reload()
+      }
+    })
+
+    const onCompanyChanged = () => {
+      if (cancelled) return
+      reload()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      cancelled = true
+      unsubscribe()
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
+  }, [companyId, fetchPurchaseBills])
+
   const filteredBills = (() => {
     let filtered = purchaseBills
 
@@ -595,6 +623,8 @@ export default function PurchaseListPage() {
       }
 
       alert(`${bill.type === 'regular' ? 'Purchase' : 'Special Purchase'} bill cancelled successfully!`)
+      invalidateAppDataCaches(companyId, ['purchase-bills'])
+      notifyAppDataChanged({ companyId, scopes: ['purchase-bills'] })
       void fetchPurchaseBills()
     } catch (error) {
       console.error('Error cancelling bill:', error)

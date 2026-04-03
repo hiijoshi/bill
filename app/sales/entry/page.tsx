@@ -11,9 +11,10 @@ import { AlertTriangle, MessageCircle, Pencil, Plus, Trash2 } from 'lucide-react
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { SearchableSelect, type SearchableSelectOption } from '@/components/ui/searchable-select'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
-import { deleteClientCacheByPrefix } from '@/lib/client-fetch-cache'
+import { loadClientCachedValue } from '@/lib/client-cached-value'
 import { calculateMandiCharges, getCalculationBasisLabel } from '@/lib/mandi-charge-engine'
 import {
   DEFAULT_SALES_ADDITIONAL_CHARGE_TYPES,
@@ -173,6 +174,17 @@ interface SalesBillSaveResponse {
   }
   error?: string
   message?: string
+}
+
+const SALES_ENTRY_CACHE_AGE_MS = 20_000
+
+type SalesEntryCachePayload = {
+  parties: Party[]
+  transports: TransportOption[]
+  salesItems: SalesItemMasterOption[]
+  accountingHeads: AccountingHeadCharge[]
+  existingBill: ExistingSalesBill | null
+  lastBillNumber: number
 }
 
 async function parseApiJson<T>(response: Response, fallback: T, context: string): Promise<T> {
@@ -770,30 +782,72 @@ export default function SalesEntryPage() {
         stripCompanyParamsFromUrl()
       }
 
-      const [partiesRes, transportsRes, salesItemsRes, accountingHeadsRes] = await Promise.all([
-        fetch(`/api/parties?companyId=${resolvedCompanyId}`),
-        fetch(`/api/transports?companyId=${resolvedCompanyId}`),
-        fetch(`/api/sales-item-masters?companyId=${resolvedCompanyId}`),
-        fetch(`/api/accounting-heads?companyId=${resolvedCompanyId}`)
-      ])
+      const payload = await loadClientCachedValue<SalesEntryCachePayload>(
+        `sales-entry:${resolvedCompanyId}:${billIdFromQuery || 'new'}`,
+        async () => {
+          const [partiesRes, transportsRes, salesItemsRes, accountingHeadsRes, detailRes] = await Promise.all([
+            fetch(`/api/parties?companyId=${resolvedCompanyId}`),
+            fetch(`/api/transports?companyId=${resolvedCompanyId}`),
+            fetch(`/api/sales-item-masters?companyId=${resolvedCompanyId}`),
+            fetch(`/api/accounting-heads?companyId=${resolvedCompanyId}`),
+            billIdFromQuery
+              ? fetch(`/api/sales-bills?companyId=${resolvedCompanyId}&billId=${billIdFromQuery}`)
+              : fetch(`/api/sales-bills?companyId=${resolvedCompanyId}&last=true`)
+          ])
 
-      if ([partiesRes, transportsRes, salesItemsRes, accountingHeadsRes].some((res) => res.status === 401 || res.status === 403)) {
-        alert('Session expired. Please login again.')
-        router.push('/login')
-        return
-      }
+          if ([partiesRes, transportsRes, salesItemsRes, accountingHeadsRes].some((res) => res.status === 401 || res.status === 403)) {
+            const authError = new Error('Session expired') as Error & { status?: number }
+            authError.status = 401
+            throw authError
+          }
 
-      const [partiesData, transportsData, salesItemsData, accountingHeadsData] = await Promise.all([
-        parseApiJson<Party[]>(partiesRes, [], 'Parties API'),
-        parseApiJson<TransportOption[]>(transportsRes, [], 'Transports API'),
-        parseApiJson<SalesItemMasterOption[]>(salesItemsRes, [], 'Sales item masters API'),
-        parseApiJson<AccountingHeadCharge[]>(accountingHeadsRes, [], 'Accounting heads API')
-      ])
+          const [partiesData, transportsData, salesItemsData, accountingHeadsData] = await Promise.all([
+            parseApiJson<Party[]>(partiesRes, [], 'Parties API'),
+            parseApiJson<TransportOption[]>(transportsRes, [], 'Transports API'),
+            parseApiJson<SalesItemMasterOption[]>(salesItemsRes, [], 'Sales item masters API'),
+            parseApiJson<AccountingHeadCharge[]>(accountingHeadsRes, [], 'Accounting heads API')
+          ])
 
-      const nextParties = Array.isArray(partiesData) ? partiesData : []
-      const nextTransports = Array.isArray(transportsData) ? transportsData : []
-      const nextSalesItems = Array.isArray(salesItemsData) ? salesItemsData : []
-      const nextAccountingHeads = Array.isArray(accountingHeadsData) ? accountingHeadsData : []
+          const nextParties = Array.isArray(partiesData) ? partiesData : []
+          const nextTransports = Array.isArray(transportsData) ? transportsData : []
+          const nextSalesItems = Array.isArray(salesItemsData) ? salesItemsData : []
+          const nextAccountingHeads = Array.isArray(accountingHeadsData) ? accountingHeadsData : []
+
+          if (billIdFromQuery) {
+            const existingBill = detailRes.ok
+              ? await parseApiJson<ExistingSalesBill | null>(detailRes, null, 'Sales bill by id API')
+              : null
+
+            return {
+              parties: nextParties,
+              transports: nextTransports,
+              salesItems: nextSalesItems,
+              accountingHeads: nextAccountingHeads,
+              existingBill,
+              lastBillNumber: 0
+            }
+          }
+
+          const billsData = detailRes.ok
+            ? await parseApiJson<{ lastBillNumber?: number }>(detailRes, { lastBillNumber: 0 }, 'Sales bills API')
+            : { lastBillNumber: 0 }
+
+          return {
+            parties: nextParties,
+            transports: nextTransports,
+            salesItems: nextSalesItems,
+            accountingHeads: nextAccountingHeads,
+            existingBill: null,
+            lastBillNumber: Number(billsData.lastBillNumber || 0)
+          }
+        },
+        { maxAgeMs: SALES_ENTRY_CACHE_AGE_MS }
+      )
+
+      const nextParties = payload.parties
+      const nextTransports = payload.transports
+      const nextSalesItems = payload.salesItems
+      const nextAccountingHeads = payload.accountingHeads
 
       setParties(nextParties)
       setTransports(nextTransports)
@@ -801,13 +855,7 @@ export default function SalesEntryPage() {
       setAccountingHeads(nextAccountingHeads)
 
       if (billIdFromQuery) {
-        const existingRes = await fetch(`/api/sales-bills?companyId=${resolvedCompanyId}&billId=${billIdFromQuery}`)
-        if (!existingRes.ok) {
-          alert('Sales bill not found for editing.')
-          router.push('/sales/list')
-          return
-        }
-        const existingBill = await parseApiJson<ExistingSalesBill | null>(existingRes, null, 'Sales bill by id API')
+        const existingBill = payload.existingBill
         if (!existingBill?.id) {
           alert('Sales bill not found for editing.')
           router.push('/sales/list')
@@ -819,19 +867,17 @@ export default function SalesEntryPage() {
         return
       }
 
-      const billsRes = await fetch(`/api/sales-bills?companyId=${resolvedCompanyId}&last=true`)
-      if (!billsRes.ok) {
-        setInvoiceNo('1')
-        setLoading(false)
-        return
-      }
-      const billsData = await parseApiJson<{ lastBillNumber?: number }>(billsRes, { lastBillNumber: 0 }, 'Sales bills API')
-      const lastBillNum = Number(billsData.lastBillNumber || 0)
+      const lastBillNum = Number(payload.lastBillNumber || 0)
       const nextInvoiceNumber = lastBillNum <= 0 ? 1 : lastBillNum + 1
       setInvoiceNo(nextInvoiceNumber.toString())
 
       setLoading(false)
     } catch (error) {
+      if (error instanceof Error && 'status' in error && error.status === 401) {
+        alert('Session expired. Please login again.')
+        router.push('/login')
+        return
+      }
       console.error('Error fetching data:', error)
       setLoading(false)
     }
@@ -839,6 +885,17 @@ export default function SalesEntryPage() {
 
   useEffect(() => {
     void fetchData()
+  }, [fetchData])
+
+  useEffect(() => {
+    const onCompanyChanged = () => {
+      void fetchData()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    return () => {
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
   }, [fetchData])
 
   const calculateItemTotals = () => {
@@ -988,7 +1045,8 @@ export default function SalesEntryPage() {
       if (response.ok) {
         const resolvedId = parsedResponse?.salesBillId || parsedResponse?.salesBill?.id || editBillId
         if (companyId) {
-          deleteClientCacheByPrefix(`sales-bills:${companyId}`)
+          invalidateAppDataCaches(companyId, ['sales-bills'])
+          notifyAppDataChanged({ companyId, scopes: ['sales-bills'] })
         }
         alert(isEditMode ? 'Sales bill updated successfully!' : 'Sales bill created successfully!')
         if (resolvedId) {

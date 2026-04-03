@@ -12,8 +12,9 @@ import { Input } from '@/components/ui/input'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Plus, Eye } from 'lucide-react'
+import { matchesAppDataChange, subscribeAppDataChanged } from '@/lib/app-live-data'
 import { isAbortError } from '@/lib/http'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 
 interface PurchaseBill {
@@ -105,10 +106,15 @@ function PaymentPageContent() {
   const [dateTo, setDateTo] = useState('')
   const cacheKey = companyId ? `payment-page:${companyId}` : ''
 
-  const fetchPaymentData = useCallback(async (isCancelled: () => boolean = () => false) => {
+  const fetchPaymentData = useCallback(async (
+    isCancelled: () => boolean = () => false,
+    options: { background?: boolean } = {}
+  ) => {
     try {
       if (isCancelled()) return
-      setLoading(true)
+      if (!options.background) {
+        setLoading(true)
+      }
 
       if (cacheKey) {
         const cached = getClientCache<{
@@ -218,6 +224,27 @@ function PaymentPageContent() {
     })()
     return () => {
       cancelled = true
+    }
+  }, [companyId, fetchPaymentData])
+
+  useEffect(() => {
+    const unsubscribe = subscribeAppDataChanged((detail) => {
+      if (matchesAppDataChange(detail, companyId, ['purchase-bills', 'sales-bills', 'payments'])) {
+        void fetchPaymentData(() => false, { background: true })
+      }
+    })
+
+    const onCompanyChanged = (event: Event) => {
+      const nextCompanyId = (event as CustomEvent<{ companyId?: string }>).detail?.companyId?.trim() || ''
+      if (!nextCompanyId || nextCompanyId === companyId) return
+      setCompanyId(nextCompanyId)
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      unsubscribe()
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
   }, [companyId, fetchPaymentData])
 

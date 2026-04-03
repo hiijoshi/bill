@@ -19,8 +19,9 @@ import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Edit, Eye, Plus, Upload } from 'lucide-react'
+import { invalidateAppDataCaches, matchesAppDataChange, notifyAppDataChanged, subscribeAppDataChanged } from '@/lib/app-live-data'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
 import {
   getPaymentTypeLabel,
@@ -394,6 +395,25 @@ export default function PaymentDashboardPage() {
     }
   }, [fetchData])
 
+  useEffect(() => {
+    const unsubscribe = subscribeAppDataChanged((detail) => {
+      if (matchesAppDataChange(detail, companyId, ['purchase-bills', 'sales-bills', 'payments', 'payment-modes'])) {
+        void fetchData()
+      }
+    })
+
+    const onCompanyChanged = () => {
+      void fetchData()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      unsubscribe()
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
+  }, [companyId, fetchData])
+
   const handleMakePayment = (billId: string) => {
     const route = activeTab === 'purchase' ? '/payment/purchase/entry' : '/payment/sales/entry'
     router.push(`${route}?billId=${billId}`)
@@ -461,6 +481,8 @@ export default function PaymentDashboardPage() {
       if (!response.ok) {
         throw new Error(payload.error || 'Failed to update payment')
       }
+      invalidateAppDataCaches(companyId, ['payments'])
+      notifyAppDataChanged({ companyId, scopes: ['payments'] })
       await fetchData()
       setIsEditPaymentOpen(false)
       setEditingPaymentId('')

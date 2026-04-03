@@ -20,7 +20,9 @@ import {
   isCashPaymentMode,
   type PaymentModeOption
 } from '@/lib/payment-mode-utils'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
+import { loadClientCachedValue } from '@/lib/client-cached-value'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 type AccountingHeadRecord = {
   id: string
@@ -76,6 +78,16 @@ type CollectionPayload<T> =
   | {
       data?: T[]
     }
+
+const CASH_BANK_ENTRY_CACHE_AGE_MS = 30_000
+
+type CashBankEntryCachePayload = {
+  accountingHeads: AccountingHeadRecord[]
+  parties: PartyRecord[]
+  suppliers: SupplierRecord[]
+  banks: BankRecord[]
+  paymentModes: PaymentModeRecord[]
+}
 
 function normalizeCollection<T>(payload: CollectionPayload<T>): T[] {
   if (Array.isArray(payload)) return payload
@@ -165,91 +177,91 @@ function CashBankPaymentEntryPageContent() {
 
     ;(async () => {
       try {
-        const [accountingHeadsResponse, partiesResponse, suppliersResponse, banksResponse, paymentModesResponse] = await Promise.all([
-          fetch(`/api/accounting-heads?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
-          fetch(`/api/parties?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
-          fetch(`/api/suppliers?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
-          fetch(`/api/banks?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
-          fetch(`/api/payment-modes?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' })
-        ])
+        const payload = await loadClientCachedValue<CashBankEntryCachePayload>(
+          `cash-bank-entry:${companyId}`,
+          async () => {
+            const [accountingHeadsResponse, partiesResponse, suppliersResponse, banksResponse, paymentModesResponse] = await Promise.all([
+              fetch(`/api/accounting-heads?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+              fetch(`/api/parties?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+              fetch(`/api/suppliers?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+              fetch(`/api/banks?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+              fetch(`/api/payment-modes?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' })
+            ])
 
-        const [accountingHeadsPayload, partiesPayload, suppliersPayload, banksPayload, paymentModesPayload] = await Promise.all([
-          accountingHeadsResponse.json().catch(() => [] as CollectionPayload<AccountingHeadRecord>),
-          partiesResponse.json().catch(() => [] as CollectionPayload<PartyRecord>),
-          suppliersResponse.json().catch(() => [] as CollectionPayload<SupplierRecord>),
-          banksResponse.json().catch(() => [] as CollectionPayload<BankRecord>),
-          paymentModesResponse.json().catch(() => [] as CollectionPayload<PaymentModeRecord>)
-        ])
+            const [accountingHeadsPayload, partiesPayload, suppliersPayload, banksPayload, paymentModesPayload] = await Promise.all([
+              accountingHeadsResponse.json().catch(() => [] as CollectionPayload<AccountingHeadRecord>),
+              partiesResponse.json().catch(() => [] as CollectionPayload<PartyRecord>),
+              suppliersResponse.json().catch(() => [] as CollectionPayload<SupplierRecord>),
+              banksResponse.json().catch(() => [] as CollectionPayload<BankRecord>),
+              paymentModesResponse.json().catch(() => [] as CollectionPayload<PaymentModeRecord>)
+            ])
+
+            return {
+              accountingHeads: normalizeCollection<AccountingHeadRecord>(accountingHeadsPayload)
+                .map((row) => ({
+                  id: String(row.id || ''),
+                  name: String(row.name || '').trim(),
+                  category: String(row.category || '').trim(),
+                  amount: Number(row.amount || 0),
+                  value: Number(row.value || 0)
+                }))
+                .filter((row) => row.id && row.name),
+              parties: normalizeCollection<PartyRecord>(partiesPayload)
+                .map((row) => ({
+                  id: String(row.id || ''),
+                  name: String(row.name || '').trim(),
+                  type: String(row.type || '').trim(),
+                  address: String(row.address || '').trim(),
+                  phone1: String(row.phone1 || '').trim(),
+                  bankName: String(row.bankName || '').trim(),
+                  accountNo: String(row.accountNo || '').trim(),
+                  ifscCode: String(row.ifscCode || '').trim().toUpperCase()
+                }))
+                .filter((row) => row.id && row.name),
+              suppliers: normalizeCollection<SupplierRecord>(suppliersPayload)
+                .map((row) => ({
+                  id: String(row.id || ''),
+                  name: String(row.name || '').trim(),
+                  address: String(row.address || '').trim(),
+                  phone1: String(row.phone1 || '').trim(),
+                  gstNumber: String(row.gstNumber || '').trim(),
+                  bankName: String(row.bankName || '').trim(),
+                  accountNo: String(row.accountNo || '').trim(),
+                  ifscCode: String(row.ifscCode || '').trim().toUpperCase()
+                }))
+                .filter((row) => row.id && row.name),
+              banks: normalizeCollection<BankRecord>(banksPayload)
+                .map((row) => ({
+                  id: String(row.id || ''),
+                  name: String(row.name || '').trim(),
+                  branch: String(row.branch || '').trim(),
+                  ifscCode: String(row.ifscCode || '').trim().toUpperCase(),
+                  accountNumber: String(row.accountNumber || '').trim(),
+                  address: String(row.address || '').trim(),
+                  phone: String(row.phone || '').trim(),
+                  isActive: row.isActive !== false
+                }))
+                .filter((row) => row.id && row.name && row.isActive),
+              paymentModes: normalizeCollection<PaymentModeRecord>(paymentModesPayload)
+                .map((row) => ({
+                  id: String(row.id || ''),
+                  name: String(row.name || '').trim(),
+                  code: String(row.code || '').trim(),
+                  isActive: row.isActive !== false
+                }))
+                .filter((row) => row.id && row.name && row.code && row.isActive)
+            }
+          },
+          { maxAgeMs: CASH_BANK_ENTRY_CACHE_AGE_MS }
+        )
 
         if (cancelled) return
 
-        setAccountingHeadOptions(
-          normalizeCollection<AccountingHeadRecord>(accountingHeadsPayload)
-            .map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || '').trim(),
-              category: String(row.category || '').trim(),
-              amount: Number(row.amount || 0),
-              value: Number(row.value || 0)
-            }))
-            .filter((row) => row.id && row.name)
-        )
-
-        setPartyOptions(
-          normalizeCollection<PartyRecord>(partiesPayload)
-            .map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || '').trim(),
-              type: String(row.type || '').trim(),
-              address: String(row.address || '').trim(),
-              phone1: String(row.phone1 || '').trim(),
-              bankName: String(row.bankName || '').trim(),
-              accountNo: String(row.accountNo || '').trim(),
-              ifscCode: String(row.ifscCode || '').trim().toUpperCase()
-            }))
-            .filter((row) => row.id && row.name)
-        )
-
-        setSupplierOptions(
-          normalizeCollection<SupplierRecord>(suppliersPayload)
-            .map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || '').trim(),
-              address: String(row.address || '').trim(),
-              phone1: String(row.phone1 || '').trim(),
-              gstNumber: String(row.gstNumber || '').trim(),
-              bankName: String(row.bankName || '').trim(),
-              accountNo: String(row.accountNo || '').trim(),
-              ifscCode: String(row.ifscCode || '').trim().toUpperCase()
-            }))
-            .filter((row) => row.id && row.name)
-        )
-
-        setBankOptions(
-          normalizeCollection<BankRecord>(banksPayload)
-            .map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || '').trim(),
-              branch: String(row.branch || '').trim(),
-              ifscCode: String(row.ifscCode || '').trim().toUpperCase(),
-              accountNumber: String(row.accountNumber || '').trim(),
-              address: String(row.address || '').trim(),
-              phone: String(row.phone || '').trim(),
-              isActive: row.isActive !== false
-            }))
-            .filter((row) => row.id && row.name && row.isActive)
-        )
-
-        setPaymentModes(
-          normalizeCollection<PaymentModeRecord>(paymentModesPayload)
-            .map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || '').trim(),
-              code: String(row.code || '').trim(),
-              isActive: row.isActive !== false
-            }))
-            .filter((row) => row.id && row.name && row.code && row.isActive)
-        )
+        setAccountingHeadOptions(payload.accountingHeads)
+        setPartyOptions(payload.parties)
+        setSupplierOptions(payload.suppliers)
+        setBankOptions(payload.banks)
+        setPaymentModes(payload.paymentModes)
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -259,6 +271,19 @@ function CashBankPaymentEntryPageContent() {
 
     return () => {
       cancelled = true
+    }
+  }, [companyId])
+
+  useEffect(() => {
+    const onCompanyChanged = (event: Event) => {
+      const nextCompanyId = (event as CustomEvent<{ companyId?: string }>).detail?.companyId?.trim() || ''
+      if (!nextCompanyId || nextCompanyId === companyId) return
+      setCompanyId(nextCompanyId)
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    return () => {
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
   }, [companyId])
 
@@ -447,6 +472,8 @@ function CashBankPaymentEntryPageContent() {
         throw new Error(payload.error || 'Failed to record cash / bank payment')
       }
 
+      invalidateAppDataCaches(companyId, ['payments'])
+      notifyAppDataChanged({ companyId, scopes: ['payments'] })
       alert('Cash / bank payment recorded successfully.')
       router.push('/payment/dashboard')
     } catch (error) {

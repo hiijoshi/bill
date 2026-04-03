@@ -20,7 +20,9 @@ import type {
   StatementSummary,
   StatementTargetSelection
 } from '@/lib/bank-statement-types'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
+import { loadClientCachedValue } from '@/lib/client-cached-value'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 type BankRecord = {
   id: string
@@ -72,6 +74,8 @@ type CollectionPayload<T> =
   | {
       data?: T[]
     }
+
+const BANK_STATEMENT_REFERENCE_CACHE_AGE_MS = 30_000
 
 function normalizeCollection<T>(payload: CollectionPayload<T>): T[] {
   if (Array.isArray(payload)) return payload
@@ -192,74 +196,81 @@ function BankStatementUploadPageContent() {
 
     ;(async () => {
       try {
-        const [banksResponse, accountingHeadsResponse, partiesResponse, suppliersResponse] = await Promise.all([
-          fetch(`/api/banks?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
-          fetch(`/api/accounting-heads?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
-          fetch(`/api/parties?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
-          fetch(`/api/suppliers?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' })
-        ])
+        const payload = await loadClientCachedValue<{
+          banks: BankRecord[]
+          accountingHeads: AccountingHeadRecord[]
+          parties: PartyRecord[]
+          suppliers: SupplierRecord[]
+        }>(
+          `bank-statement-entry:${companyId}`,
+          async () => {
+            const [banksResponse, accountingHeadsResponse, partiesResponse, suppliersResponse] = await Promise.all([
+              fetch(`/api/banks?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+              fetch(`/api/accounting-heads?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+              fetch(`/api/parties?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+              fetch(`/api/suppliers?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' })
+            ])
 
-        const [banksPayload, accountingHeadsPayload, partiesPayload, suppliersPayload] = await Promise.all([
-          banksResponse.json().catch(() => [] as CollectionPayload<BankRecord>),
-          accountingHeadsResponse.json().catch(() => [] as CollectionPayload<AccountingHeadRecord>),
-          partiesResponse.json().catch(() => [] as CollectionPayload<PartyRecord>),
-          suppliersResponse.json().catch(() => [] as CollectionPayload<SupplierRecord>)
-        ])
+            const [banksPayload, accountingHeadsPayload, partiesPayload, suppliersPayload] = await Promise.all([
+              banksResponse.json().catch(() => [] as CollectionPayload<BankRecord>),
+              accountingHeadsResponse.json().catch(() => [] as CollectionPayload<AccountingHeadRecord>),
+              partiesResponse.json().catch(() => [] as CollectionPayload<PartyRecord>),
+              suppliersResponse.json().catch(() => [] as CollectionPayload<SupplierRecord>)
+            ])
+
+            return {
+              banks: normalizeCollection<BankRecord>(banksPayload)
+                .map((bank) => ({
+                  id: String(bank.id || ''),
+                  name: String(bank.name || '').trim(),
+                  branch: String(bank.branch || '').trim(),
+                  accountNumber: String(bank.accountNumber || '').trim(),
+                  ifscCode: String(bank.ifscCode || '').trim().toUpperCase()
+                }))
+                .filter((bank) => bank.id && bank.name),
+              accountingHeads: normalizeCollection<AccountingHeadRecord>(accountingHeadsPayload)
+                .map((row) => ({
+                  id: String(row.id || ''),
+                  name: String(row.name || '').trim(),
+                  category: String(row.category || '').trim()
+                }))
+                .filter((row) => row.id && row.name),
+              parties: normalizeCollection<PartyRecord>(partiesPayload)
+                .map((row) => ({
+                  id: String(row.id || ''),
+                  name: String(row.name || '').trim(),
+                  type: String(row.type || '').trim(),
+                  address: String(row.address || '').trim(),
+                  phone1: String(row.phone1 || '').trim(),
+                  bankName: String(row.bankName || '').trim(),
+                  accountNo: String(row.accountNo || '').trim(),
+                  ifscCode: String(row.ifscCode || '').trim().toUpperCase()
+                }))
+                .filter((row) => row.id && row.name),
+              suppliers: normalizeCollection<SupplierRecord>(suppliersPayload)
+                .map((row) => ({
+                  id: String(row.id || ''),
+                  name: String(row.name || '').trim(),
+                  address: String(row.address || '').trim(),
+                  phone1: String(row.phone1 || '').trim(),
+                  gstNumber: String(row.gstNumber || '').trim(),
+                  bankName: String(row.bankName || '').trim(),
+                  accountNo: String(row.accountNo || '').trim(),
+                  ifscCode: String(row.ifscCode || '').trim().toUpperCase()
+                }))
+                .filter((row) => row.id && row.name)
+            }
+          },
+          { maxAgeMs: BANK_STATEMENT_REFERENCE_CACHE_AGE_MS }
+        )
 
         if (cancelled) return
 
-        const nextBanks = normalizeCollection<BankRecord>(banksPayload)
-          .map((bank) => ({
-            id: String(bank.id || ''),
-            name: String(bank.name || '').trim(),
-            branch: String(bank.branch || '').trim(),
-            accountNumber: String(bank.accountNumber || '').trim(),
-            ifscCode: String(bank.ifscCode || '').trim().toUpperCase()
-          }))
-          .filter((bank) => bank.id && bank.name)
-
-        setBanks(nextBanks)
-        setSelectedBankId((current) => current || nextBanks[0]?.id || '')
-
-        setAccountingHeads(
-          normalizeCollection<AccountingHeadRecord>(accountingHeadsPayload)
-            .map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || '').trim(),
-              category: String(row.category || '').trim()
-            }))
-            .filter((row) => row.id && row.name)
-        )
-
-        setParties(
-          normalizeCollection<PartyRecord>(partiesPayload)
-            .map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || '').trim(),
-              type: String(row.type || '').trim(),
-              address: String(row.address || '').trim(),
-              phone1: String(row.phone1 || '').trim(),
-              bankName: String(row.bankName || '').trim(),
-              accountNo: String(row.accountNo || '').trim(),
-              ifscCode: String(row.ifscCode || '').trim().toUpperCase()
-            }))
-            .filter((row) => row.id && row.name)
-        )
-
-        setSuppliers(
-          normalizeCollection<SupplierRecord>(suppliersPayload)
-            .map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || '').trim(),
-              address: String(row.address || '').trim(),
-              phone1: String(row.phone1 || '').trim(),
-              gstNumber: String(row.gstNumber || '').trim(),
-              bankName: String(row.bankName || '').trim(),
-              accountNo: String(row.accountNo || '').trim(),
-              ifscCode: String(row.ifscCode || '').trim().toUpperCase()
-            }))
-            .filter((row) => row.id && row.name)
-        )
+        setBanks(payload.banks)
+        setSelectedBankId((current) => current || payload.banks[0]?.id || '')
+        setAccountingHeads(payload.accountingHeads)
+        setParties(payload.parties)
+        setSuppliers(payload.suppliers)
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -269,6 +280,19 @@ function BankStatementUploadPageContent() {
 
     return () => {
       cancelled = true
+    }
+  }, [companyId])
+
+  useEffect(() => {
+    const onCompanyChanged = (event: Event) => {
+      const nextCompanyId = (event as CustomEvent<{ companyId?: string }>).detail?.companyId?.trim() || ''
+      if (!nextCompanyId || nextCompanyId === companyId) return
+      setCompanyId(nextCompanyId)
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    return () => {
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
   }, [companyId])
 
@@ -422,6 +446,10 @@ function BankStatementUploadPageContent() {
       } else {
         const importedCount = Number(payload.summary?.imported || 0)
         const remainingUnsettled = Number(payload.summary?.unsettled || 0)
+        if (importedCount > 0) {
+          invalidateAppDataCaches(companyId, ['payments'])
+          notifyAppDataChanged({ companyId, scopes: ['payments'] })
+        }
         setStatusTone('success')
         setStatusMessage(
           importedCount > 0

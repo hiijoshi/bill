@@ -5,8 +5,8 @@ export const APP_COMPANY_CHANGED_EVENT = 'app-company-changed'
 
 const ACTIVE_COMPANY_CACHE_KEY = 'shell:active-company-id'
 const AUTH_ME_CACHE_KEY = 'shell:auth-me'
-const ACTIVE_COMPANY_CACHE_AGE_MS = 20_000
-const AUTH_ME_CACHE_AGE_MS = 30_000
+const ACTIVE_COMPANY_CACHE_AGE_MS = 5 * 60_000
+const AUTH_ME_CACHE_AGE_MS = 5 * 60_000
 
 type AuthMeCachePayload = {
   user?: {

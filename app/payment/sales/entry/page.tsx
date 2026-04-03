@@ -10,7 +10,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { ArrowLeft, CreditCard, DollarSign, MessageCircle, Search } from 'lucide-react'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
+import { loadClientCachedValue } from '@/lib/client-cached-value'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { DEFAULT_PAYMENT_MODES, isCashPaymentMode, type PaymentModeOption } from '@/lib/payment-mode-utils'
 import { getPartyOpeningBalanceReference } from '@/lib/party-opening-balance'
 import { openWhatsappChat } from '@/lib/whatsapp'
@@ -56,6 +58,9 @@ type PartyBillGroup = {
   bills: SalesBill[]
   totalPending: number
 }
+
+const PAYMENT_ENTRY_REFERENCE_CACHE_AGE_MS = 30_000
+const PAYMENT_SALES_BILLS_CACHE_AGE_MS = 15_000
 
 const formatDateSafe = (value: string): string => {
   const parsed = new Date(value)
@@ -262,38 +267,64 @@ function SalesPaymentEntryPageContent() {
     void fetchPaymentModes(companyId)
   }, [companyId])
 
+  useEffect(() => {
+    const onCompanyChanged = (event: Event) => {
+      const nextCompanyId = (event as CustomEvent<{ companyId?: string }>).detail?.companyId?.trim() || ''
+      if (!nextCompanyId || nextCompanyId === companyId) return
+      setCompanyId(nextCompanyId)
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    return () => {
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
+  }, [companyId])
+
   const fetchBanks = async (targetCompanyId: string) => {
     try {
-      const response = await fetch(`/api/banks?companyId=${targetCompanyId}`)
-      if (response.ok) {
-        const data = await response.json()
-        setBanks(Array.isArray(data) ? data : [])
-      }
+      const data = await loadClientCachedValue<Bank[]>(
+        `payment-banks:${targetCompanyId}`,
+        async () => {
+          const response = await fetch(`/api/banks?companyId=${targetCompanyId}`)
+          if (!response.ok) {
+            return []
+          }
+          const payload = await response.json().catch(() => [])
+          return Array.isArray(payload) ? payload : []
+        },
+        { maxAgeMs: PAYMENT_ENTRY_REFERENCE_CACHE_AGE_MS }
+      )
+      setBanks(data)
     } catch (error) {
       console.error('Error fetching banks:', error)
+      setBanks([])
     }
   }
 
   const fetchPaymentModes = async (targetCompanyId: string) => {
     try {
-      const response = await fetch(`/api/payment-modes?companyId=${targetCompanyId}`, { cache: 'no-store' })
-      if (!response.ok) {
-        setPaymentModes([])
-        return
-      }
+      const rows = await loadClientCachedValue<PaymentMode[]>(
+        `payment-modes:${targetCompanyId}`,
+        async () => {
+          const response = await fetch(`/api/payment-modes?companyId=${targetCompanyId}`, { cache: 'no-store' })
+          if (!response.ok) {
+            return []
+          }
 
-      const data = await response.json()
-      const rows = Array.isArray(data) ? data : []
-      setPaymentModes(
-        rows
-          .map((row) => ({
-            id: String(row?.id || ''),
-            name: String(row?.name || '').trim(),
-            code: String(row?.code || '').trim(),
-            isActive: row?.isActive !== false
-          }))
-          .filter((row) => row.id && row.name && row.code && row.isActive)
+          const data = await response.json().catch(() => [])
+          const payload = Array.isArray(data) ? data : []
+          return payload
+            .map((row) => ({
+              id: String(row?.id || ''),
+              name: String(row?.name || '').trim(),
+              code: String(row?.code || '').trim(),
+              isActive: row?.isActive !== false
+            }))
+            .filter((row) => row.id && row.name && row.code && row.isActive)
+        },
+        { maxAgeMs: PAYMENT_ENTRY_REFERENCE_CACHE_AGE_MS }
       )
+      setPaymentModes(rows)
     } catch (error) {
       console.error('Error fetching payment modes:', error)
       setPaymentModes([])
@@ -388,50 +419,58 @@ function SalesPaymentEntryPageContent() {
 
   const fetchSalesBills = async (targetCompanyId: string) => {
     try {
-      const [salesResponse, partiesResponse] = await Promise.all([
-        fetch(`/api/sales-bills?companyId=${targetCompanyId}`),
-        fetch(`/api/parties?companyId=${targetCompanyId}`)
-      ])
+      const rows = await loadClientCachedValue<SalesBill[]>(
+        `payment-sales-bills:${targetCompanyId}`,
+        async () => {
+          const [salesResponse, partiesResponse] = await Promise.all([
+            fetch(`/api/sales-bills?companyId=${targetCompanyId}`),
+            fetch(`/api/parties?companyId=${targetCompanyId}`)
+          ])
 
-      const salesPayload = await salesResponse.json().catch(() => [])
-      const partyPayload = await partiesResponse.json().catch(() => [])
-      const salesRows = Array.isArray(salesPayload)
-        ? salesPayload
-        : Array.isArray(salesPayload?.data)
-          ? salesPayload.data
-          : []
-      const partyRows = Array.isArray(partyPayload)
-        ? partyPayload
-        : Array.isArray(partyPayload?.data)
-          ? partyPayload.data
-          : []
+          const salesPayload = await salesResponse.json().catch(() => [])
+          const partyPayload = await partiesResponse.json().catch(() => [])
+          const salesRows = Array.isArray(salesPayload)
+            ? salesPayload
+            : Array.isArray(salesPayload?.data)
+              ? salesPayload.data
+              : []
+          const partyRows = Array.isArray(partyPayload)
+            ? partyPayload
+            : Array.isArray(partyPayload?.data)
+              ? partyPayload.data
+              : []
 
-      const pendingBillRows = salesRows.filter((bill: SalesBill) => Number(bill?.balanceAmount || 0) > 0)
-      const openingBalanceRows = partyRows
-        .filter((party: PartyOutstandingRow) => Number(party?.openingOutstandingAmount || 0) > 0)
-        .map((party: PartyOutstandingRow): SalesBill => {
-          const openingAmount = Number(party.openingBalance || 0)
-          const outstandingAmount = Number(party.openingOutstandingAmount || 0)
-          const receivedAmount = Math.max(0, openingAmount - outstandingAmount)
+          const pendingBillRows = salesRows.filter((bill: SalesBill) => Number(bill?.balanceAmount || 0) > 0)
+          const openingBalanceRows = partyRows
+            .filter((party: PartyOutstandingRow) => Number(party?.openingOutstandingAmount || 0) > 0)
+            .map((party: PartyOutstandingRow): SalesBill => {
+              const openingAmount = Number(party.openingBalance || 0)
+              const outstandingAmount = Number(party.openingOutstandingAmount || 0)
+              const receivedAmount = Math.max(0, openingAmount - outstandingAmount)
 
-          return {
-            id: getPartyOpeningBalanceReference(party.id),
-            billNo: 'Opening Balance',
-            billDate: party.openingBalanceDate || new Date().toISOString(),
-            totalAmount: openingAmount,
-            receivedAmount,
-            balanceAmount: outstandingAmount,
-            status: outstandingAmount <= 0 ? 'paid' : receivedAmount > 0 ? 'partial' : 'unpaid',
-            party: {
-              id: party.id,
-              name: party.name,
-              address: party.address || '',
-              phone1: party.phone1 || ''
-            }
-          }
-        })
+              return {
+                id: getPartyOpeningBalanceReference(party.id),
+                billNo: 'Opening Balance',
+                billDate: party.openingBalanceDate || new Date().toISOString(),
+                totalAmount: openingAmount,
+                receivedAmount,
+                balanceAmount: outstandingAmount,
+                status: outstandingAmount <= 0 ? 'paid' : receivedAmount > 0 ? 'partial' : 'unpaid',
+                party: {
+                  id: party.id,
+                  name: party.name,
+                  address: party.address || '',
+                  phone1: party.phone1 || ''
+                }
+              }
+            })
 
-      setSalesBills([...pendingBillRows, ...openingBalanceRows])
+          return [...pendingBillRows, ...openingBalanceRows]
+        },
+        { maxAgeMs: PAYMENT_SALES_BILLS_CACHE_AGE_MS }
+      )
+
+      setSalesBills(rows)
       setLoading(false)
     } catch (error) {
       console.error('Error fetching sales bills:', error)
@@ -589,6 +628,8 @@ function SalesPaymentEntryPageContent() {
       setMultiBillFilter('')
 
       // Refresh bills to update balances
+      invalidateAppDataCaches(companyId, ['payments'])
+      notifyAppDataChanged({ companyId, scopes: ['payments'] })
       await fetchSalesBills(companyId)
     } catch (error) {
       console.error('Error:', error)

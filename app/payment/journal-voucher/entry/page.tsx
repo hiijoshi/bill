@@ -12,11 +12,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SearchableSelect, type SearchableSelectOption } from '@/components/ui/searchable-select'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
 import {
   JOURNAL_LEDGER_TYPE_OPTIONS,
   type JournalLedgerType
 } from '@/lib/journal-vouchers'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { loadClientCachedValue } from '@/lib/client-cached-value'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 type AccountingHeadRecord = {
   id: string
@@ -59,6 +61,15 @@ type JournalVoucherLine = {
   debitAmount: string
   creditAmount: string
   remark: string
+}
+
+const JOURNAL_REFERENCE_CACHE_AGE_MS = 30_000
+
+type JournalVoucherReferencePayload = {
+  accountingHeads: AccountingHeadRecord[]
+  parties: PartyRecord[]
+  farmers: FarmerRecord[]
+  banks: BankRecord[]
 }
 
 const EMPTY_JV_LINE = (): JournalVoucherLine => ({
@@ -151,68 +162,71 @@ function JournalVoucherEntryPageContent() {
 
     ;(async () => {
       try {
-        const [accountHeadsResponse, partiesResponse, farmersResponse, banksResponse, voucherSummaryResponse] = await Promise.all([
-          fetch(`/api/accounting-heads?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
-          fetch(`/api/parties?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
-          fetch(`/api/farmers?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
-          fetch(`/api/banks?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
-          fetch(`/api/payments/journal-vouchers?companyId=${encodeURIComponent(companyId)}&summary=true`, { cache: 'no-store' })
-        ])
+        const [referencePayload, voucherSummaryPayload] = await Promise.all([
+          loadClientCachedValue<JournalVoucherReferencePayload>(
+            `journal-voucher-references:${companyId}`,
+            async () => {
+              const [accountHeadsResponse, partiesResponse, farmersResponse, banksResponse] = await Promise.all([
+                fetch(`/api/accounting-heads?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+                fetch(`/api/parties?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+                fetch(`/api/farmers?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
+                fetch(`/api/banks?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' })
+              ])
 
-        const [accountHeadsPayload, partiesPayload, farmersPayload, banksPayload, voucherSummaryPayload] = await Promise.all([
-          accountHeadsResponse.json().catch(() => [] as CollectionPayload<AccountingHeadRecord>),
-          partiesResponse.json().catch(() => [] as CollectionPayload<PartyRecord>),
-          farmersResponse.json().catch(() => [] as CollectionPayload<FarmerRecord>),
-          banksResponse.json().catch(() => [] as CollectionPayload<BankRecord>),
-          voucherSummaryResponse.json().catch(() => ({ nextVoucherNo: 'JV-000001' } as { nextVoucherNo?: string }))
+              const [accountHeadsPayload, partiesPayload, farmersPayload, banksPayload] = await Promise.all([
+                accountHeadsResponse.json().catch(() => [] as CollectionPayload<AccountingHeadRecord>),
+                partiesResponse.json().catch(() => [] as CollectionPayload<PartyRecord>),
+                farmersResponse.json().catch(() => [] as CollectionPayload<FarmerRecord>),
+                banksResponse.json().catch(() => [] as CollectionPayload<BankRecord>)
+              ])
+
+              return {
+                accountingHeads: normalizeCollection<AccountingHeadRecord>(accountHeadsPayload)
+                  .map((row) => ({
+                    id: String(row.id || ''),
+                    name: String(row.name || '').trim(),
+                    category: String(row.category || '').trim(),
+                    accountGroup: row.accountGroup || null
+                  }))
+                  .filter((row) => row.id && row.name),
+                parties: normalizeCollection<PartyRecord>(partiesPayload)
+                  .map((row) => ({
+                    id: String(row.id || ''),
+                    name: String(row.name || '').trim(),
+                    address: String(row.address || '').trim(),
+                    phone1: String(row.phone1 || '').trim()
+                  }))
+                  .filter((row) => row.id && row.name),
+                farmers: normalizeCollection<FarmerRecord>(farmersPayload)
+                  .map((row) => ({
+                    id: String(row.id || ''),
+                    name: String(row.name || '').trim(),
+                    address: String(row.address || '').trim(),
+                    phone1: String(row.phone1 || '').trim()
+                  }))
+                  .filter((row) => row.id && row.name),
+                banks: normalizeCollection<BankRecord>(banksPayload)
+                  .map((row) => ({
+                    id: String(row.id || ''),
+                    name: String(row.name || '').trim(),
+                    branch: String(row.branch || '').trim(),
+                    ifscCode: String(row.ifscCode || '').trim().toUpperCase()
+                  }))
+                  .filter((row) => row.id && row.name)
+              }
+            },
+            { maxAgeMs: JOURNAL_REFERENCE_CACHE_AGE_MS }
+          ),
+          fetch(`/api/payments/journal-vouchers?companyId=${encodeURIComponent(companyId)}&summary=true`, { cache: 'no-store' })
+            .then((response) => response.json().catch(() => ({ nextVoucherNo: 'JV-000001' } as { nextVoucherNo?: string })))
         ])
 
         if (cancelled) return
 
-        setAccountingHeads(
-          normalizeCollection<AccountingHeadRecord>(accountHeadsPayload)
-            .map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || '').trim(),
-              category: String(row.category || '').trim(),
-              accountGroup: row.accountGroup || null
-            }))
-            .filter((row) => row.id && row.name)
-        )
-
-        setParties(
-          normalizeCollection<PartyRecord>(partiesPayload)
-            .map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || '').trim(),
-              address: String(row.address || '').trim(),
-              phone1: String(row.phone1 || '').trim()
-            }))
-            .filter((row) => row.id && row.name)
-        )
-
-        setFarmers(
-          normalizeCollection<FarmerRecord>(farmersPayload)
-            .map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || '').trim(),
-              address: String(row.address || '').trim(),
-              phone1: String(row.phone1 || '').trim()
-            }))
-            .filter((row) => row.id && row.name)
-        )
-
-        setBanks(
-          normalizeCollection<BankRecord>(banksPayload)
-            .map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || '').trim(),
-              branch: String(row.branch || '').trim(),
-              ifscCode: String(row.ifscCode || '').trim().toUpperCase()
-            }))
-            .filter((row) => row.id && row.name)
-        )
-
+        setAccountingHeads(referencePayload.accountingHeads)
+        setParties(referencePayload.parties)
+        setFarmers(referencePayload.farmers)
+        setBanks(referencePayload.banks)
         setVoucherNo(String(voucherSummaryPayload.nextVoucherNo || 'JV-000001').trim() || 'JV-000001')
       } finally {
         if (!cancelled) {
@@ -223,6 +237,19 @@ function JournalVoucherEntryPageContent() {
 
     return () => {
       cancelled = true
+    }
+  }, [companyId])
+
+  useEffect(() => {
+    const onCompanyChanged = (event: Event) => {
+      const nextCompanyId = (event as CustomEvent<{ companyId?: string }>).detail?.companyId?.trim() || ''
+      if (!nextCompanyId || nextCompanyId === companyId) return
+      setCompanyId(nextCompanyId)
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    return () => {
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
   }, [companyId])
 
@@ -373,6 +400,8 @@ function JournalVoucherEntryPageContent() {
         throw new Error(payload.error || 'Failed to save journal voucher')
       }
 
+      invalidateAppDataCaches(companyId, ['journal-vouchers', 'payments'])
+      notifyAppDataChanged({ companyId, scopes: ['journal-vouchers', 'payments'] })
       alert('Journal voucher saved successfully.')
       setVoucherNo(String(payload.nextVoucherNo || '').trim() || voucherNo)
       resetForm()

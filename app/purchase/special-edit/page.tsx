@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
+import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
@@ -332,6 +333,8 @@ function SpecialPurchaseEditPageContent() {
         throw new Error(errorData.error || 'Failed to update special purchase bill')
       }
 
+      invalidateAppDataCaches(companyId, ['purchase-bills'])
+      notifyAppDataChanged({ companyId, scopes: ['purchase-bills'] })
       alert('Special purchase bill updated successfully!')
       router.push('/purchase/list')
     } catch (error) {

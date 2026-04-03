@@ -15,7 +15,9 @@ import {
   buildSelfTransferReference,
   SELF_TRANSFER_PAYMENT_TYPE
 } from '@/lib/payment-entry-types'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
+import { loadClientCachedValue } from '@/lib/client-cached-value'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 type BankRecord = {
   id: string
@@ -33,6 +35,8 @@ type CollectionPayload<T> =
   | {
       data?: T[]
     }
+
+const SELF_TRANSFER_BANK_CACHE_AGE_MS = 30_000
 
 function normalizeCollection<T>(payload: CollectionPayload<T>): T[] {
   if (Array.isArray(payload)) return payload
@@ -93,15 +97,23 @@ function SelfTransferEntryPageContent() {
 
     ;(async () => {
       try {
-        const response = await fetch(`/api/banks?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' })
-        const payload = await response.json().catch(() => [] as CollectionPayload<BankRecord>)
-        if (cancelled) return
+        const normalizedBanks = await loadClientCachedValue<BankRecord[]>(
+          `payment-banks:${companyId}`,
+          async () => {
+            const response = await fetch(`/api/banks?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' })
+            const payload = await response.json().catch(() => [] as CollectionPayload<BankRecord>)
 
-        const normalizedBanks = normalizeCollection<BankRecord>(payload).map((row) => ({
-          id: String(row.id || ''),
-          name: String(row.name || '').trim(),
-          branch: String(row.branch || '').trim()
-        })).filter((row) => row.id && row.name)
+            return normalizeCollection<BankRecord>(payload)
+              .map((row) => ({
+                id: String(row.id || ''),
+                name: String(row.name || '').trim(),
+                branch: String(row.branch || '').trim()
+              }))
+              .filter((row) => row.id && row.name)
+          },
+          { maxAgeMs: SELF_TRANSFER_BANK_CACHE_AGE_MS }
+        )
+        if (cancelled) return
 
         setBanks(normalizedBanks)
         setToAccount((current) => current || normalizedBanks[0]?.id || '')
@@ -114,6 +126,19 @@ function SelfTransferEntryPageContent() {
 
     return () => {
       cancelled = true
+    }
+  }, [companyId])
+
+  useEffect(() => {
+    const onCompanyChanged = (event: Event) => {
+      const nextCompanyId = (event as CustomEvent<{ companyId?: string }>).detail?.companyId?.trim() || ''
+      if (!nextCompanyId || nextCompanyId === companyId) return
+      setCompanyId(nextCompanyId)
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    return () => {
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
   }, [companyId])
 
@@ -190,6 +215,8 @@ function SelfTransferEntryPageContent() {
         throw new Error(payload.error || 'Failed to record self transfer')
       }
 
+      invalidateAppDataCaches(companyId, ['payments'])
+      notifyAppDataChanged({ companyId, scopes: ['payments'] })
       alert('Self transfer recorded successfully.')
       router.push('/payment/dashboard')
     } catch (error) {

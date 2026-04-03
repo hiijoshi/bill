@@ -12,12 +12,26 @@ import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { calculateMandiCharges, getCalculationBasisLabel } from '@/lib/mandi-charge-engine'
 import { kgToQuintal, round4, toKg } from '@/lib/unit-conversion'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
+import { loadClientCachedValue } from '@/lib/client-cached-value'
 import { isAbortError } from '@/lib/http'
 import {
   clearDefaultPurchaseProductId,
   getDefaultPurchaseProductId
 } from '@/lib/default-product'
+
+const PURCHASE_ENTRY_CACHE_AGE_MS = 20_000
+
+type PurchaseEntryCachePayload = {
+  products: Product[]
+  lastBillNumber: number
+  units: UserUnit[]
+  farmers: FarmerOption[]
+  mandiTypes: MandiType[]
+  accountingHeads: AccountingHeadCharge[]
+  markas: MarkaOption[]
+}
 
 interface Product {
   id: string
@@ -169,96 +183,107 @@ export default function PurchaseEntryPage() {
 
       // Same-origin fetch automatically sends auth cookies.
       stripCompanyParamsFromUrl()
-      const [productsRes, billsRes, unitsRes, farmersRes, mandiTypesRes, accountingHeadsRes, markasRes] = await Promise.all([
-        fetch(`/api/products?companyId=${companyId}`),
-        fetch(`/api/purchase-bills?companyId=${companyId}&last=true`),
-        fetch(`/api/units?companyId=${companyId}`),
-        fetch(`/api/farmers?companyId=${companyId}`),
-        fetch(`/api/mandi-types?companyId=${companyId}`),
-        fetch(`/api/accounting-heads?companyId=${companyId}`),
-        fetch(`/api/markas?companyId=${companyId}`)
-      ])
+      const payload = await loadClientCachedValue<PurchaseEntryCachePayload>(
+        `purchase-entry:${companyId}`,
+        async () => {
+          const [productsRes, billsRes, unitsRes, farmersRes, mandiTypesRes, accountingHeadsRes, markasRes] = await Promise.all([
+            fetch(`/api/products?companyId=${companyId}`),
+            fetch(`/api/purchase-bills?companyId=${companyId}&last=true`),
+            fetch(`/api/units?companyId=${companyId}`),
+            fetch(`/api/farmers?companyId=${companyId}`),
+            fetch(`/api/mandi-types?companyId=${companyId}`),
+            fetch(`/api/accounting-heads?companyId=${companyId}`),
+            fetch(`/api/markas?companyId=${companyId}`)
+          ])
 
-      // Handle auth/company context failures quickly without retry loops.
-      if (!productsRes.ok) {
-        if (productsRes.status === 401 || productsRes.status === 403) {
-          router.push('/company/select')
-          setLoading(false)
-          return
-        }
+          if (!productsRes.ok) {
+            const authError = new Error('Failed to fetch purchase entry products') as Error & { status?: number }
+            authError.status = productsRes.status
 
-        let errJson: unknown = null
-        try {
-          errJson = await productsRes.json()
-        } catch {
-          // ignore parse error
-        }
-        console.error('Failed to fetch products', productsRes.status, errJson)
-        setProducts([])
-      } else {
-        const productsData = await productsRes.json()
+            if (productsRes.status === 401 || productsRes.status === 403) {
+              throw authError
+            }
 
-        // Ensure products is always an array
-        if (Array.isArray(productsData)) {
-          setProducts(productsData)
-          const rememberedDefault = getDefaultPurchaseProductId(companyId)
-          const hasRememberedDefault = productsData.some((item: Product) => item.id === rememberedDefault)
-          if (hasRememberedDefault) {
-            setDefaultProductIdState(rememberedDefault)
-            setSelectedProduct((current) => current || rememberedDefault)
-          } else {
-            clearDefaultPurchaseProductId(companyId)
-            setDefaultProductIdState('')
+            let errJson: unknown = null
+            try {
+              errJson = await productsRes.json()
+            } catch {
+              // ignore parse error
+            }
+            console.error('Failed to fetch products', productsRes.status, errJson)
           }
-        } else if (productsData && typeof productsData.error === 'string') {
-          console.error('Products API returned error message:', productsData.error)
-          setProducts([])
-        } else {
-          console.error('Products API returned non-array data:', productsData)
-          setProducts([])
-        }
+
+          const productsPayload = productsRes.ok ? await productsRes.json().catch(() => []) : []
+          const billsData = billsRes.ok ? await billsRes.json().catch(() => ({ lastBillNumber: 0 })) : { lastBillNumber: 0 }
+          const unitsPayload = unitsRes.ok ? await unitsRes.json().catch(() => ({})) : []
+          const farmersPayload = farmersRes.ok ? await farmersRes.json().catch(() => []) : []
+          const mandiTypesPayload = mandiTypesRes.ok ? await mandiTypesRes.json().catch(() => []) : []
+          const accountingHeadsPayload = accountingHeadsRes.ok ? await accountingHeadsRes.json().catch(() => []) : []
+          const markasPayload = markasRes.ok ? await markasRes.json().catch(() => []) : []
+
+          const products =
+            Array.isArray(productsPayload)
+              ? productsPayload
+              : productsPayload && typeof productsPayload.error === 'string'
+                ? []
+                : []
+
+          const units = Array.isArray(unitsPayload)
+            ? unitsPayload
+            : Array.isArray(unitsPayload?.units)
+              ? unitsPayload.units
+              : []
+
+          return {
+            products: Array.isArray(products) ? products : [],
+            lastBillNumber: Number(billsData.lastBillNumber || 0),
+            units: Array.isArray(units) ? units : [],
+            farmers: Array.isArray(farmersPayload) ? farmersPayload : [],
+            mandiTypes: Array.isArray(mandiTypesPayload) ? mandiTypesPayload : [],
+            accountingHeads: Array.isArray(accountingHeadsPayload) ? accountingHeadsPayload : [],
+            markas: Array.isArray(markasPayload)
+              ? markasPayload
+                  .map((row) => ({
+                    id: String(row?.id || ''),
+                    markaNumber: String(row?.markaNumber || '').trim(),
+                    isActive: row?.isActive !== false
+                  }))
+                  .filter((row) => row.id && row.markaNumber && row.isActive !== false)
+              : []
+          }
+        },
+        { maxAgeMs: PURCHASE_ENTRY_CACHE_AGE_MS }
+      )
+
+      setProducts(payload.products)
+      const rememberedDefault = getDefaultPurchaseProductId(companyId)
+      const hasRememberedDefault = payload.products.some((item) => item.id === rememberedDefault)
+      if (hasRememberedDefault) {
+        setDefaultProductIdState(rememberedDefault)
+        setSelectedProduct((current) => current || rememberedDefault)
+      } else {
+        clearDefaultPurchaseProductId(companyId)
+        setDefaultProductIdState('')
       }
 
-      // Generate next bill number
-      const billsData = billsRes.ok ? await billsRes.json() : { lastBillNumber: 0 }
-      const lastBillNum = Number(billsData.lastBillNumber || 0)
+      const lastBillNum = Number(payload.lastBillNumber || 0)
       setLastBillNumber(lastBillNum)
       setBillNumber((lastBillNum + 1).toString())
 
-      const unitsPayload = unitsRes.ok ? await unitsRes.json().catch(() => ({})) : []
-      const farmersPayload = farmersRes.ok ? await farmersRes.json().catch(() => []) : []
-      const mandiTypesPayload = mandiTypesRes.ok ? await mandiTypesRes.json().catch(() => []) : []
-      const accountingHeadsPayload = accountingHeadsRes.ok ? await accountingHeadsRes.json().catch(() => []) : []
-      const markasPayload = markasRes.ok ? await markasRes.json().catch(() => []) : []
-      const unitsData = Array.isArray(unitsPayload)
-        ? unitsPayload
-        : Array.isArray(unitsPayload?.units)
-          ? unitsPayload.units
-          : []
-      if (Array.isArray(unitsData)) {
-        setUserUnits(unitsData)
-        const defaultUnit = unitsData.find((unit: UserUnit) => unit.symbol === 'qt') || unitsData[0]
-        setSelectedUserUnit((current) => current || defaultUnit?.id || '')
-      } else {
-        setUserUnits([])
-      }
+      setUserUnits(payload.units)
+      const defaultUnit = payload.units.find((unit) => unit.symbol === 'qt') || payload.units[0]
+      setSelectedUserUnit((current) => current || defaultUnit?.id || '')
 
-      setFarmers(Array.isArray(farmersPayload) ? farmersPayload : [])
-      setMandiTypes(Array.isArray(mandiTypesPayload) ? mandiTypesPayload : [])
-      setAccountingHeads(Array.isArray(accountingHeadsPayload) ? accountingHeadsPayload : [])
-      setMarkas(
-        Array.isArray(markasPayload)
-          ? markasPayload
-              .map((row) => ({
-                id: String(row?.id || ''),
-                markaNumber: String(row?.markaNumber || '').trim(),
-                isActive: row?.isActive !== false
-              }))
-              .filter((row) => row.id && row.markaNumber && row.isActive !== false)
-          : []
-      )
+      setFarmers(payload.farmers)
+      setMandiTypes(payload.mandiTypes)
+      setAccountingHeads(payload.accountingHeads)
+      setMarkas(payload.markas)
     } catch (error) {
       if (isAbortError(error)) return
+      if (error instanceof Error && 'status' in error && (error.status === 401 || error.status === 403)) {
+        router.push('/company/select')
+        return
+      }
       console.error('Error fetching data:', error)
     } finally {
       setLoading(false)
@@ -267,6 +292,17 @@ export default function PurchaseEntryPage() {
 
   useEffect(() => {
     void fetchData()
+  }, [fetchData])
+
+  useEffect(() => {
+    const onCompanyChanged = () => {
+      void fetchData()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    return () => {
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
   }, [fetchData])
 
   useEffect(() => {
@@ -419,6 +455,8 @@ export default function PurchaseEntryPage() {
       const responseData = await response.json()
 
       if (response.ok) {
+        invalidateAppDataCaches(companyId, ['purchase-bills'])
+        notifyAppDataChanged({ companyId, scopes: ['purchase-bills'] })
         if (printAfterSave && responseData?.id) {
           const printPath = companyId
             ? `/purchase/${responseData.id}/print?companyId=${encodeURIComponent(companyId)}&returnTo=entry`

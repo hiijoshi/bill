@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
+import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
 import { kgToQuintal, round4, toKg } from '@/lib/unit-conversion'
 import { getCompanyIdFromSearch, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
@@ -359,6 +360,8 @@ export default function SpecialPurchaseEntryPage() {
       const responseData = await response.json()
 
       if (response.ok) {
+        invalidateAppDataCaches(companyId, ['purchase-bills'])
+        notifyAppDataChanged({ companyId, scopes: ['purchase-bills'] })
         if (printAfterSave && responseData?.specialPurchaseBill?.id) {
           const printPath = companyId
             ? `/purchase/special/${responseData.specialPurchaseBill.id}/print?companyId=${encodeURIComponent(companyId)}&returnTo=special-entry`
