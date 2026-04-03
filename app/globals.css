@@ -153,10 +153,6 @@
   animation: none !important;
 }
 
-.project-loader-video {
-  display: block;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .motion-minimal-app [class*="transition-"],
   .motion-minimal-app [class*="duration-"],
