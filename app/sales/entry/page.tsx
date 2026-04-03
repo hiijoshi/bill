@@ -264,7 +264,7 @@ export default function SalesEntryPage() {
     return String(Math.max(0, parsed))
   }
 
-  const freightTotal = parseFloat(freightAmount) || 0
+  const freightAdvanceTotal = parseFloat(advance) || 0
   const normalizedAdditionalCharges = useMemo(
     () =>
       normalizeSalesAdditionalCharges(
@@ -281,7 +281,7 @@ export default function SalesEntryPage() {
     [normalizedAdditionalCharges]
   )
   const extraChargesTotal = extraChargesSummary.totalAmount
-  const additionalTotal = freightTotal + extraChargesTotal
+  const additionalTotal = freightAdvanceTotal + extraChargesTotal
   const totalGstAmount = useMemo(
     () => roundCurrency(currentFormItems.reduce((sum, item) => sum + (item.gstAmount || 0), 0)),
     [currentFormItems]
@@ -742,7 +742,7 @@ export default function SalesEntryPage() {
     updateTotals(mappedItems)
     const loadedComputedGrandTotal = roundCurrency(
       mappedItems.reduce((sum, item) => sum + (item.amount || 0) + (item.gstAmount || 0), 0) +
-      Math.max(0, Number(firstTransport?.freightAmount || 0)) +
+      Math.max(0, Number(firstTransport?.advance || 0)) +
       (Array.isArray(bill.additionalCharges) && bill.additionalCharges.length > 0
         ? bill.additionalCharges.reduce((sum, charge) => sum + Math.max(0, Number(charge.amount || 0)), 0)
         : Math.max(0, Number(firstTransport?.otherAmount || 0)) + Math.max(0, Number(firstTransport?.insuranceAmount || 0)))
@@ -1689,15 +1689,15 @@ export default function SalesEntryPage() {
                   <h3 className="text-lg font-semibold mb-2 pb-2 border-b">4. Additional Charges</h3>
                   <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_2.1fr_0.9fr]">
                     <div className="rounded-lg border bg-slate-50 p-4">
-                      <Label htmlFor="freightAmountTotal">Freight Amount</Label>
+                      <Label htmlFor="freightAmountTotal">Freight Advance</Label>
                       <Input
                         id="freightAmountTotal"
-                        value={freightTotal.toFixed(2)}
+                        value={freightAdvanceTotal.toFixed(2)}
                         readOnly
                         className="mt-2 bg-gray-100"
                       />
                       <p className="mt-2 text-xs text-slate-500">
-                        Freight transport section se aata hai aur yahan summary ke liye dikh raha hai.
+                        Transport section ka advance amount yahan summary ke liye dikh raha hai.
                       </p>
                     </div>
                     <div className="rounded-lg border p-4">
@@ -1796,8 +1796,8 @@ export default function SalesEntryPage() {
                       />
                       <div className="mt-3 space-y-2 text-sm text-slate-600">
                         <div className="flex items-center justify-between">
-                          <span>Freight</span>
-                          <span>₹{freightTotal.toFixed(2)}</span>
+                          <span>Freight Advance</span>
+                          <span>₹{freightAdvanceTotal.toFixed(2)}</span>
                         </div>
                         <div className="flex items-center justify-between">
                           <span>Charge Buckets</span>
@@ -1850,8 +1850,8 @@ export default function SalesEntryPage() {
                           <span>₹{totalGstAmount.toFixed(2)}</span>
                         </div>
                         <div className="flex items-center justify-between">
-                          <span>Freight</span>
-                          <span>₹{freightTotal.toFixed(2)}</span>
+                          <span>Freight Advance</span>
+                          <span>₹{freightAdvanceTotal.toFixed(2)}</span>
                         </div>
                         <div className="flex items-center justify-between">
                           <span>Additional charges</span>
