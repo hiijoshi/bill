@@ -139,188 +139,26 @@
   }
 }
 
-@keyframes task-loader-orbit {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes task-loader-orbit-reverse {
-  from {
-    transform: rotate(360deg);
-  }
-  to {
-    transform: rotate(0deg);
-  }
-}
-
-@keyframes task-loader-float {
+@keyframes task-loader-dot {
   0%,
   100% {
-    transform: translateY(0);
+    transform: translateY(0) scale(0.88);
+    opacity: 0.48;
   }
   50% {
-    transform: translateY(-5px);
-  }
-}
-
-@keyframes task-loader-bob {
-  0%,
-  100% {
-    transform: translateY(0) scale(1);
-  }
-  50% {
-    transform: translateY(-4px) scale(1.02);
-  }
-}
-
-@keyframes task-loader-shimmer {
-  0% {
-    background-position: 200% 0;
-  }
-  100% {
-    background-position: -200% 0;
-  }
-}
-
-@keyframes task-loader-pulse-ring {
-  0% {
-    opacity: 0.12;
-    transform: scale(0.88);
-  }
-  55% {
-    opacity: 0.38;
-  }
-  100% {
-    opacity: 0;
-    transform: scale(1.14);
-  }
-}
-
-@keyframes task-loader-satellite {
-  0%,
-  100% {
-    transform: translateY(0) scale(0.98);
-  }
-  50% {
-    transform: translateY(-4px) scale(1.08);
-  }
-}
-
-@keyframes task-loader-stream {
-  0% {
-    opacity: 0;
-    transform: translateX(-8%);
-  }
-  20%,
-  80% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translateX(8%);
-  }
-}
-
-@keyframes task-loader-ticker {
-  0% {
-    opacity: 0;
-    transform: translateX(0);
-  }
-  15% {
-    opacity: 0.8;
-  }
-  100% {
-    opacity: 0;
-    transform: translateX(290%);
-  }
-}
-
-@keyframes task-loader-meter {
-  0%,
-  100% {
-    transform: scaleX(0.92);
-    transform-origin: left center;
-  }
-  50% {
-    transform: scaleX(1);
-    transform-origin: left center;
-  }
-}
-
-@keyframes task-loader-matrix {
-  0%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.72;
-  }
-  50% {
-    transform: translateY(-3px);
+    transform: translateY(-4px) scale(1);
     opacity: 1;
   }
 }
 
-.task-loader-orbit {
-  animation: task-loader-orbit 8s linear infinite;
+.task-loader-dot {
+  animation: task-loader-dot 0.88s cubic-bezier(0.32, 0.72, 0.18, 1) infinite;
 }
 
-.task-loader-orbit-reverse {
-  animation: task-loader-orbit-reverse 11s linear infinite;
-}
-
-.task-loader-float {
-  animation: task-loader-float 2.8s ease-in-out infinite;
-}
-
-.task-loader-bob {
-  animation: task-loader-bob 2.4s ease-in-out infinite;
-}
-
-.task-loader-card {
-  animation: task-loader-float 3.4s ease-in-out infinite;
-}
-
-.task-loader-glow {
-  pointer-events: none;
-}
-
-.task-loader-pulse-ring {
-  animation: task-loader-pulse-ring 2.8s ease-out infinite;
-}
-
-.task-loader-satellite {
-  animation: task-loader-satellite 2.4s ease-in-out infinite;
-}
-
-.task-loader-stream {
-  animation: task-loader-stream 2.6s ease-in-out infinite;
-}
-
-.task-loader-stream-dot {
-  animation: task-loader-satellite 2.2s ease-in-out infinite;
-}
-
-.task-loader-ticker {
-  animation: task-loader-ticker 2.6s ease-in-out infinite;
-}
-
-.task-loader-meter {
-  animation: task-loader-meter 2.4s ease-in-out infinite;
-}
-
-.task-loader-matrix-cell {
-  animation: task-loader-matrix 2.6s ease-in-out infinite;
-}
-
-.task-loader-matrix-cell-strong {
-  animation-duration: 2.1s;
-}
-
-.task-loader-shimmer {
-  background-image: linear-gradient(90deg, rgba(226, 232, 240, 0.8) 0%, rgba(248, 250, 252, 0.98) 50%, rgba(226, 232, 240, 0.8) 100%);
-  background-size: 200% 100%;
-  animation: task-loader-shimmer 1.8s linear infinite;
+@media (prefers-reduced-motion: reduce) {
+  .task-loader-dot {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
 }
