@@ -385,6 +385,28 @@ function summarizeRows(rows: StatementPreviewRow[]): StatementSummary {
   }
 }
 
+function getRouteErrorStatus(message: string): number {
+  const normalized = normalizeForCompare(message)
+
+  if (
+    normalized.includes('upload a bank statement file first') ||
+    normalized.includes('bank is required') ||
+    normalized.includes('company id is required') ||
+    normalized.includes('unsupported statement file') ||
+    normalized.includes('uploaded csv statement is empty') ||
+    normalized.includes('uploaded excel statement is empty') ||
+    normalized.includes('uploaded statement text file is empty') ||
+    normalized.includes('could not detect any transaction rows') ||
+    normalized.includes('could not recognize text') ||
+    normalized.includes('could not read text from pdf') ||
+    normalized.includes('could not be recognized into readable statement rows')
+  ) {
+    return 400
+  }
+
+  return 500
+}
+
 export async function POST(request: NextRequest) {
   const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin', 'company_user'])
   if (!authResult.ok) return authResult.response
@@ -674,9 +696,10 @@ export async function POST(request: NextRequest) {
       entries: responseRows
     })
   } catch (error) {
+    const message = error instanceof Error ? error.message : 'Internal server error'
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Internal server error' },
-      { status: 500 }
+      { error: message },
+      { status: getRouteErrorStatus(message) }
     )
   }
 }

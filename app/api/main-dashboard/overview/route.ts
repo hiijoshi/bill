@@ -10,6 +10,7 @@ import {
 import { prisma } from '@/lib/prisma'
 import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
 import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
+import { getUserSessionLiveUpdate } from '@/lib/live-update-state'
 import {
   isIncomingCashflowPaymentType,
   isOutgoingCashflowPaymentType
@@ -224,7 +225,7 @@ async function getOverviewScopedCompanyIds(
 
   if (targetCompanyIds.length === 0) return emptyScopes
 
-  if (auth.role === 'super_admin') {
+  if (auth.role === 'super_admin' || auth.role === 'trader_admin' || auth.role === 'company_admin') {
     return {
       dashboardCompanyIds: targetCompanyIds,
       purchaseCompanyIds: targetCompanyIds,
@@ -240,65 +241,78 @@ async function getOverviewScopedCompanyIds(
   if (!auth.userDbId) {
     return emptyScopes
   }
+  const userDbId = auth.userDbId
 
-  const rows = await prisma.userPermission.findMany({
-    where: {
-      userId: auth.userDbId,
-      companyId: { in: targetCompanyIds },
-      module: {
-        in: [
-          'DASHBOARD',
-          'PURCHASE_LIST',
-          'SALES_LIST',
-          'PAYMENTS',
-          'MASTER_PRODUCTS',
-          'MASTER_PARTIES',
-          'MASTER_UNITS',
-          'STOCK_DASHBOARD'
-        ]
+  const scopeCacheKey = makeServerCacheKey('overview-scopes', [
+    userDbId,
+    auth.role,
+    auth.traderId,
+    auth.companyId || '',
+    auth.sessionIssuedAt || 0,
+    getUserSessionLiveUpdate(auth),
+    targetCompanyIds.slice().sort()
+  ])
+
+  return getOrSetServerCache(scopeCacheKey, OVERVIEW_CACHE_TTL_MS, async () => {
+    const rows = await prisma.userPermission.findMany({
+      where: {
+        userId: userDbId,
+        companyId: { in: targetCompanyIds },
+        module: {
+          in: [
+            'DASHBOARD',
+            'PURCHASE_LIST',
+            'SALES_LIST',
+            'PAYMENTS',
+            'MASTER_PRODUCTS',
+            'MASTER_PARTIES',
+            'MASTER_UNITS',
+            'STOCK_DASHBOARD'
+          ]
+        },
+        OR: [{ canRead: true }, { canWrite: true }]
       },
-      OR: [{ canRead: true }, { canWrite: true }]
-    },
-    select: {
-      companyId: true,
-      module: true
+      select: {
+        companyId: true,
+        module: true
+      }
+    })
+
+    const companyIdsByModule = new Map<string, Set<string>>()
+    for (const row of rows) {
+      const set = companyIdsByModule.get(row.module) || new Set<string>()
+      set.add(row.companyId)
+      companyIdsByModule.set(row.module, set)
+    }
+
+    const dashboardCompanyIds = Array.from(companyIdsByModule.get('DASHBOARD') || [])
+    const dashboardCompanyIdSet = new Set(dashboardCompanyIds)
+
+    return {
+      dashboardCompanyIds,
+      purchaseCompanyIds: Array.from(companyIdsByModule.get('PURCHASE_LIST') || []).filter((companyId) =>
+        dashboardCompanyIdSet.has(companyId)
+      ),
+      salesCompanyIds: Array.from(companyIdsByModule.get('SALES_LIST') || []).filter((companyId) =>
+        dashboardCompanyIdSet.has(companyId)
+      ),
+      paymentCompanyIds: Array.from(companyIdsByModule.get('PAYMENTS') || []).filter((companyId) =>
+        dashboardCompanyIdSet.has(companyId)
+      ),
+      productCompanyIds: Array.from(companyIdsByModule.get('MASTER_PRODUCTS') || []).filter((companyId) =>
+        dashboardCompanyIdSet.has(companyId)
+      ),
+      partyCompanyIds: Array.from(companyIdsByModule.get('MASTER_PARTIES') || []).filter((companyId) =>
+        dashboardCompanyIdSet.has(companyId)
+      ),
+      unitCompanyIds: Array.from(companyIdsByModule.get('MASTER_UNITS') || []).filter((companyId) =>
+        dashboardCompanyIdSet.has(companyId)
+      ),
+      stockCompanyIds: Array.from(companyIdsByModule.get('STOCK_DASHBOARD') || []).filter((companyId) =>
+        dashboardCompanyIdSet.has(companyId)
+      )
     }
   })
-
-  const companyIdsByModule = new Map<string, Set<string>>()
-  for (const row of rows) {
-    const set = companyIdsByModule.get(row.module) || new Set<string>()
-    set.add(row.companyId)
-    companyIdsByModule.set(row.module, set)
-  }
-
-  const dashboardCompanyIds = Array.from(companyIdsByModule.get('DASHBOARD') || [])
-  const dashboardCompanyIdSet = new Set(dashboardCompanyIds)
-
-  return {
-    dashboardCompanyIds,
-    purchaseCompanyIds: Array.from(companyIdsByModule.get('PURCHASE_LIST') || []).filter((companyId) =>
-      dashboardCompanyIdSet.has(companyId)
-    ),
-    salesCompanyIds: Array.from(companyIdsByModule.get('SALES_LIST') || []).filter((companyId) =>
-      dashboardCompanyIdSet.has(companyId)
-    ),
-    paymentCompanyIds: Array.from(companyIdsByModule.get('PAYMENTS') || []).filter((companyId) =>
-      dashboardCompanyIdSet.has(companyId)
-    ),
-    productCompanyIds: Array.from(companyIdsByModule.get('MASTER_PRODUCTS') || []).filter((companyId) =>
-      dashboardCompanyIdSet.has(companyId)
-    ),
-    partyCompanyIds: Array.from(companyIdsByModule.get('MASTER_PARTIES') || []).filter((companyId) =>
-      dashboardCompanyIdSet.has(companyId)
-    ),
-    unitCompanyIds: Array.from(companyIdsByModule.get('MASTER_UNITS') || []).filter((companyId) =>
-      dashboardCompanyIdSet.has(companyId)
-    ),
-    stockCompanyIds: Array.from(companyIdsByModule.get('STOCK_DASHBOARD') || []).filter((companyId) =>
-      dashboardCompanyIdSet.has(companyId)
-    )
-  }
 }
 
 async function loadOverviewPayload(params: {
@@ -329,11 +343,13 @@ async function loadOverviewPayload(params: {
 
   const trendStart = startOfToday()
   trendStart.setDate(trendStart.getDate() - (TREND_WINDOW_DAYS - 1))
+  const needsCompanyBreakdown = params.companies.length > 1
 
   const [
     purchaseSummary,
     salesSummary,
     paymentSummary,
+    paymentTotalsByType,
     purchasePendingCount,
     salesPendingCount,
     recentPurchaseBills,
@@ -381,6 +397,15 @@ async function loadOverviewPayload(params: {
           }
         })
       : Promise.resolve(null),
+    paymentWhere
+      ? prisma.payment.groupBy({
+          by: ['billType'],
+          where: paymentWhere,
+          _sum: {
+            amount: true
+          }
+        })
+      : Promise.resolve([]),
     purchaseWhere
       ? prisma.purchaseBill.count({
           where: {
@@ -455,7 +480,7 @@ async function loadOverviewPayload(params: {
           }
         })
       : Promise.resolve([]),
-    purchaseWhere
+    needsCompanyBreakdown && purchaseWhere
       ? prisma.purchaseBill.groupBy({
           by: ['companyId'],
           where: purchaseWhere,
@@ -463,7 +488,7 @@ async function loadOverviewPayload(params: {
           _sum: { totalAmount: true }
         })
       : Promise.resolve([]),
-    salesWhere
+    needsCompanyBreakdown && salesWhere
       ? prisma.salesBill.groupBy({
           by: ['companyId'],
           where: salesWhere,
@@ -471,7 +496,7 @@ async function loadOverviewPayload(params: {
           _sum: { totalAmount: true }
         })
       : Promise.resolve([]),
-    paymentWhere
+    needsCompanyBreakdown && paymentWhere
       ? prisma.payment.groupBy({
           by: ['companyId', 'billType'],
           where: paymentWhere,
@@ -517,7 +542,10 @@ async function loadOverviewPayload(params: {
   ])
 
   const lowStockRows = stockBalances.filter((row) => toNumber(row._sum.qtyIn) - toNumber(row._sum.qtyOut) <= 0)
-  const lowStockProductIds = lowStockRows.map((row) => row.productId)
+  const lowStockPreviewRows = [...lowStockRows]
+    .sort((a, b) => (toNumber(a._sum.qtyIn) - toNumber(a._sum.qtyOut)) - (toNumber(b._sum.qtyIn) - toNumber(b._sum.qtyOut)))
+    .slice(0, 5)
+  const lowStockProductIds = lowStockPreviewRows.map((row) => row.productId)
   const lowStockProducts =
     lowStockProductIds.length > 0
       ? await prisma.product.findMany({
@@ -530,67 +558,85 @@ async function loadOverviewPayload(params: {
       : []
 
   const lowStockProductMap = new Map(lowStockProducts.map((row) => [row.id, row.name]))
-  const lowStockItems = lowStockRows
+  const lowStockItems = lowStockPreviewRows
     .map((row) => ({
       name: lowStockProductMap.get(row.productId) || 'Unknown Product',
       balance: toNumber(row._sum.qtyIn) - toNumber(row._sum.qtyOut)
     }))
     .sort((a, b) => a.balance - b.balance)
-    .slice(0, 5)
-
-  const companyPerformanceMap = new Map<string, CompanyPerformanceRow>()
-  for (const company of params.companies) {
-    companyPerformanceMap.set(company.id, {
-      id: company.id,
-      name: company.name,
-      purchaseTotal: 0,
-      salesTotal: 0,
-      paymentIn: 0,
-      paymentOut: 0,
-      purchaseBills: 0,
-      salesBills: 0,
-      cashflow: 0
-    })
-  }
-
-  for (const row of purchaseByCompany) {
-    const current = companyPerformanceMap.get(row.companyId)
-    if (!current) continue
-    current.purchaseTotal = toNumber(row._sum.totalAmount)
-    current.purchaseBills = toNumber(row._count._all)
-  }
-
-  for (const row of salesByCompany) {
-    const current = companyPerformanceMap.get(row.companyId)
-    if (!current) continue
-    current.salesTotal = toNumber(row._sum.totalAmount)
-    current.salesBills = toNumber(row._count._all)
-  }
-
-  for (const row of paymentsByCompany) {
-    const current = companyPerformanceMap.get(row.companyId)
-    if (!current) continue
-    if (isIncomingCashflowPaymentType(row.billType)) {
-      current.paymentIn += toNumber(row._sum.amount)
-    } else if (isOutgoingCashflowPaymentType(row.billType)) {
-      current.paymentOut += toNumber(row._sum.amount)
-    }
-  }
-
-  const companyPerformance = Array.from(companyPerformanceMap.values())
-    .map((row) => ({
-      ...row,
-      cashflow: Math.max(0, row.paymentIn - row.paymentOut)
-    }))
-    .sort((a, b) => b.salesTotal - a.salesTotal)
 
   const paymentTotal = toNumber(paymentSummary?._sum.amount)
-  const paymentIn = paymentsByCompany
+  const paymentIn = paymentTotalsByType
     .filter((row) => isIncomingCashflowPaymentType(row.billType))
     .reduce((sum, row) => sum + toNumber(row._sum.amount), 0)
-  const paymentOut = paymentsByCompany
+  const paymentOut = paymentTotalsByType
     .filter((row) => isOutgoingCashflowPaymentType(row.billType))
     .reduce((sum, row) => sum + toNumber(row._sum.amount), 0)
+  const purchaseByCompanyMap = new Map(purchaseByCompany.map((row) => [row.companyId, row]))
+  const salesByCompanyMap = new Map(salesByCompany.map((row) => [row.companyId, row]))
+  const paymentsByCompanyMap = paymentsByCompany.reduce((map, row) => {
+    const current = map.get(row.companyId) || []
+    current.push(row)
+    map.set(row.companyId, current)
+    return map
+  }, new Map<string, typeof paymentsByCompany>())
+  const companyPerformance = needsCompanyBreakdown
+    ? Array.from(
+        params.companies
+          .reduce((map, company) => {
+            map.set(company.id, {
+              id: company.id,
+              name: company.name,
+              purchaseTotal: 0,
+              salesTotal: 0,
+              paymentIn: 0,
+              paymentOut: 0,
+              purchaseBills: 0,
+              salesBills: 0,
+              cashflow: 0
+            })
+            return map
+          }, new Map<string, CompanyPerformanceRow>())
+          .values()
+      )
+        .map((row) => {
+          const purchaseRow = purchaseByCompanyMap.get(row.id)
+          const salesRow = salesByCompanyMap.get(row.id)
+          const paymentRows = paymentsByCompanyMap.get(row.id) || []
+          const paymentInAmount = paymentRows
+            .filter((item) => isIncomingCashflowPaymentType(item.billType))
+            .reduce((sum, item) => sum + toNumber(item._sum.amount), 0)
+          const paymentOutAmount = paymentRows
+            .filter((item) => isOutgoingCashflowPaymentType(item.billType))
+            .reduce((sum, item) => sum + toNumber(item._sum.amount), 0)
+
+          return {
+            ...row,
+            purchaseTotal: toNumber(purchaseRow?._sum.totalAmount),
+            salesTotal: toNumber(salesRow?._sum.totalAmount),
+            paymentIn: paymentInAmount,
+            paymentOut: paymentOutAmount,
+            purchaseBills: toNumber(purchaseRow?._count._all),
+            salesBills: toNumber(salesRow?._count._all),
+            cashflow: Math.max(0, paymentInAmount - paymentOutAmount)
+          }
+        })
+        .sort((a, b) => b.salesTotal - a.salesTotal)
+    : params.companies[0]
+      ? [
+          {
+            id: params.companies[0].id,
+            name: params.companies[0].name,
+            purchaseTotal: toNumber(purchaseSummary?._sum.totalAmount),
+            salesTotal: toNumber(salesSummary?._sum.totalAmount),
+            paymentIn,
+            paymentOut,
+            purchaseBills: toNumber(purchaseSummary?._count._all),
+            salesBills: toNumber(salesSummary?._count._all),
+            cashflow: Math.max(0, paymentIn - paymentOut)
+          }
+        ]
+      : []
 
   return {
     purchaseBills: recentPurchaseBills,

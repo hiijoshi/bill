@@ -15,13 +15,14 @@ import { SearchableSelect, type SearchableSelectOption } from '@/components/ui/s
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import type {
+  StatementDocumentKind,
   StatementDocumentMeta,
   StatementPreviewRow,
   StatementSummary,
   StatementTargetSelection
 } from '@/lib/bank-statement-types'
 import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
-import { loadClientCachedValue } from '@/lib/client-cached-value'
+import { getClientCachedValue, loadClientCachedValue } from '@/lib/client-cached-value'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 type BankRecord = {
@@ -75,7 +76,7 @@ type CollectionPayload<T> =
       data?: T[]
     }
 
-const BANK_STATEMENT_REFERENCE_CACHE_AGE_MS = 30_000
+const BANK_STATEMENT_REFERENCE_CACHE_AGE_MS = 5 * 60_000
 
 function normalizeCollection<T>(payload: CollectionPayload<T>): T[] {
   if (Array.isArray(payload)) return payload
@@ -94,6 +95,84 @@ function formatStatementDate(value: string): string {
   const parsed = new Date(value)
   if (!Number.isFinite(parsed.getTime())) return value
   return parsed.toLocaleDateString('en-IN')
+}
+
+function formatFileSize(size: number): string {
+  if (!Number.isFinite(size) || size <= 0) return '-'
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / (1024 * 1024)).toFixed(2)} MB`
+}
+
+function detectSelectedFileKind(file: File | null): StatementDocumentKind | null {
+  if (!file) return null
+
+  const extension = String(file.name || '').trim().toLowerCase().split('.').at(-1) || ''
+  const mimeType = String(file.type || '').trim().toLowerCase()
+
+  if (extension === 'csv' || mimeType.includes('csv')) return 'csv'
+  if (extension === 'xls' || extension === 'xlsx' || mimeType.includes('spreadsheet') || mimeType.includes('excel')) return 'excel'
+  if (extension === 'pdf' || mimeType.includes('pdf')) return 'pdf'
+  if (extension === 'txt' || mimeType.startsWith('text/')) return 'text'
+  if (['jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif', 'tif', 'tiff'].includes(extension) || mimeType.startsWith('image/')) {
+    return 'image'
+  }
+
+  return null
+}
+
+function getDocumentKindLabel(kind: StatementDocumentKind | null): string {
+  switch (kind) {
+    case 'csv':
+      return 'CSV statement'
+    case 'excel':
+      return 'Excel statement'
+    case 'pdf':
+      return 'PDF statement'
+    case 'image':
+      return 'Statement image'
+    case 'text':
+      return 'Text statement'
+    default:
+      return 'Unknown file'
+  }
+}
+
+function getDocumentKindGuidance(kind: StatementDocumentKind | null): string {
+  switch (kind) {
+    case 'csv':
+      return 'Fastest option. Structured rows will be read directly from the CSV file.'
+    case 'excel':
+      return 'Structured rows will be read directly from the worksheet for the most reliable result.'
+    case 'pdf':
+      return 'The system will first try readable PDF text, then automatically use OCR if the PDF is scanned.'
+    case 'image':
+      return 'OCR scan will read the image and detect transaction rows. Clear images work best.'
+    case 'text':
+      return 'Plain text rows will be scanned for dates, debit/credit amounts, narration, and references.'
+    default:
+      return 'Select a supported statement file to verify transactions.'
+  }
+}
+
+function getProcessingMessage(kind: StatementDocumentKind | null, action: 'preview' | 'import'): string {
+  if (action === 'import') {
+    return 'Importing mapped bank statement rows into payment history.'
+  }
+
+  switch (kind) {
+    case 'csv':
+    case 'excel':
+      return 'Reading structured statement rows and matching them with saved payments.'
+    case 'pdf':
+      return 'Scanning PDF statement. Searchable text will be used first, with OCR fallback when needed.'
+    case 'image':
+      return 'Running OCR on the statement image and matching recognized rows with saved payments.'
+    case 'text':
+      return 'Reading text statement rows and checking each line against saved payments.'
+    default:
+      return 'Verifying uploaded statement against saved payments.'
+  }
 }
 
 function getStatusVariant(status: StatementPreviewRow['status']): 'default' | 'secondary' | 'destructive' | 'outline' {
@@ -164,7 +243,7 @@ function BankStatementUploadPageContent() {
   const [result, setResult] = useState<StatementPayload | null>(null)
   const [manualTargets, setManualTargets] = useState<Record<string, string>>({})
   const [statusMessage, setStatusMessage] = useState('')
-  const [statusTone, setStatusTone] = useState<'success' | 'error' | null>(null)
+  const [statusTone, setStatusTone] = useState<'success' | 'error' | 'info' | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -192,7 +271,24 @@ function BankStatementUploadPageContent() {
     if (!companyId) return
 
     let cancelled = false
-    setLoading(true)
+    const cacheKey = `bank-statement-entry:${companyId}`
+    const cachedPayload = getClientCachedValue<{
+      banks: BankRecord[]
+      accountingHeads: AccountingHeadRecord[]
+      parties: PartyRecord[]
+      suppliers: SupplierRecord[]
+    }>(cacheKey, BANK_STATEMENT_REFERENCE_CACHE_AGE_MS)
+
+    if (cachedPayload) {
+      setBanks(cachedPayload.banks)
+      setSelectedBankId((current) => current || cachedPayload.banks[0]?.id || '')
+      setAccountingHeads(cachedPayload.accountingHeads)
+      setParties(cachedPayload.parties)
+      setSuppliers(cachedPayload.suppliers)
+      setLoading(false)
+    } else {
+      setLoading(true)
+    }
 
     ;(async () => {
       try {
@@ -202,7 +298,7 @@ function BankStatementUploadPageContent() {
           parties: PartyRecord[]
           suppliers: SupplierRecord[]
         }>(
-          `bank-statement-entry:${companyId}`,
+          cacheKey,
           async () => {
             const [banksResponse, accountingHeadsResponse, partiesResponse, suppliersResponse] = await Promise.all([
               fetch(`/api/banks?companyId=${encodeURIComponent(companyId)}`, { cache: 'no-store' }),
@@ -300,6 +396,10 @@ function BankStatementUploadPageContent() {
     () => banks.find((bank) => bank.id === selectedBankId) || null,
     [banks, selectedBankId]
   )
+  const selectedFileKind = useMemo(
+    () => detectSelectedFileKind(selectedFile),
+    [selectedFile]
+  )
 
   const statementTargetOptions = useMemo<SearchableSelectOption[]>(() => {
     const accountHeadOptions = accountingHeads.map((head) => ({
@@ -354,10 +454,34 @@ function BankStatementUploadPageContent() {
   }, [result])
 
   const entries = result?.entries || []
+  const settledEntries = useMemo(
+    () => entries.filter((entry) => entry.status === 'settled' || entry.status === 'imported'),
+    [entries]
+  )
   const unsettledEntries = useMemo(
     () => entries.filter((entry) => entry.status === 'unsettled' && entry.externalId),
     [entries]
   )
+  const invalidEntries = useMemo(
+    () => entries.filter((entry) => entry.status === 'invalid'),
+    [entries]
+  )
+
+  const amountSummary = useMemo(() => {
+    const totalAmount = entries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+    const settledAmount = settledEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+    const unsettledAmount = unsettledEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+    const importedAmount = entries
+      .filter((entry) => entry.status === 'imported')
+      .reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+
+    return {
+      totalAmount,
+      settledAmount,
+      unsettledAmount,
+      importedAmount
+    }
+  }, [entries, settledEntries, unsettledEntries])
 
   const readyToImportCount = useMemo(
     () => unsettledEntries.filter((entry) => Boolean(manualTargets[entry.externalId])).length,
@@ -416,8 +540,8 @@ function BankStatementUploadPageContent() {
       setUploadingStatement(true)
     }
 
-    setStatusMessage('')
-    setStatusTone(null)
+    setStatusTone('info')
+    setStatusMessage(getProcessingMessage(selectedFileKind, action))
 
     try {
       const formData = new FormData()
@@ -459,10 +583,12 @@ function BankStatementUploadPageContent() {
       }
     } catch (error) {
       const fallback = action === 'preview' ? 'Failed to verify bank statement' : 'Failed to import bank statement'
-      const message = error instanceof Error ? error.message : fallback
+      const rawMessage = error instanceof Error ? error.message : fallback
+      const message = /timed out/i.test(rawMessage)
+        ? `${rawMessage} Large scanned PDFs and statement images can take longer; CSV or Excel imports finish fastest.`
+        : rawMessage
       setStatusTone('error')
       setStatusMessage(message)
-      alert(message)
     } finally {
       if (action === 'preview') {
         setVerifyingStatement(false)
@@ -491,7 +617,7 @@ function BankStatementUploadPageContent() {
             <div>
               <h1 className="text-3xl font-bold">Bank Statement Verification</h1>
               <p className="mt-1 text-sm text-slate-600">
-                Upload PDF, CSV, Excel, text, or statement image. The system verifies rows against saved payments, shows settled and not settled rows, then lets you map remaining rows in one combined dropdown.
+                Upload CSV, Excel, PDF, text, or statement image. The system recognizes the document type, verifies rows against saved payments, then separates settled rows from rows that still need a target selection.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -568,20 +694,39 @@ function BankStatementUploadPageContent() {
                       <Input
                         id="statementFile"
                         type="file"
-                        accept=".csv,.txt,.xls,.xlsx,.pdf,image/*"
+                        accept=".csv,.txt,.xls,.xlsx,.pdf,.jpg,.jpeg,.png,.webp,.bmp,.gif,.tif,.tiff,image/*"
                         onChange={(event) => {
-                          setSelectedFile(event.target.files?.[0] || null)
+                          const nextFile = event.target.files?.[0] || null
+                          const nextKind = detectSelectedFileKind(nextFile)
+                          setSelectedFile(nextFile)
                           setResult(null)
                           setManualTargets({})
-                          setStatusMessage('')
-                          setStatusTone(null)
+                          if (nextFile) {
+                            setStatusTone('info')
+                            setStatusMessage(
+                              `${getDocumentKindLabel(nextKind)} selected. ${getDocumentKindGuidance(nextKind)}`
+                            )
+                          } else {
+                            setStatusMessage('')
+                            setStatusTone(null)
+                          }
                         }}
                       />
                       <p className="text-xs text-slate-500">
-                        Supported files: CSV, TXT, XLS, XLSX, PDF, JPG, PNG, WEBP and other common statement images.
+                        Supported files: CSV, TXT, XLS, XLSX, PDF, JPG, PNG, WEBP, BMP, GIF, TIF, TIFF and other common statement images.
                       </p>
                     </div>
                   </div>
+
+                  {selectedFile ? (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50/70 p-4 text-sm text-blue-900">
+                      <p className="font-medium">{getDocumentKindLabel(selectedFileKind)}</p>
+                      <p className="mt-1">{getDocumentKindGuidance(selectedFileKind)}</p>
+                      <p className="mt-2 text-xs text-blue-700">
+                        File: {selectedFile.name} • Size: {formatFileSize(selectedFile.size)}
+                      </p>
+                    </div>
+                  ) : null}
 
                   {selectedBank ? (
                     <div className="rounded-lg border bg-slate-50 p-4 text-sm text-slate-700">
@@ -598,7 +743,11 @@ function BankStatementUploadPageContent() {
                       disabled={!selectedBankId || !selectedFile || verifyingStatement || uploadingStatement}
                     >
                       <ScanSearch className="mr-2 h-4 w-4" />
-                      {verifyingStatement ? 'Verifying Statement...' : 'Verify Statement'}
+                      {verifyingStatement
+                        ? selectedFileKind === 'pdf' || selectedFileKind === 'image'
+                          ? 'Scanning Statement...'
+                          : 'Verifying Statement...'
+                        : 'Verify Statement'}
                     </Button>
                     <Button
                       variant="outline"
@@ -615,6 +764,8 @@ function BankStatementUploadPageContent() {
                       className={`rounded-lg border px-4 py-3 text-sm ${
                         statusTone === 'error'
                           ? 'border-red-200 bg-red-50 text-red-800'
+                          : statusTone === 'info'
+                            ? 'border-blue-200 bg-blue-50 text-blue-800'
                           : 'border-emerald-200 bg-emerald-50 text-emerald-800'
                       }`}
                     >
@@ -638,24 +789,29 @@ function BankStatementUploadPageContent() {
                 <div className="rounded-lg border bg-slate-50 p-4">
                   <p className="text-sm text-slate-500">Total Rows</p>
                   <p className="mt-2 text-2xl font-semibold">{summary.total}</p>
+                  <p className="mt-1 text-xs text-slate-500">{formatCurrency(amountSummary.totalAmount)}</p>
                 </div>
                 <div className="rounded-lg border bg-slate-50 p-4">
                   <p className="text-sm text-slate-500">Settled</p>
                   <p className="mt-2 text-2xl font-semibold text-emerald-700">{summary.settled}</p>
+                  <p className="mt-1 text-xs text-emerald-700">{formatCurrency(amountSummary.settledAmount)}</p>
                 </div>
                 <div className="rounded-lg border bg-slate-50 p-4">
                   <p className="text-sm text-slate-500">Ready to Import</p>
                   <p className="mt-2 text-2xl font-semibold text-blue-700">{readyToImportCount}</p>
+                  <p className="mt-1 text-xs text-slate-500">Mapped unmatched rows</p>
                 </div>
                 <div className="rounded-lg border bg-slate-50 p-4">
                   <p className="text-sm text-slate-500">Not Settled</p>
                   <p className="mt-2 text-2xl font-semibold text-amber-700">{summary.unsettled}</p>
+                  <p className="mt-1 text-xs text-amber-700">{formatCurrency(amountSummary.unsettledAmount)}</p>
                 </div>
                 <div className="rounded-lg border bg-slate-50 p-4">
                   <p className="text-sm text-slate-500">Imported / Errors</p>
                   <p className="mt-2 text-2xl font-semibold text-slate-900">
                     {summary.imported} / {summary.errors}
                   </p>
+                  <p className="mt-1 text-xs text-slate-500">{formatCurrency(amountSummary.importedAmount)}</p>
                 </div>
               </div>
 
@@ -665,6 +821,15 @@ function BankStatementUploadPageContent() {
                   <p className="mt-1">
                     Document Type: <span className="font-medium uppercase">{result.document.kind}</span> | Parser: {result.document.parser}
                   </p>
+                  {result.document.recognitionMode ? (
+                    <p className="mt-1">
+                      Recognition: <span className="font-medium uppercase">{result.document.recognitionMode}</span>
+                      {result.document.pageCount ? ` | Pages: ${result.document.pageCount}` : ''}
+                    </p>
+                  ) : null}
+                  {result.document.note ? (
+                    <p className="mt-2 text-xs text-slate-500">{result.document.note}</p>
+                  ) : null}
                 </div>
               ) : null}
             </CardContent>
@@ -672,7 +837,7 @@ function BankStatementUploadPageContent() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Statement Preview</CardTitle>
+              <CardTitle>Settled / Matched Rows</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
@@ -687,14 +852,11 @@ function BankStatementUploadPageContent() {
                       <TableHead>Remark</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>System Match</TableHead>
-                      <TableHead>Suggested / Selected</TableHead>
+                      <TableHead>Match Note</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {entries.map((entry) => {
-                      const selectedValue = entry.externalId ? manualTargets[entry.externalId] || '' : ''
-                      const selectedLabel = selectedValue ? statementTargetMap.get(selectedValue)?.label || selectedValue : ''
-
+                    {settledEntries.map((entry) => {
                       return (
                         <TableRow key={`${entry.externalId || 'row'}-${entry.rowNo}`}>
                           <TableCell>{entry.rowNo}</TableCell>
@@ -717,20 +879,15 @@ function BankStatementUploadPageContent() {
                             </div>
                           </TableCell>
                           <TableCell>
-                            <div className="space-y-1 text-sm">
-                              <div>{selectedLabel || entry.suggestedTarget?.targetLabel || '-'}</div>
-                              {entry.suggestedTarget?.confidence ? (
-                                <div className="text-xs text-slate-500">Suggestion: {entry.suggestedTarget.confidence}</div>
-                              ) : null}
-                            </div>
+                            {entry.reason || '-'}
                           </TableCell>
                         </TableRow>
                       )
                     })}
-                    {!entries.length ? (
+                    {!settledEntries.length ? (
                       <TableRow>
                         <TableCell colSpan={9} className="text-center text-slate-500">
-                          Upload a statement and run verification to preview settled and not settled rows.
+                          Verified settled rows will appear here after statement recognition.
                         </TableCell>
                       </TableRow>
                     ) : null}
@@ -742,7 +899,7 @@ function BankStatementUploadPageContent() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Settlement Mapping</CardTitle>
+              <CardTitle>Rows Needing Settlement Mapping</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {unsettledEntries.length === 0 ? (
@@ -833,6 +990,34 @@ function BankStatementUploadPageContent() {
               )}
             </CardContent>
           </Card>
+
+          {invalidEntries.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Rows That Could Not Be Read</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Row</TableHead>
+                        <TableHead>Reason</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {invalidEntries.map((entry) => (
+                        <TableRow key={`invalid-${entry.rowNo}`}>
+                          <TableCell>{entry.rowNo}</TableCell>
+                          <TableCell>{entry.reason || 'Could not read this row.'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
         </div>
       </div>
     </DashboardLayout>

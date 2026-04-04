@@ -59,6 +59,11 @@ function detectDocumentKind(file: File): StatementDocumentKind | null {
   return null
 }
 
+type ExtractedStatementText = {
+  text: string
+  pageCount: number
+}
+
 function parseAmountValue(raw: string): number | null {
   const normalized = normalizeText(raw)
     .replace(/[,\s₹]/g, '')
@@ -362,28 +367,77 @@ async function parseExcelStatement(buffer: Buffer, bankId: string): Promise<Pars
   return rows.map((row, index) => parseStatementRow(normalizeWorksheetRow(row), index + 2, bankId))
 }
 
-async function extractPdfText(buffer: Buffer): Promise<string> {
+async function extractPdfText(buffer: Buffer): Promise<ExtractedStatementText> {
   const pdfParseModule = await import('pdf-parse')
   const parser = new pdfParseModule.PDFParse({ data: buffer })
 
   try {
-    const parsed = await parser.getText()
-    return normalizeText(parsed.text || '')
+    const [info, parsed] = await Promise.all([
+      parser.getInfo(),
+      parser.getText()
+    ])
+
+    return {
+      text: normalizeText(parsed.text || ''),
+      pageCount: Number(info.total || 0)
+    }
+  } finally {
+    await parser.destroy()
+  }
+}
+
+async function recognizeTextFromImages(buffers: Buffer[]): Promise<string> {
+  const tesseractModule = await import('tesseract.js')
+  const worker = await tesseractModule.createWorker('eng')
+
+  try {
+    const pageTexts: string[] = []
+
+    for (const buffer of buffers) {
+      if (!buffer || buffer.length === 0) continue
+      const result = await worker.recognize(buffer)
+      const text = normalizeText(result.data?.text || '')
+      if (text) {
+        pageTexts.push(text)
+      }
+    }
+
+    return pageTexts.join('\n\n')
+  } finally {
+    await worker.terminate()
+  }
+}
+
+async function extractPdfOcrText(buffer: Buffer): Promise<ExtractedStatementText> {
+  const pdfParseModule = await import('pdf-parse')
+  const parser = new pdfParseModule.PDFParse({ data: buffer })
+
+  try {
+    const screenshots = await parser.getScreenshot({
+      desiredWidth: 1400,
+      imageBuffer: true,
+      imageDataUrl: false
+    })
+
+    const pageBuffers = (screenshots.pages || []).flatMap((page) => {
+      const bytes = page?.data
+      if (!bytes || bytes.length === 0) {
+        return []
+      }
+      return [Buffer.from(bytes)]
+    })
+
+    return {
+      text: await recognizeTextFromImages(pageBuffers),
+      pageCount: Number(screenshots.total || pageBuffers.length || 0)
+    }
   } finally {
     await parser.destroy()
   }
 }
 
 async function extractImageText(buffer: Buffer): Promise<string> {
-  const tesseractModule = await import('tesseract.js')
-  const worker = await tesseractModule.createWorker('eng')
-
-  try {
-    const result = await worker.recognize(buffer)
-    return normalizeText(result.data?.text || '')
-  } finally {
-    await worker.terminate()
-  }
+  return recognizeTextFromImages([buffer])
 }
 
 async function parseTextStatement(text: string, bankId: string): Promise<ParsedStatementResult[]> {
@@ -427,7 +481,9 @@ export async function parseBankStatementFile(file: File, bankId: string): Promis
         document: {
           kind,
           parser: 'CSV table parser',
-          fileName: file.name
+          fileName: file.name,
+          recognitionMode: 'structured',
+          note: 'Rows were read directly from the uploaded CSV file.'
         },
         entries: rows.map((row, index) => parseStatementRow(row, index + 2, bankId))
       }
@@ -438,24 +494,54 @@ export async function parseBankStatementFile(file: File, bankId: string): Promis
         document: {
           kind,
           parser: 'Excel worksheet parser',
-          fileName: file.name
+          fileName: file.name,
+          recognitionMode: 'structured',
+          note: 'Rows were read directly from the uploaded worksheet.'
         },
         entries: await parseExcelStatement(buffer, bankId)
       }
 
     case 'pdf': {
-      const text = await extractPdfText(buffer)
-      if (!text) {
-        throw new Error('Could not read text from PDF statement. Try a searchable PDF or upload statement image.')
+      const pdfTextResult = await extractPdfText(buffer)
+      const pdfText = pdfTextResult.text
+
+      if (pdfText) {
+        try {
+          return {
+            document: {
+              kind,
+              parser: 'PDF text parser',
+              fileName: file.name,
+              recognitionMode: 'text',
+              pageCount: pdfTextResult.pageCount,
+              note: 'This PDF included readable text, so rows were parsed directly from the document.'
+            },
+            entries: await parseTextStatement(pdfText, bankId)
+          }
+        } catch {
+          // Fall back to OCR for scanned/poorly structured PDFs that have text but no readable rows.
+        }
+      }
+
+      const pdfOcrResult = await extractPdfOcrText(buffer)
+      if (!pdfOcrResult.text) {
+        throw new Error(
+          'This PDF could not be recognized into readable statement rows. Upload a clearer PDF/image or use CSV/Excel for the fastest result.'
+        )
       }
 
       return {
         document: {
           kind,
-          parser: 'PDF text parser',
-          fileName: file.name
+          parser: pdfText ? 'PDF OCR fallback parser' : 'PDF OCR parser',
+          fileName: file.name,
+          recognitionMode: 'ocr',
+          pageCount: pdfOcrResult.pageCount || pdfTextResult.pageCount,
+          note: pdfText
+            ? 'The PDF text was not structured enough for statement rows, so OCR scan was used automatically.'
+            : 'This scanned PDF was recognized using OCR page scanning.'
         },
-        entries: await parseTextStatement(text, bankId)
+        entries: await parseTextStatement(pdfOcrResult.text, bankId)
       }
     }
 
@@ -469,7 +555,10 @@ export async function parseBankStatementFile(file: File, bankId: string): Promis
         document: {
           kind,
           parser: 'OCR image parser',
-          fileName: file.name
+          fileName: file.name,
+          recognitionMode: 'ocr',
+          pageCount: 1,
+          note: 'The uploaded image was scanned with OCR to detect statement rows.'
         },
         entries: await parseTextStatement(text, bankId)
       }
@@ -485,7 +574,9 @@ export async function parseBankStatementFile(file: File, bankId: string): Promis
         document: {
           kind,
           parser: 'Plain text parser',
-          fileName: file.name
+          fileName: file.name,
+          recognitionMode: 'text',
+          note: 'Rows were read directly from the uploaded text file.'
         },
         entries: await parseTextStatement(text, bankId)
       }
