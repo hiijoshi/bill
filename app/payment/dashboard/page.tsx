@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle
@@ -906,6 +907,9 @@ export default function PaymentDashboardPage() {
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Edit Payment Entry</DialogTitle>
+                <DialogDescription>
+                  Update the saved payment details and keep the linked entry accurate.
+                </DialogDescription>
               </DialogHeader>
 
               <div className="grid gap-4 py-1">

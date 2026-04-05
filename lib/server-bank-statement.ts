@@ -1,6 +1,8 @@
 import 'server-only'
 
 import { createHash } from 'crypto'
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 
 import { getCsvValue, normalizeCsvHeader, parseCsvObjects, parseCsvRows, type CsvImportRow } from '@/lib/master-csv'
 import type { StatementDirection, StatementDocumentKind, StatementDocumentMeta } from '@/lib/bank-statement-types'
@@ -64,10 +66,12 @@ type ExtractedStatementText = {
   pageCount: number
 }
 
+type PdfParseModule = typeof import('pdf-parse')
 type TesseractModule = typeof import('tesseract.js')
 type TesseractWorker = Awaited<ReturnType<TesseractModule['createWorker']>>
 
 let pdfCanvasGlobalsReady: Promise<void> | null = null
+let pdfParseModuleReady: Promise<PdfParseModule> | null = null
 let ocrWorkerReady: Promise<TesseractWorker> | null = null
 let ocrWorkerQueue: Promise<unknown> = Promise.resolve()
 let ocrWorkerIdleTimer: ReturnType<typeof setTimeout> | null = null
@@ -75,6 +79,7 @@ let ocrWorkerIdleTimer: ReturnType<typeof setTimeout> | null = null
 const OCR_WORKER_IDLE_TIMEOUT_MS = 2 * 60_000
 const OCR_MAX_IMAGE_EDGE_PX = 1800
 const OCR_MAX_IMAGE_PIXELS = 2_400_000
+const PDFJS_WORKER_MODULE_SPECIFIER = 'pdfjs-dist/legacy/build/pdf.worker.mjs'
 
 type StructuredStatementCsvRow = {
   row: CsvImportRow
@@ -164,6 +169,82 @@ function extractStructuredStatementCsvRows(text: string): StructuredStatementCsv
     .filter(({ row }) => !shouldSkipStructuredStatementRow(row))
 }
 
+function extractInternalLedgerPdfRows(text: string): StructuredStatementCsvRow[] {
+  const rawLines = text
+    .split(/\r?\n/)
+    .map((line) => normalizeText(line).replace(/\s+/g, ' '))
+    .filter(Boolean)
+
+  if (rawLines.length === 0) return []
+
+  const repeatedTitleCandidate = rawLines[0]
+  const repeatedTitle =
+    repeatedTitleCandidate && rawLines.filter((line) => line === repeatedTitleCandidate).length > 1
+      ? repeatedTitleCandidate
+      : ''
+
+  const lines = rawLines.filter((line) => {
+    if (line === repeatedTitle) return false
+    if (/^page \d+$/i.test(line)) return false
+    if (/^--\s*\d+\s+of\s+\d+\s*--$/i.test(line)) return false
+    return true
+  })
+
+  const typeHeaderIndex = lines.findIndex((line) => normalizeForCompare(line) === 'type date voucher no')
+  const descriptionHeaderIndex = lines.findIndex((line) => normalizeForCompare(line) === 'particular')
+  const amountHeaderIndex = lines.findIndex((line) => normalizeForCompare(line) === 'debit (rs) credit (rs) balance')
+
+  if (typeHeaderIndex < 0 || descriptionHeaderIndex <= typeHeaderIndex || amountHeaderIndex <= descriptionHeaderIndex) {
+    return []
+  }
+
+  const typeLines = lines
+    .slice(typeHeaderIndex + 1, descriptionHeaderIndex)
+    .filter((line) => normalizeForCompare(line) !== 'total')
+  const descriptionLines = lines
+    .slice(descriptionHeaderIndex + 1, amountHeaderIndex)
+    .filter((line) => normalizeForCompare(line) !== 'total')
+  const amountLines = lines
+    .slice(amountHeaderIndex + 1)
+    .filter((line) => normalizeForCompare(line) !== 'total')
+
+  const transactionCount = Math.min(typeLines.length, descriptionLines.length, amountLines.length)
+  if (transactionCount === 0) return []
+
+  const rows: StructuredStatementCsvRow[] = []
+
+  for (let index = 0; index < transactionCount; index += 1) {
+    const typeLine = typeLines[index]
+    const descriptionLine = descriptionLines[index]
+    const amountLine = amountLines[index]
+
+    const typeMatch = /^(.*?)\s+(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\s+(.*)$/.exec(typeLine)
+    const amountMatch = /^(-|[\d,]+(?:\.\d{1,2})?)\s+(-|[\d,]+(?:\.\d{1,2})?)\s+(.+)$/.exec(amountLine)
+
+    if (!typeMatch || !amountMatch) {
+      return []
+    }
+
+    const [, typeValue, dateValue, voucherValue] = typeMatch
+    const [, debitValue, creditValue, balanceValue] = amountMatch
+
+    rows.push({
+      rowNo: index + 2,
+      row: {
+        [normalizeCsvHeader('Type')]: normalizeText(typeValue),
+        [normalizeCsvHeader('Date')]: normalizeText(dateValue),
+        [normalizeCsvHeader('Voucher No')]: normalizeText(voucherValue) === '-' ? '' : normalizeText(voucherValue),
+        [normalizeCsvHeader('Particular')]: normalizeText(descriptionLine),
+        [normalizeCsvHeader('Debit (Rs)')]: normalizeText(debitValue) === '-' ? '' : normalizeText(debitValue),
+        [normalizeCsvHeader('Credit (Rs)')]: normalizeText(creditValue) === '-' ? '' : normalizeText(creditValue),
+        [normalizeCsvHeader('Balance')]: normalizeText(balanceValue)
+      }
+    })
+  }
+
+  return rows
+}
+
 function parseAmountValue(raw: string): number | null {
   const normalized = normalizeText(raw)
     .replace(/[,\s₹]/g, '')
@@ -210,6 +291,37 @@ async function ensurePdfCanvasGlobals(): Promise<void> {
     await pdfCanvasGlobalsReady
   } catch (error) {
     pdfCanvasGlobalsReady = null
+    throw error
+  }
+}
+
+async function getPdfParseModule(): Promise<PdfParseModule> {
+  if (pdfParseModuleReady) {
+    return pdfParseModuleReady
+  }
+
+  pdfParseModuleReady = (async () => {
+    // Preload the pdf.js worker so fake-worker mode does not rely on a fragile bundled relative path.
+    const workerModuleSpecifier = PDFJS_WORKER_MODULE_SPECIFIER
+    await import(workerModuleSpecifier)
+
+    const pdfParseModule = await import('pdf-parse')
+
+    try {
+      const requireFromApp = createRequire(`${process.cwd()}/package.json`)
+      const workerPath = requireFromApp.resolve(PDFJS_WORKER_MODULE_SPECIFIER)
+      pdfParseModule.PDFParse.setWorker(pathToFileURL(workerPath).href)
+    } catch {
+      // If path resolution fails in an environment, the preloaded worker above is still available.
+    }
+
+    return pdfParseModule
+  })()
+
+  try {
+    return await pdfParseModuleReady
+  } catch (error) {
+    pdfParseModuleReady = null
     throw error
   }
 }
@@ -604,18 +716,15 @@ async function parseExcelStatement(buffer: Buffer, bankId: string): Promise<Pars
 
 async function extractPdfText(buffer: Buffer): Promise<ExtractedStatementText> {
   await ensurePdfCanvasGlobals()
-  const pdfParseModule = await import('pdf-parse')
+  const pdfParseModule = await getPdfParseModule()
   const parser = new pdfParseModule.PDFParse({ data: buffer })
 
   try {
-    const [info, parsed] = await Promise.all([
-      parser.getInfo(),
-      parser.getText()
-    ])
+    const parsed = await parser.getText()
 
     return {
       text: normalizeText(parsed.text || ''),
-      pageCount: Number(info.total || 0)
+      pageCount: Number(parsed.total || parsed.pages.length || 0)
     }
   } finally {
     await parser.destroy()
@@ -638,7 +747,7 @@ async function recognizeTextFromImages(buffers: Buffer[]): Promise<string> {
 
 async function extractPdfOcrText(buffer: Buffer): Promise<ExtractedStatementText> {
   await ensurePdfCanvasGlobals()
-  const pdfParseModule = await import('pdf-parse')
+  const pdfParseModule = await getPdfParseModule()
   const parser = new pdfParseModule.PDFParse({ data: buffer })
 
   try {
@@ -674,6 +783,11 @@ async function parseTextStatement(text: string, bankId: string): Promise<ParsedS
   const structuredCsvRows = extractStructuredStatementCsvRows(text)
   if (structuredCsvRows.length > 0) {
     return structuredCsvRows.map(({ row, rowNo }) => parseStatementRow(row, rowNo, bankId))
+  }
+
+  const internalLedgerPdfRows = extractInternalLedgerPdfRows(text)
+  if (internalLedgerPdfRows.length > 0) {
+    return internalLedgerPdfRows.map(({ row, rowNo }) => parseStatementRow(row, rowNo, bankId))
   }
 
   const csvRows = parseCsvObjects(text).filter((row) => !shouldSkipStructuredStatementRow(row))
