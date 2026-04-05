@@ -10,6 +10,7 @@ const PRIMARY_ALLOWED_ORIGIN = ALLOWED_ORIGINS_LIST[0] || 'http://localhost:3000
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ['127.0.0.1:51445'],
+  serverExternalPackages: ['@napi-rs/canvas'],
   turbopack: {
     root: process.cwd()
   },
