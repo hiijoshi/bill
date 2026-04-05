@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
@@ -226,7 +226,7 @@ function getBadgeVariant(value?: string | null): 'default' | 'secondary' | 'dest
   return 'outline'
 }
 
-export default function SuperAdminTraderSubscriptionsPage() {
+function SuperAdminTraderSubscriptionsPageContent() {
   const searchParams = useSearchParams()
   const requestedTraderId = String(searchParams.get('traderId') || '').trim()
   const [traders, setTraders] = useState<TraderRow[]>([])
@@ -906,5 +906,33 @@ export default function SuperAdminTraderSubscriptionsPage() {
         </div>
       </div>
     </SuperAdminShell>
+  )
+}
+
+function SuperAdminTraderSubscriptionsFallback() {
+  return (
+    <SuperAdminShell
+      title="Trader Subscriptions"
+      subtitle="Assign trials, activate paid plans, extend validity, and monitor expiring trader subscriptions."
+    >
+      <div className="space-y-6">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle>Loading Subscription Workspace</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-sm text-slate-500">Preparing subscription management...</div>
+          </CardContent>
+        </Card>
+      </div>
+    </SuperAdminShell>
+  )
+}
+
+export default function SuperAdminTraderSubscriptionsPage() {
+  return (
+    <Suspense fallback={<SuperAdminTraderSubscriptionsFallback />}>
+      <SuperAdminTraderSubscriptionsPageContent />
+    </Suspense>
   )
 }
