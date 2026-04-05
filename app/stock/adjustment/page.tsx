@@ -311,7 +311,7 @@ export default function StockAdjustmentPage() {
       if (!resolvedCompanyId) {
         setPageLoading(false)
         alert('Company not selected')
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
 

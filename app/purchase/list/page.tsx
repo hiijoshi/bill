@@ -245,7 +245,7 @@ export default function PurchaseListPage() {
 
       if (!companyIdParam) {
         alert('Company not selected')
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
 

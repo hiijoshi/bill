@@ -250,7 +250,7 @@ export default function PartyMasterPage() {
         setFilteredParties([])
         setLoading(false)
         setMessage({ type: 'error', text: 'Company not selected. Please select company once.' })
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
 

@@ -288,7 +288,7 @@ export default function MainDashboardPage() {
   const redirectToAccessibleRoute = useCallback(async (companyId?: string) => {
     const normalizedCompanyId = String(companyId || '').trim()
     if (!normalizedCompanyId) {
-      router.replace('/company/select')
+      router.replace('/main/profile')
       return
     }
 
@@ -296,9 +296,9 @@ export default function MainDashboardPage() {
       const payload = await loadClientPermissions(normalizedCompanyId)
       const permissions = payload.permissions
       const nextRoute = resolveFirstAccessibleAppRoute(permissions, normalizedCompanyId)
-      router.replace(nextRoute.startsWith('/main/dashboard') ? '/company/select' : nextRoute)
+      router.replace(nextRoute.startsWith('/main/dashboard') ? '/main/profile' : nextRoute)
     } catch {
-      router.replace('/company/select')
+      router.replace('/main/profile')
     }
   }, [router])
 

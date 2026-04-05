@@ -139,7 +139,7 @@ async function buildLoginBootstrap(
       : authResult.company,
     defaultRoute: companyId
       ? resolveFirstAccessibleAppRoute(permissionAccess.permissions, companyId)
-      : '/company/select',
+      : '/main/profile',
     permissions: permissionAccess.permissions,
     grantedReadModules: permissionAccess.grantedReadModules,
     grantedWriteModules: permissionAccess.grantedWriteModules,

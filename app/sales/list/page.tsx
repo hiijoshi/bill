@@ -261,7 +261,7 @@ export default function SalesListPage() {
 
       if (!companyIdParam) {
         alert('Company not selected')
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
 

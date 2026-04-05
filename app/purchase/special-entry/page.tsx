@@ -112,7 +112,7 @@ export default function SpecialPurchaseEntryPage() {
       if (!companyId) {
         alert('Company not selected')
         setLoading(false)
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
       stripCompanyParamsFromUrl()
@@ -243,7 +243,7 @@ export default function SpecialPurchaseEntryPage() {
       const companyId = await resolveCompanyId(window.location.search)
       if (!companyId) {
         alert('Company not selected')
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
       stripCompanyParamsFromUrl()
@@ -323,7 +323,7 @@ export default function SpecialPurchaseEntryPage() {
       const companyId = await resolveCompanyId(window.location.search)
       if (!companyId) {
         alert('Company not selected')
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
       stripCompanyParamsFromUrl()

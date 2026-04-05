@@ -176,7 +176,7 @@ export default function PurchaseEntryPage() {
       if (!companyId) {
         alert('Company not selected')
         setLoading(false)
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
       setCompanyId(companyId)
@@ -281,7 +281,7 @@ export default function PurchaseEntryPage() {
     } catch (error) {
       if (isAbortError(error)) return
       if (error instanceof Error && 'status' in error && (error.status === 401 || error.status === 403)) {
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
       console.error('Error fetching data:', error)
@@ -415,7 +415,7 @@ export default function PurchaseEntryPage() {
       const companyId = await resolveCompanyId(window.location.search)
       if (!companyId) {
         alert('Company not selected')
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
 

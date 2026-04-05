@@ -772,7 +772,7 @@ export default function SalesEntryPage() {
 
       if (!resolvedCompanyId) {
         alert('Company not selected')
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
       setCompanyId(resolvedCompanyId)

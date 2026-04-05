@@ -76,7 +76,7 @@ function SelfTransferEntryPageContent() {
       if (cancelled) return
       if (!resolvedCompanyId) {
         setLoading(false)
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
 

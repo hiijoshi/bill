@@ -460,7 +460,7 @@ function PurchasePaymentEntryPageContent() {
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
       if (!resolvedCompanyId) {
         setLoading(false)
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
 

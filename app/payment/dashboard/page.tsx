@@ -266,7 +266,7 @@ export default function PaymentDashboardPage() {
 
       if (!companyIdParam) {
         alert('Company not selected')
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
 
