@@ -26,11 +26,6 @@ type TraderRow = {
   dataLifecycleState: string
   readOnlyMode: boolean
   lifecycleMessage: string | null
-  latestBackupStatus: string | null
-  latestBackupCreatedAt: string | null
-  latestReadyBackupAt: string | null
-  scheduledDeletionAt: string | null
-  closureRequestedAt: string | null
   daysLeft: number | null
   currentPlanName: string | null
   subscriptionType: string | null
@@ -237,19 +232,26 @@ function SuperAdminTraderSubscriptionsPageContent() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [query, setQuery] = useState('')
-  const [expiringWithinDays, setExpiringWithinDays] = useState('30')
+  const [expiringWithinDays, setExpiringWithinDays] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [schemaReady, setSchemaReady] = useState(true)
   const [schemaWarning, setSchemaWarning] = useState<string | null>(null)
   const [form, setForm] = useState<ActionFormState>(createEmptyActionForm())
 
   const loadPlans = useCallback(async () => {
-    const response = await fetch('/api/super-admin/subscription-plans?includeInactive=true', { cache: 'no-store' })
-    const schemaState = readSubscriptionSchemaState(response.headers)
-    setSchemaReady((current) => current && schemaState.schemaReady)
-    setSchemaWarning(schemaState.schemaWarning)
-    const payload = (await response.json().catch(() => [])) as PlanOption[]
-    setPlans(Array.isArray(payload) ? payload : [])
+    try {
+      const response = await fetch('/api/super-admin/subscription-plans?includeInactive=true', { cache: 'no-store' })
+      const schemaState = readSubscriptionSchemaState(response.headers)
+      setSchemaReady((current) => current && schemaState.schemaReady)
+      setSchemaWarning(schemaState.schemaWarning)
+      const payload = (await response.json().catch(() => [])) as PlanOption[] | { error?: string }
+      if (!response.ok) {
+        throw new Error(Array.isArray(payload) ? 'Failed to load plans' : payload.error || 'Failed to load plans')
+      }
+      setPlans(Array.isArray(payload) ? payload : [])
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Failed to load plans')
+    }
   }, [])
 
   const loadTraders = useCallback(async () => {
@@ -272,18 +274,15 @@ function SuperAdminTraderSubscriptionsPageContent() {
 
       const rows = Array.isArray(payload) ? payload : []
       setTraders(rows)
-      if (!selectedTraderId && rows[0]?.id) {
-        setSelectedTraderId(rows[0].id)
-      }
       if (selectedTraderId && !rows.some((row) => row.id === selectedTraderId)) {
-        setSelectedTraderId(rows[0]?.id || '')
+        setSelectedTraderId(requestedTraderId && rows.some((row) => row.id === requestedTraderId) ? requestedTraderId : '')
       }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load traders')
     } finally {
       setLoading(false)
     }
-  }, [expiringWithinDays, query, selectedTraderId])
+  }, [expiringWithinDays, query, requestedTraderId, selectedTraderId])
 
   const loadDetail = useCallback(async (traderId: string) => {
     if (!traderId) {
@@ -425,11 +424,13 @@ function SuperAdminTraderSubscriptionsPageContent() {
           <CardContent className="space-y-4">
             <div className="grid gap-3 md:grid-cols-[1fr_180px_auto]">
               <Input
+                name="subscription-search"
                 placeholder="Search trader or plan"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
               />
               <Input
+                name="subscription-expiring-within-days"
                 type="number"
                 min="0"
                 placeholder="Expiring within days"
@@ -694,6 +695,7 @@ function SuperAdminTraderSubscriptionsPageContent() {
                 <label className="text-sm">
                   <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Action</span>
                   <select
+                    name="subscription-action"
                     className="h-10 w-full rounded-md border border-slate-200 px-3 text-sm"
                     value={form.action}
                     onChange={(event) =>
@@ -725,6 +727,7 @@ function SuperAdminTraderSubscriptionsPageContent() {
                   <label className="text-sm">
                     <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Plan</span>
                     <select
+                      name="subscription-plan"
                       className="h-10 w-full rounded-md border border-slate-200 px-3 text-sm"
                       value={form.planId}
                       onChange={(event) => setForm((current) => ({ ...current, planId: event.target.value }))}
@@ -791,6 +794,7 @@ function SuperAdminTraderSubscriptionsPageContent() {
                       <label className="text-sm">
                         <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Read Only State</span>
                         <select
+                          name="subscription-read-only-state"
                           className="h-10 w-full rounded-md border border-slate-200 px-3 text-sm"
                           value={form.readOnlyState}
                           onChange={(event) =>
@@ -819,6 +823,7 @@ function SuperAdminTraderSubscriptionsPageContent() {
                   <label className="text-sm">
                     <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Ready Backup</span>
                     <select
+                      name="subscription-backup"
                       className="h-10 w-full rounded-md border border-slate-200 px-3 text-sm"
                       value={form.backupId}
                       onChange={(event) => setForm((current) => ({ ...current, backupId: event.target.value }))}
@@ -890,6 +895,7 @@ function SuperAdminTraderSubscriptionsPageContent() {
                 ) : null}
 
                 <textarea
+                  name="subscription-notes"
                   rows={4}
                   className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none"
                   placeholder="Notes for this action"

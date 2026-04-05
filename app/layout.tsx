@@ -139,7 +139,15 @@ export default function RootLayout({
       const isBankStatementImportApi =
         urlString === '/api/payments/bank-statement/import' ||
         urlString === `${window.location.origin}/api/payments/bank-statement/import`
+      const isSubscriptionManagementApi =
+        urlString.startsWith('/api/super-admin/trader-subscriptions') ||
+        urlString.startsWith(`${window.location.origin}/api/super-admin/trader-subscriptions`) ||
+        urlString.startsWith('/api/super-admin/subscription-plans') ||
+        urlString.startsWith(`${window.location.origin}/api/super-admin/subscription-plans`)
       const timeoutMsForRequest = (() => {
+        if (isSubscriptionManagementApi) {
+          return Math.max(superAdminApiTimeoutMs, 60000)
+        }
         if (isSuperAdminApi) return superAdminApiTimeoutMs
         if (isBankStatementImportApi) {
           return Math.max(apiTimeoutMs, 240000)
