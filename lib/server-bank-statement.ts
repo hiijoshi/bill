@@ -64,6 +64,8 @@ type ExtractedStatementText = {
   pageCount: number
 }
 
+let pdfCanvasGlobalsReady: Promise<void> | null = null
+
 type StructuredStatementCsvRow = {
   row: CsvImportRow
   rowNo: number
@@ -162,6 +164,44 @@ function parseAmountValue(raw: string): number | null {
   const parsed = Number(normalized)
   if (!Number.isFinite(parsed)) return null
   return Math.abs(parsed)
+}
+
+async function ensurePdfCanvasGlobals(): Promise<void> {
+  if (pdfCanvasGlobalsReady) {
+    return pdfCanvasGlobalsReady
+  }
+
+  pdfCanvasGlobalsReady = (async () => {
+    const globalScope = globalThis as typeof globalThis
+    const mutableGlobalScope = globalScope as any
+
+    if (
+      typeof globalScope.DOMMatrix !== 'undefined' &&
+      typeof globalScope.ImageData !== 'undefined' &&
+      typeof globalScope.Path2D !== 'undefined'
+    ) {
+      return
+    }
+
+    const canvasModule = await import('@napi-rs/canvas')
+
+    if (typeof globalScope.DOMMatrix === 'undefined') {
+      mutableGlobalScope.DOMMatrix = canvasModule.DOMMatrix
+    }
+    if (typeof globalScope.ImageData === 'undefined') {
+      mutableGlobalScope.ImageData = canvasModule.ImageData
+    }
+    if (typeof globalScope.Path2D === 'undefined') {
+      mutableGlobalScope.Path2D = canvasModule.Path2D
+    }
+  })()
+
+  try {
+    await pdfCanvasGlobalsReady
+  } catch (error) {
+    pdfCanvasGlobalsReady = null
+    throw error
+  }
 }
 
 function parseStatementDate(raw: string): string | null {
@@ -456,6 +496,7 @@ async function parseExcelStatement(buffer: Buffer, bankId: string): Promise<Pars
 }
 
 async function extractPdfText(buffer: Buffer): Promise<ExtractedStatementText> {
+  await ensurePdfCanvasGlobals()
   const pdfParseModule = await import('pdf-parse')
   const parser = new pdfParseModule.PDFParse({ data: buffer })
 
@@ -497,6 +538,7 @@ async function recognizeTextFromImages(buffers: Buffer[]): Promise<string> {
 }
 
 async function extractPdfOcrText(buffer: Buffer): Promise<ExtractedStatementText> {
+  await ensurePdfCanvasGlobals()
   const pdfParseModule = await import('pdf-parse')
   const parser = new pdfParseModule.PDFParse({ data: buffer })
 
