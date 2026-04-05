@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -69,7 +70,7 @@ export default function SuperAdminTraderDetailPage() {
   return (
     <SuperAdminShell
       title="Trader Details"
-      subtitle="View trader scope, companies, users, and lock cascade controls"
+      subtitle="View trader scope, companies, users, lock cascade controls, and jump directly into subscription management"
     >
       <div className="space-y-6">
         {error ? <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
@@ -97,9 +98,16 @@ export default function SuperAdminTraderDetailPage() {
                   <span>Companies: {trader._count.companies}</span>
                   <span>Users: {trader._count.users}</span>
                 </div>
-                <Button onClick={toggleLock} disabled={saving}>
-                  {saving ? 'Saving...' : trader.locked ? 'Unlock Trader' : 'Lock Trader'}
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" asChild>
+                    <Link href={`/super-admin/subscriptions?traderId=${encodeURIComponent(trader.id)}`}>
+                      Manage Subscription
+                    </Link>
+                  </Button>
+                  <Button onClick={toggleLock} disabled={saving}>
+                    {saving ? 'Saving...' : trader.locked ? 'Unlock Trader' : 'Lock Trader'}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
 

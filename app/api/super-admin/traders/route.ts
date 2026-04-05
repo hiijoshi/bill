@@ -5,6 +5,8 @@ import { parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { normalizeTraderLimitInput } from '@/lib/trader-limits'
 import { normalizePrismaApiError } from '@/lib/prisma-errors'
+import { createTraderInitialSubscription, traderInitialSubscriptionSchema } from '@/lib/trader-subscription-assignment'
+import { SubscriptionMutationError } from '@/lib/subscription-mutations'
 import { markSuperAdminLiveUpdate } from '@/lib/live-update-state'
 
 const createTraderSchema = z
@@ -12,7 +14,8 @@ const createTraderSchema = z
     name: z.string().trim().min(1, 'Trader name is required').max(100),
     maxCompanies: z.union([z.number().int().min(0), z.string().trim().regex(/^\d+$/)]).optional().nullable(),
     maxUsers: z.union([z.number().int().min(0), z.string().trim().regex(/^\d+$/)]).optional().nullable(),
-    locked: z.boolean().optional()
+    locked: z.boolean().optional(),
+    subscription: traderInitialSubscriptionSchema.optional().nullable()
   })
   .strict()
 
@@ -103,37 +106,92 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Trader with this name already exists' }, { status: 409 })
     }
 
-    const trader = await prisma.trader.create({
-      data: {
-        name,
-        maxCompanies,
-        maxUsers,
-        locked: parsed.data.locked ?? false
+    const actorId = authResult.auth.userDbId || authResult.auth.userId
+    const created = await prisma.$transaction(async (tx) => {
+      const trader = await tx.trader.create({
+        data: {
+          name,
+          maxCompanies,
+          maxUsers,
+          locked: parsed.data.locked ?? false
+        }
+      })
+
+      const subscription = parsed.data.subscription
+        ? await createTraderInitialSubscription(tx, {
+            traderId: trader.id,
+            actorId,
+            subscription: parsed.data.subscription
+          })
+        : null
+
+      return {
+        trader,
+        subscription
       }
     })
 
     await writeAuditLog({
       actor: {
-        id: authResult.auth.userDbId || authResult.auth.userId,
+        id: actorId,
         role: authResult.auth.role
       },
-      action: trader.locked ? 'LOCK' : 'CREATE',
+      action: created.trader.locked ? 'LOCK' : 'CREATE',
       resourceType: 'TRADER',
-      resourceId: trader.id,
-      scope: { traderId: trader.id },
-      after: trader,
+      resourceId: created.trader.id,
+      scope: { traderId: created.trader.id },
+      after: created.trader,
       requestMeta: getAuditRequestMeta(request)
     })
+
+    if (created.subscription) {
+      await writeAuditLog({
+        actor: {
+          id: actorId,
+          role: authResult.auth.role
+        },
+        action: 'CREATE',
+        resourceType: 'TRADER_SUBSCRIPTION',
+        resourceId: created.subscription.subscription.id,
+        scope: {
+          traderId: created.trader.id
+        },
+        after: created.subscription.subscription,
+        requestMeta: getAuditRequestMeta(request)
+      })
+
+      if (created.subscription.payment) {
+        await writeAuditLog({
+          actor: {
+            id: actorId,
+            role: authResult.auth.role
+          },
+          action: 'CREATE',
+          resourceType: 'SUBSCRIPTION_PAYMENT',
+          resourceId: created.subscription.payment.id,
+          scope: {
+            traderId: created.trader.id
+          },
+          after: created.subscription.payment,
+          requestMeta: getAuditRequestMeta(request)
+        })
+      }
+    }
     markSuperAdminLiveUpdate()
 
     return NextResponse.json(
       {
-        ...trader,
+        ...created.trader,
+        currentSubscription: created.subscription?.subscription || null,
         _count: { companies: 0, users: 0 }
       },
       { status: 201 }
     )
   } catch (error) {
+    if (error instanceof SubscriptionMutationError) {
+      return NextResponse.json({ error: error.message }, { status: error.status })
+    }
+
     const apiError = normalizePrismaApiError(error, 'Failed to create trader', {
       uniqueMessages: {
         name: 'Trader with this name already exists'

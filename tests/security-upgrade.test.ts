@@ -13,6 +13,7 @@ import { isPrismaSchemaMismatchError } from '../lib/prisma-schema-guard'
 import { buildSubscriptionSchemaHeaders, readSubscriptionSchemaState } from '../lib/subscription-schema'
 import { GET as getPayments } from '../app/api/payments/route'
 import { POST as postCompanies, PUT as putCompanies } from '../app/api/companies/route'
+import { POST as postSuperAdminTraders } from '../app/api/super-admin/traders/route'
 import { POST as postSuperAdminUsers } from '../app/api/super-admin/users/route'
 import { PUT as putSuperAdminUserById } from '../app/api/super-admin/users/[id]/route'
 import { POST as postTraderSubscriptionAction } from '../app/api/super-admin/trader-subscriptions/[traderId]/actions/route'
@@ -111,6 +112,67 @@ test('Subscription schema headers expose warning state consistently', () => {
 
   assert.equal(parsed.schemaReady, false)
   assert.ok(parsed.schemaWarning)
+})
+
+test('Trader create API can assign initial trial subscription in one request', async () => {
+  const suffix = Date.now().toString()
+  const plan = await prisma.subscriptionPlan.create({
+    data: {
+      name: `Create Trial Plan ${suffix}`,
+      billingCycle: 'yearly',
+      amount: 0,
+      currency: 'INR',
+      isActive: true,
+      isTrialCapable: true,
+      defaultTrialDays: 21
+    }
+  })
+
+  let traderId = ''
+
+  try {
+    const response = await postSuperAdminTraders(
+      makeRequest('http://localhost/api/super-admin/traders', {
+        method: 'POST',
+        headers: makeAuthHeaders('super_admin'),
+        body: {
+          name: `create-trader-with-subscription-${suffix}`,
+          maxCompanies: 3,
+          maxUsers: 12,
+          subscription: {
+            mode: 'trial',
+            planId: plan.id,
+            trialDays: 21
+          }
+        }
+      })
+    )
+
+    assert.equal(response.status, 201)
+
+    const payload = await response.json()
+    traderId = String(payload?.id || '')
+    assert.ok(traderId)
+    assert.equal(payload?.currentSubscription?.subscriptionType, 'trial')
+
+    const createdSubscription = await prisma.traderSubscription.findFirst({
+      where: { traderId },
+      orderBy: [{ createdAt: 'desc' }]
+    })
+
+    assert.equal(createdSubscription?.planId, plan.id)
+    assert.equal(createdSubscription?.subscriptionType, 'trial')
+    assert.equal(createdSubscription?.status, 'active')
+    assert.equal(createdSubscription?.trialDays, 21)
+  } finally {
+    await prisma.subscriptionPayment.deleteMany({ where: { traderId } })
+    await prisma.traderSubscription.deleteMany({ where: { traderId } })
+    if (traderId) {
+      await prisma.trader.deleteMany({ where: { id: traderId } })
+    }
+    await prisma.subscriptionPlanFeature.deleteMany({ where: { planId: plan.id } })
+    await prisma.subscriptionPlan.deleteMany({ where: { id: plan.id } })
+  }
 })
 
 test('Scope checks block out-of-scope company access', async () => {

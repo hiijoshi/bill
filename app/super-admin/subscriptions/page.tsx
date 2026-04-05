@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
 import { authHeadersScoped } from '@/lib/csrf'
@@ -226,6 +227,8 @@ function getBadgeVariant(value?: string | null): 'default' | 'secondary' | 'dest
 }
 
 export default function SuperAdminTraderSubscriptionsPage() {
+  const searchParams = useSearchParams()
+  const requestedTraderId = String(searchParams.get('traderId') || '').trim()
   const [traders, setTraders] = useState<TraderRow[]>([])
   const [plans, setPlans] = useState<PlanOption[]>([])
   const [selectedTraderId, setSelectedTraderId] = useState<string>('')
@@ -307,6 +310,11 @@ export default function SuperAdminTraderSubscriptionsPage() {
       setDetailLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    if (!requestedTraderId) return
+    setSelectedTraderId(requestedTraderId)
+  }, [requestedTraderId])
 
   useEffect(() => {
     void loadPlans()
