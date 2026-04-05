@@ -160,6 +160,13 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Trader is locked' }, { status: 403 })
       }
 
+      if (!traderCapacity.canManageCompanies) {
+        return NextResponse.json(
+          { error: traderCapacity.subscriptionMessage || 'Trader subscription does not allow company creation' },
+          { status: 403 }
+        )
+      }
+
       if (
         traderCapacity.maxCompanies !== null &&
         traderCapacity.currentCompanies >= traderCapacity.maxCompanies

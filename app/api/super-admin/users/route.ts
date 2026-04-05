@@ -471,6 +471,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
     }
 
+    if (!traderCapacity.canManageUsers) {
+      return NextResponse.json(
+        { error: traderCapacity.subscriptionMessage || 'Trader subscription does not allow user creation' },
+        { status: 403 }
+      )
+    }
+
     if (
       traderCapacity.maxUsers !== null &&
       traderCapacity.currentUsers >= traderCapacity.maxUsers

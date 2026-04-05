@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Plus, Edit, Trash2, Eye } from 'lucide-react'
+import { Plus, Edit, Eye } from 'lucide-react'
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
 
 type Trader = {
@@ -59,24 +59,10 @@ export default function SuperAdminTradersPage() {
     }
   }
 
-  const remove = async (id: string) => {
-    if (!confirm('Delete this trader?')) return
-    try {
-      const res = await fetch(`/api/super-admin/traders/${id}`, { method: 'DELETE' })
-      if (!res.ok) {
-        const payload = await res.json().catch(() => ({}))
-        throw new Error(payload.error || 'Failed to delete trader')
-      }
-      await load()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete trader')
-    }
-  }
-
   return (
     <SuperAdminShell
       title="Trader Management"
-      subtitle="Create, edit, lock and delete traders with tenant cascade control"
+      subtitle="Create, edit, and review traders. Use subscription closure workflow for backup-first final deletion."
     >
       <div className="space-y-6">
       {error && <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
@@ -126,9 +112,12 @@ export default function SuperAdminTradersPage() {
                       <Button size="sm" variant="outline" onClick={() => { setEditId(trader.id); setName(trader.name) }}>
                         <Edit className="h-4 w-4" />
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => remove(trader.id)}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <Link
+                        href="/super-admin/subscriptions"
+                        className="inline-flex h-9 items-center rounded-md border border-slate-200 px-3 text-sm text-slate-700 hover:bg-slate-50"
+                      >
+                        Closure
+                      </Link>
                     </div>
                   </TableCell>
                 </TableRow>

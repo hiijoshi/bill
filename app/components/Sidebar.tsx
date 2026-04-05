@@ -36,6 +36,12 @@ const menuItems: MenuItem[] = [
     children: [],
   },
   {
+    title: 'Subscription',
+    href: '/main/subscription',
+    icon: Lock,
+    children: [],
+  },
+  {
     title: 'Master',
     icon: Settings,
     children: [

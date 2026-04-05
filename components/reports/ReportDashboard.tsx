@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { printSimpleTableReport } from '@/lib/report-print'
-import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { getClientCache, getOrLoadClientCache, setClientCache } from '@/lib/client-fetch-cache'
 
 const BASE_HEADERS = [
   'Party_Type',
@@ -513,18 +513,28 @@ export default function ReportDashboard({
           return
         }
 
-        const response = await fetch('/api/companies', { cache: 'no-store' })
-        if (!response.ok) {
-          throw new Error('Unable to load companies')
-        }
+        const rows = await getOrLoadClientCache<CompanyRecord[]>(
+          COMPANIES_CACHE_KEY,
+          COMPANIES_CACHE_AGE_MS,
+          async () => {
+            const response = await fetch('/api/companies', { cache: 'no-store' })
+            if (!response.ok) {
+              throw new Error('Unable to load companies')
+            }
 
-        const payload = await response.json().catch(() => [])
-        const rows = normalizeCollection<CompanyRecord>(payload)
+            const payload = await response.json().catch(() => [])
+            return normalizeCollection<CompanyRecord>(payload)
+          },
+          {
+            persist: true,
+            shouldCache: (data) => Array.isArray(data)
+          }
+        )
 
         if (cancelled) return
 
         setCompanies(rows)
-        setClientCache(COMPANIES_CACHE_KEY, rows)
+        setClientCache(COMPANIES_CACHE_KEY, rows, { persist: true })
 
         const availableIds = new Set(rows.map((row) => row.id))
         setSelectedCompanyId((previous) => {

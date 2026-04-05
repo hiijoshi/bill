@@ -270,99 +270,13 @@ export async function DELETE(
     if (!parsedParams.success) {
       return NextResponse.json({ error: 'Invalid trader ID' }, { status: 400 })
     }
-
-    const traderId = parsedParams.data.id
-    if (traderId === 'system') {
-      return NextResponse.json({ error: 'Cannot delete system trader' }, { status: 403 })
-    }
-
-    const existingTrader = await prisma.trader.findFirst({
-      where: { id: traderId, deletedAt: null }
-    })
-
-    if (!existingTrader) {
-      return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
-    }
-
-    const deletedAt = new Date()
-    const affectedUsers = await prisma.user.findMany({
-      where: {
-        traderId,
-        deletedAt: null
+    return NextResponse.json(
+      {
+        error:
+          'Direct trader deletion is disabled. Use trader subscription closure workflow: create backup, mark deletion pending, then confirm final deletion.'
       },
-      select: {
-        id: true,
-        traderId: true,
-        userId: true
-      }
-    })
-    const affectedCompanyIds = (
-      await prisma.company.findMany({
-        where: {
-          traderId,
-          deletedAt: null
-        },
-        select: {
-          id: true
-        }
-      })
-    ).map((company) => company.id)
-
-    const deletedSnapshot = await prisma.$transaction(async (tx) => {
-      const trader = await tx.trader.update({
-        where: { id: traderId },
-        data: {
-          locked: true,
-          deletedAt
-        }
-      })
-
-      await tx.company.updateMany({
-        where: {
-          traderId,
-          deletedAt: null
-        },
-        data: {
-          locked: true,
-          deletedAt
-        }
-      })
-
-      await tx.user.updateMany({
-        where: {
-          traderId,
-          deletedAt: null
-        },
-        data: {
-          locked: true,
-          deletedAt
-        }
-      })
-
-      return trader
-    })
-
-    await writeAuditLog({
-      actor: {
-        id: authResult.auth.userDbId || authResult.auth.userId,
-        role: authResult.auth.role
-      },
-      action: 'DELETE',
-      resourceType: 'TRADER',
-      resourceId: traderId,
-      scope: { traderId },
-      before: existingTrader,
-      after: deletedSnapshot,
-      requestMeta: getAuditRequestMeta(request)
-    })
-    markSuperAdminLiveUpdate()
-    markCompanyLiveUpdates(affectedCompanyIds)
-    markUserSessionLiveUpdates(affectedUsers)
-    affectedUsers.forEach((user) => {
-      invalidateAuthGuardStateForUser(user)
-    })
-
-    return NextResponse.json({ success: true })
+      { status: 409 }
+    )
   } catch (error) {
     const apiError = normalizePrismaApiError(error, 'Failed to delete trader')
     return NextResponse.json({ error: apiError.message }, { status: apiError.status })

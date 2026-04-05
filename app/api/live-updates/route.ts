@@ -4,7 +4,6 @@ import { z } from 'zod'
 import { getAccessibleCompanies, requireAuthContext } from '@/lib/api-security'
 import { loadAuthGuardState } from '@/lib/auth-guard-state'
 import { getCompanyLiveUpdates, getUserSessionLiveUpdate, markCompanyLiveUpdate } from '@/lib/live-update-state'
-import { prisma } from '@/lib/prisma'
 
 const postBodySchema = z
   .object({
@@ -35,37 +34,27 @@ export async function GET(request: NextRequest) {
     authResult.auth.companyId
   )
   const authGuard = await loadAuthGuardState(authResult.auth)
-  const latestPermissionUpdate = authResult.auth.userDbId
-    ? await prisma.userPermission.findFirst({
-        where: {
-          userId: authResult.auth.userDbId
-        },
-        orderBy: {
-          updatedAt: 'desc'
-        },
-        select: {
-          updatedAt: true
-        }
-      })
-    : null
-
+  const activeCompanyId = String(authResult.auth.companyId || '').trim()
   const accessibleCompanyIds =
-    requestedCompanyIds.length === 1
-      ? (await getAccessibleCompanies(authResult.auth, requestedCompanyIds[0])).map((company) => company.id)
-      : requestedCompanyIds.length > 1
-        ? (
-            await getAccessibleCompanies(authResult.auth)
-          )
-            .map((company) => company.id)
-            .filter((companyId) => requestedCompanyIds.includes(companyId))
-        : []
+    requestedCompanyIds.length === 1 && activeCompanyId && requestedCompanyIds[0] === activeCompanyId
+      ? [activeCompanyId]
+      : requestedCompanyIds.length === 1
+        ? (await getAccessibleCompanies(authResult.auth, requestedCompanyIds[0])).map((company) => company.id)
+        : requestedCompanyIds.length > 1
+          ? (
+              await getAccessibleCompanies(authResult.auth)
+            )
+              .map((company) => company.id)
+              .filter((companyId) => requestedCompanyIds.includes(companyId))
+          : activeCompanyId
+            ? [activeCompanyId]
+            : []
 
   return NextResponse.json({
     allowedCompanyIds: accessibleCompanyIds,
     companyUpdates: getCompanyLiveUpdates(accessibleCompanyIds),
     sessionUpdatedAt: Math.max(
       authGuard.userUpdatedAtMs || 0,
-      latestPermissionUpdate?.updatedAt?.getTime() || 0,
       getUserSessionLiveUpdate(authResult.auth)
     ),
     serverNow: Date.now()

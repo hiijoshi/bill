@@ -2,6 +2,7 @@ import 'dotenv/config'
 
 import bcrypt from 'bcryptjs'
 import { prisma } from '../lib/prisma'
+import { buildDefaultSubscriptionFeatureInputs } from '../lib/subscription-config'
 
 async function ensureSystemTrader() {
   await prisma.trader.upsert({
@@ -70,12 +71,107 @@ async function ensureOptionalSuperAdmin() {
   console.log(`Created super admin: ${userId}`)
 }
 
+async function ensureOptionalSampleSubscriptionPlans() {
+  if (String(process.env.SEED_SAMPLE_SUBSCRIPTION_PLANS || '').trim().toLowerCase() !== 'true') {
+    return
+  }
+
+  const featureRows = buildDefaultSubscriptionFeatureInputs()
+  const plans = [
+    {
+      name: 'Trial Plan',
+      description: 'Starter trial plan for onboarding new traders.',
+      amount: 0,
+      maxCompanies: 1,
+      maxUsers: 3,
+      defaultTrialDays: 15,
+      isTrialCapable: true,
+      sortOrder: 1
+    },
+    {
+      name: 'Standard Yearly',
+      description: 'Default yearly plan for active mandi ERP operations.',
+      amount: 0,
+      maxCompanies: 3,
+      maxUsers: 10,
+      defaultTrialDays: 15,
+      isTrialCapable: true,
+      sortOrder: 2
+    }
+  ]
+
+  for (const plan of plans) {
+    const existing = await prisma.subscriptionPlan.findFirst({
+      where: {
+        name: plan.name
+      },
+      select: {
+        id: true
+      }
+    })
+
+    const record = existing
+      ? await prisma.subscriptionPlan.update({
+          where: {
+            id: existing.id
+          },
+          data: {
+            description: plan.description,
+            billingCycle: 'yearly',
+            amount: plan.amount,
+            currency: 'INR',
+            maxCompanies: plan.maxCompanies,
+            maxUsers: plan.maxUsers,
+            defaultTrialDays: plan.defaultTrialDays,
+            isActive: true,
+            isTrialCapable: plan.isTrialCapable,
+            sortOrder: plan.sortOrder
+          }
+        })
+      : await prisma.subscriptionPlan.create({
+          data: {
+            name: plan.name,
+            description: plan.description,
+            billingCycle: 'yearly',
+            amount: plan.amount,
+            currency: 'INR',
+            maxCompanies: plan.maxCompanies,
+            maxUsers: plan.maxUsers,
+            defaultTrialDays: plan.defaultTrialDays,
+            isActive: true,
+            isTrialCapable: plan.isTrialCapable,
+            sortOrder: plan.sortOrder
+          }
+        })
+
+    await prisma.subscriptionPlanFeature.deleteMany({
+      where: {
+        planId: record.id
+      }
+    })
+
+    await prisma.subscriptionPlanFeature.createMany({
+      data: featureRows.map((feature) => ({
+        planId: record.id,
+        featureKey: feature.featureKey,
+        featureLabel: feature.featureLabel,
+        description: feature.description,
+        enabled: feature.enabled,
+        sortOrder: feature.sortOrder
+      }))
+    })
+  }
+
+  console.log('Optional sample subscription plans ensured.')
+}
+
 async function main() {
   console.log('Running safe database bootstrap...')
   console.log('No business rows will be inserted automatically.')
 
   await ensureSystemTrader()
   await ensureOptionalSuperAdmin()
+  await ensureOptionalSampleSubscriptionPlans()
 
   console.log('Bootstrap complete.')
 }

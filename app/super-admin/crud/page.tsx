@@ -584,17 +584,21 @@ export default function SuperAdminCrudPage() {
 
   const deleteModalRecord = async () => {
     if (!modal || modal.mode !== 'edit' || !modal.recordId) return
+    if (modal.section === 'traders') {
+      setModalError(
+        'Direct trader deletion is disabled. Use trader subscriptions page to create backup, mark deletion pending, and confirm final closure.'
+      )
+      return
+    }
     const confirmDelete = window.confirm('Delete this record?')
     if (!confirmDelete) return
 
     try {
       setModalError(null)
       const endpoint =
-        modal.section === 'traders'
-          ? `/api/super-admin/traders/${modal.recordId}`
-          : modal.section === 'companies'
-            ? `/api/super-admin/companies/${modal.recordId}`
-            : `/api/super-admin/users/${modal.recordId}`
+        modal.section === 'companies'
+          ? `/api/super-admin/companies/${modal.recordId}`
+          : `/api/super-admin/users/${modal.recordId}`
 
       const response = await fetch(endpoint, { method: 'DELETE' })
       const responsePayload = await response.json().catch(() => ({}))

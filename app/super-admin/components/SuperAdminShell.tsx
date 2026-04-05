@@ -21,6 +21,8 @@ const navItems = [
   { href: '/super-admin/masters', label: 'Masters', icon: Settings2 },
   { href: '/super-admin/masters?resource=buyer-limits', label: 'Buyer Limits', icon: Users },
   { href: '/super-admin/traders', label: 'Traders', icon: Store },
+  { href: '/super-admin/subscriptions', label: 'Subscriptions', icon: ScrollText },
+  { href: '/super-admin/subscriptions/plans', label: 'Plan Catalog', icon: Settings2 },
   { href: '/super-admin/companies', label: 'Companies', icon: Building2 },
   { href: '/super-admin/users', label: 'Users', icon: Users },
   { href: '/super-admin/audit-logs', label: 'Audit Logs', icon: ScrollText }

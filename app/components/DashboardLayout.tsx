@@ -8,7 +8,7 @@ import HeaderAccountPanel from '@/components/account/HeaderAccountPanel'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { isAbortError } from '@/lib/http'
-import { clearClientCache, getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { clearClientCache, getOrLoadClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { APP_COMPANY_CHANGED_EVENT, notifyAppCompanyChanged, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 interface DashboardLayoutProps {
@@ -37,11 +37,30 @@ type CompanySummary = {
   locked?: boolean
 }
 
+type SubscriptionBannerPayload = {
+  entitlement?: {
+    lifecycleState?: string | null
+    message?: string | null
+    daysLeft?: number | null
+  } | null
+  dataLifecycle?: {
+    state?: string | null
+    readOnlyMode?: boolean
+    message?: string | null
+  } | null
+  currentSubscription?: {
+    planName?: string | null
+    endDate?: string | null
+  } | null
+}
+
 const AUTH_CACHE_KEY = 'shell:auth-me'
 const COMPANIES_CACHE_KEY = 'shell:companies'
+const SUBSCRIPTION_CACHE_KEY = 'shell:subscription-current'
 const ACTIVE_COMPANY_CACHE_KEY = 'shell:active-company-id'
 const AUTH_CACHE_AGE_MS = 5 * 60_000
 const COMPANIES_CACHE_AGE_MS = 5 * 60_000
+const SUBSCRIPTION_CACHE_AGE_MS = 60_000
 const APP_SHELL_AUTH_LOADED_EVENT = 'app-shell-auth-loaded'
 
 export default function DashboardLayout({ children, companyId, headerActions, lockViewport = false }: DashboardLayoutProps) {
@@ -55,46 +74,75 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
   const [currentCompanyName, setCurrentCompanyName] = useState<string | null>(null)
   const [isSwitchingCompany, setIsSwitchingCompany] = useState(false)
   const [companySwitchError, setCompanySwitchError] = useState<string | null>(null)
+  const [subscriptionBanner, setSubscriptionBanner] = useState<SubscriptionBannerPayload | null>(null)
   const router = useRouter()
 
   const loadShellContext = useCallback(async (force = false) => {
     try {
-      let authPayload = force ? null : getClientCache<AuthMePayload>(AUTH_CACHE_KEY, AUTH_CACHE_AGE_MS)
-      let companiesPayload = force ? null : getClientCache<CompanySummary[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS)
-
-      const requests: Promise<void>[] = []
-
-      if (!authPayload) {
-        requests.push(
-          fetch('/api/auth/me', { cache: 'no-store' }).then(async (response) => {
+      const [authPayload, companiesPayload, subscriptionPayload] = await Promise.all([
+        getOrLoadClientCache<AuthMePayload | null>(
+          AUTH_CACHE_KEY,
+          AUTH_CACHE_AGE_MS,
+          async () => {
+            const response = await fetch('/api/auth/me', { cache: 'no-store' })
             if (response.status === 401) {
               router.push('/login')
-              return
+              return null
             }
             if (!response.ok) {
-              return
+              throw new Error('Failed to load auth session')
             }
-            const data = (await response.json().catch(() => null)) as AuthMePayload | null
-            if (!data) return
-            authPayload = data
-            setClientCache(AUTH_CACHE_KEY, data, { persist: true })
-          })
-        )
-      }
-
-      if (!companiesPayload) {
-        requests.push(
-          fetch('/api/companies').then(async (response) => {
-            if (!response.ok) return
+            return (await response.json().catch(() => null)) as AuthMePayload | null
+          },
+          {
+            persist: true,
+            force,
+            shouldCache: (data) => Boolean(data && (data.user || data.company))
+          }
+        ).catch((error) => {
+          if (isAbortError(error)) {
+            return null
+          }
+          return null
+        }),
+        getOrLoadClientCache<CompanySummary[]>(
+          COMPANIES_CACHE_KEY,
+          COMPANIES_CACHE_AGE_MS,
+          async () => {
+            const response = await fetch('/api/companies', { cache: 'no-store' })
+            if (!response.ok) {
+              throw new Error('Failed to load companies')
+            }
             const data = (await response.json().catch(() => [])) as CompanySummary[]
-            if (!Array.isArray(data)) return
-            companiesPayload = data
-            setClientCache(COMPANIES_CACHE_KEY, data, { persist: true })
-          })
-        )
-      }
-
-      await Promise.all(requests)
+            return Array.isArray(data) ? data : []
+          },
+          {
+            persist: true,
+            force,
+            shouldCache: (data) => Array.isArray(data)
+          }
+        ).catch(() => [])
+        ,
+        getOrLoadClientCache<SubscriptionBannerPayload | null>(
+          SUBSCRIPTION_CACHE_KEY,
+          SUBSCRIPTION_CACHE_AGE_MS,
+          async () => {
+            const response = await fetch('/api/subscription/current', { cache: 'no-store' })
+            if (response.status === 401 || response.status === 403) {
+              return null
+            }
+            if (!response.ok) {
+              throw new Error('Failed to load subscription summary')
+            }
+            return (await response.json().catch(() => null)) as SubscriptionBannerPayload | null
+          },
+          {
+            persist: true,
+            force,
+            shouldCache: (data) => Boolean(data)
+          }
+        ).catch(() => null)
+      ])
 
       const normalizedCompanies = Array.isArray(companiesPayload)
         ? companiesPayload
@@ -119,6 +167,7 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
         return
       }
 
+      setSubscriptionBanner(subscriptionPayload)
       setCurrentUser(authPayload.user?.userId || null)
       setCurrentUserName(authPayload.user?.name || null)
       setCurrentUserRole(authPayload.user?.role || null)
@@ -269,6 +318,16 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
   }
 
   const showCompanySwitcher = availableCompanies.length > 1
+  const bannerState = String(
+    subscriptionBanner?.dataLifecycle?.state || subscriptionBanner?.entitlement?.lifecycleState || ''
+  )
+    .trim()
+    .toLowerCase()
+  const shouldShowSubscriptionBanner =
+    bannerState.length > 0 &&
+    (bannerState !== 'active' && bannerState !== 'trial'
+      ? true
+      : Number(subscriptionBanner?.entitlement?.daysLeft || 0) <= 7)
 
   return (
     <div className={lockViewport ? 'flex h-dvh overflow-hidden bg-gray-50' : 'flex h-dvh overflow-hidden bg-gray-50'}>
@@ -341,6 +400,17 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
           {companySwitchError ? (
             <div className="mx-auto mt-3 max-w-7xl rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               {companySwitchError}
+            </div>
+          ) : null}
+          {shouldShowSubscriptionBanner ? (
+            <div className="mx-auto mt-3 max-w-7xl rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <span className="font-semibold">
+                {subscriptionBanner?.currentSubscription?.planName || 'Subscription'}
+              </span>
+              {' '}
+              {subscriptionBanner?.dataLifecycle?.message ||
+                subscriptionBanner?.entitlement?.message ||
+                'Please contact admin for renewal or upgrade.'}
             </div>
           ) : null}
         </div>

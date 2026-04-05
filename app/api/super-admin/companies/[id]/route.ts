@@ -248,6 +248,13 @@ export async function PUT(
       if (traderCapacity.locked) {
         return NextResponse.json({ error: 'Trader is locked' }, { status: 403 })
       }
+
+      if (!traderCapacity.canManageCompanies) {
+        return NextResponse.json(
+          { error: traderCapacity.subscriptionMessage || 'Trader subscription does not allow company changes' },
+          { status: 403 }
+        )
+      }
     }
 
     const nextName = normalized.name ?? existingCompany.name
@@ -295,6 +302,20 @@ export async function PUT(
       const traderCapacity = await getTraderCapacitySnapshot(prisma, nextTraderId)
       if (!traderCapacity) {
         return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
+      }
+
+      if (!traderCapacity.canManageCompanies) {
+        return NextResponse.json(
+          { error: traderCapacity.subscriptionMessage || 'Trader subscription does not allow company changes' },
+          { status: 403 }
+        )
+      }
+
+      if (!traderCapacity.canManageUsers && movingUsers.length > 0) {
+        return NextResponse.json(
+          { error: traderCapacity.subscriptionMessage || 'Trader subscription does not allow user allocation changes' },
+          { status: 403 }
+        )
       }
 
       if (

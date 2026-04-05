@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { getClientCache, getOrLoadClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { printHtmlDocument } from '@/lib/report-print'
 
 type ReportView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'bank-ledger' | 'cash-ledger'
@@ -178,6 +178,11 @@ type OperationsReportPayload = {
       activeProvider?: string
       providers?: BankSyncProviderStatus[]
     }
+    openingBalances?: {
+      bankLedger?: number
+      cashLedger?: number
+      bankLedgerByBank?: Record<string, number>
+    }
     dateFrom?: string
     dateTo?: string
     generatedAt?: string
@@ -193,6 +198,8 @@ interface OperationsReportWorkspaceProps {
 
 const surfaceCardClass = 'rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]'
 const OPERATIONS_REPORT_CACHE_AGE_MS = 20_000
+const SHELL_COMPANIES_CACHE_KEY = 'shell:companies'
+const SHELL_COMPANIES_CACHE_AGE_MS = 5 * 60_000
 const operationsViewOptions: Array<{ value: ReportView; label: string }> = [
   { value: 'outstanding', label: 'Outstanding' },
   { value: 'ledger', label: 'Party Ledger' },
@@ -232,6 +239,10 @@ function currencyText(value: number): string {
 
 function absoluteCurrencyText(value: number): string {
   return currencyText(Math.abs(Number(value || 0)))
+}
+
+function roundAmount(value: number): number {
+  return Number(Number(value || 0).toFixed(2))
 }
 
 function formatFlowSummaryText(value: number, positiveLabel = 'Inflow', negativeLabel = 'Outflow'): string {
@@ -569,19 +580,29 @@ export default function OperationsReportWorkspace({
   const loadCompanies = useCallback(async () => {
     setLoadingCompanies(true)
     try {
-      const response = await fetch('/api/companies', { cache: 'no-store' })
-      if (!response.ok) {
-        throw new Error('Unable to load companies')
-      }
+      const normalized = await getOrLoadClientCache<CompanyRecord[]>(
+        SHELL_COMPANIES_CACHE_KEY,
+        SHELL_COMPANIES_CACHE_AGE_MS,
+        async () => {
+          const response = await fetch('/api/companies', { cache: 'no-store' })
+          if (!response.ok) {
+            throw new Error('Unable to load companies')
+          }
 
-      const payload = await response.json().catch(() => [])
-      const rows = Array.isArray(payload) ? payload : []
-      const normalized = rows
-        .map((row) => ({
-          id: String(row?.id || ''),
-          name: String(row?.name || '')
-        }))
-        .filter((row) => row.id && row.name)
+          const payload = await response.json().catch(() => [])
+          const rows = Array.isArray(payload) ? payload : []
+          return rows
+            .map((row) => ({
+              id: String(row?.id || ''),
+              name: String(row?.name || '')
+            }))
+            .filter((row) => row.id && row.name)
+        },
+        {
+          persist: true,
+          shouldCache: (rows) => Array.isArray(rows)
+        }
+      )
 
       setCompanies(normalized)
       setSelectedCompanyIds((previous) => {
@@ -598,7 +619,7 @@ export default function OperationsReportWorkspace({
       })
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to load companies')
-      setCompanies([])
+      setCompanies(getClientCache<CompanyRecord[]>(SHELL_COMPANIES_CACHE_KEY, SHELL_COMPANIES_CACHE_AGE_MS) || [])
     } finally {
       setLoadingCompanies(false)
     }
@@ -887,7 +908,8 @@ export default function OperationsReportWorkspace({
         row.ifscCode.toLowerCase().includes(query) ||
         row.accountNo.toLowerCase().includes(query) ||
         row.companyName.toLowerCase().includes(query) ||
-        row.direction.toLowerCase().includes(query)
+        row.direction.toLowerCase().includes(query) ||
+        row.note.toLowerCase().includes(query)
       )
     })
   }, [bankDirectionFilter, bankFilter, reportData?.bankLedger, searchTerm])
@@ -926,6 +948,41 @@ export default function OperationsReportWorkspace({
     [filteredLedgerRows]
   )
 
+  const bankLedgerOpeningBalance = useMemo(() => {
+    if (bankFilter !== 'all') {
+      return roundAmount(reportData?.meta?.openingBalances?.bankLedgerByBank?.[bankFilter] || 0)
+    }
+    return roundAmount(reportData?.meta?.openingBalances?.bankLedger || 0)
+  }, [bankFilter, reportData?.meta?.openingBalances?.bankLedger, reportData?.meta?.openingBalances?.bankLedgerByBank])
+  const bankLedgerClosingBalance = useMemo(
+    () => roundAmount(bankLedgerOpeningBalance + filteredBankLedger.reduce((sum, row) => sum + row.amountIn - row.amountOut, 0)),
+    [bankLedgerOpeningBalance, filteredBankLedger]
+  )
+  const bankLedgerTotalDebit = useMemo(
+    () => roundAmount(filteredBankLedger.reduce((sum, row) => sum + row.amountOut, 0)),
+    [filteredBankLedger]
+  )
+  const bankLedgerTotalCredit = useMemo(
+    () => roundAmount(filteredBankLedger.reduce((sum, row) => sum + row.amountIn, 0)),
+    [filteredBankLedger]
+  )
+  const cashLedgerOpeningBalance = useMemo(
+    () => roundAmount(reportData?.meta?.openingBalances?.cashLedger || 0),
+    [reportData?.meta?.openingBalances?.cashLedger]
+  )
+  const cashLedgerClosingBalance = useMemo(
+    () => roundAmount(cashLedgerOpeningBalance + filteredCashLedger.reduce((sum, row) => sum + row.amountIn - row.amountOut, 0)),
+    [cashLedgerOpeningBalance, filteredCashLedger]
+  )
+  const cashLedgerTotalDebit = useMemo(
+    () => roundAmount(filteredCashLedger.reduce((sum, row) => sum + row.amountOut, 0)),
+    [filteredCashLedger]
+  )
+  const cashLedgerTotalCredit = useMemo(
+    () => roundAmount(filteredCashLedger.reduce((sum, row) => sum + row.amountIn, 0)),
+    [filteredCashLedger]
+  )
+
   const bankLedgerStatementRows = useMemo(() => {
     const sortedRows = [...filteredBankLedger].sort(
       (a, b) =>
@@ -934,10 +991,10 @@ export default function OperationsReportWorkspace({
         a.id.localeCompare(b.id)
     )
 
-    let runningBalance = 0
+    let runningBalance = bankLedgerOpeningBalance
 
     return sortedRows.map((row) => {
-      runningBalance += Number(row.amountIn || 0) - Number(row.amountOut || 0)
+      runningBalance = roundAmount(runningBalance + Number(row.amountIn || 0) - Number(row.amountOut || 0))
       return {
         type: row.direction === 'IN' ? 'Receipt' : row.direction === 'OUT' ? 'Payment' : 'Transfer',
         date: formatDateLabel(row.date),
@@ -956,7 +1013,7 @@ export default function OperationsReportWorkspace({
         balance: formatLedgerBalance(runningBalance)
       }
     })
-  }, [filteredBankLedger, showCompanyColumn])
+  }, [bankLedgerOpeningBalance, filteredBankLedger, showCompanyColumn])
 
   const cashLedgerStatementRows = useMemo(() => {
     const sortedRows = [...filteredCashLedger].sort(
@@ -966,10 +1023,10 @@ export default function OperationsReportWorkspace({
         a.id.localeCompare(b.id)
     )
 
-    let runningBalance = 0
+    let runningBalance = cashLedgerOpeningBalance
 
     return sortedRows.map((row) => {
-      runningBalance += Number(row.amountIn || 0) - Number(row.amountOut || 0)
+      runningBalance = roundAmount(runningBalance + Number(row.amountIn || 0) - Number(row.amountOut || 0))
       return {
         type: row.direction === 'IN' ? 'Receipt' : row.direction === 'OUT' ? 'Payment' : 'Transfer',
         date: formatDateLabel(row.date),
@@ -988,34 +1045,8 @@ export default function OperationsReportWorkspace({
         balance: formatLedgerBalance(runningBalance)
       }
     })
-  }, [filteredCashLedger, showCompanyColumn])
+  }, [cashLedgerOpeningBalance, filteredCashLedger, showCompanyColumn])
 
-  const bankLedgerOpeningBalance = 0
-  const bankLedgerClosingBalance = useMemo(
-    () => filteredBankLedger.reduce((sum, row) => sum + row.amountIn - row.amountOut, 0),
-    [filteredBankLedger]
-  )
-  const bankLedgerTotalDebit = useMemo(
-    () => filteredBankLedger.reduce((sum, row) => sum + row.amountOut, 0),
-    [filteredBankLedger]
-  )
-  const bankLedgerTotalCredit = useMemo(
-    () => filteredBankLedger.reduce((sum, row) => sum + row.amountIn, 0),
-    [filteredBankLedger]
-  )
-  const cashLedgerOpeningBalance = 0
-  const cashLedgerClosingBalance = useMemo(
-    () => filteredCashLedger.reduce((sum, row) => sum + row.amountIn - row.amountOut, 0),
-    [filteredCashLedger]
-  )
-  const cashLedgerTotalDebit = useMemo(
-    () => filteredCashLedger.reduce((sum, row) => sum + row.amountOut, 0),
-    [filteredCashLedger]
-  )
-  const cashLedgerTotalCredit = useMemo(
-    () => filteredCashLedger.reduce((sum, row) => sum + row.amountIn, 0),
-    [filteredCashLedger]
-  )
   const selectedBankLabel = bankFilter === 'all' ? 'All Banks' : bankFilter
   const selectedCompanySummary = useMemo(() => {
     const targetIds = reportData?.meta?.companyIds?.length ? reportData.meta.companyIds : selectedCompanyIds

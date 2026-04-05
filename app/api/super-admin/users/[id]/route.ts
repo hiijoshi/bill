@@ -197,6 +197,13 @@ export async function PUT(
         return NextResponse.json({ error: 'Trader is locked' }, { status: 403 })
       }
 
+      if (!traderCapacity.canManageUsers) {
+        return NextResponse.json(
+          { error: traderCapacity.subscriptionMessage || 'Trader subscription does not allow user changes' },
+          { status: 403 }
+        )
+      }
+
       if (
         traderCapacity.maxUsers !== null &&
         traderCapacity.currentUsers >= traderCapacity.maxUsers

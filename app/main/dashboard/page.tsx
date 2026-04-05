@@ -34,7 +34,7 @@ import {
 import StockManagementTab from './components/StockManagementTab'
 import PaymentTab from './components/PaymentTab'
 import ReportsTab from './components/ReportsTab'
-import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { getClientCache, getOrLoadClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { APP_COMPANY_CHANGED_EVENT, notifyAppCompanyChanged, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { getReadablePermissionModules, resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
 import { loadClientPermissions } from '@/lib/client-permissions'
@@ -417,40 +417,47 @@ export default function MainDashboardPage() {
   }, [])
 
   const loadCompanies = useCallback(async (force = false) => {
-    const cached = force ? null : getClientCache<CompanyOption[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS)
-    if (cached) {
-      return cached
+    try {
+      return await getOrLoadClientCache<CompanyOption[]>(
+        COMPANIES_CACHE_KEY,
+        COMPANIES_CACHE_AGE_MS,
+        async () => {
+          const res = await fetch('/api/companies', { cache: 'no-store' })
+          if (!res.ok) {
+            if (res.status === 401) {
+              router.push('/login')
+            }
+            const raw = await res.text().catch(() => '')
+            if (res.status >= 500) {
+              console.error('Failed to load companies API', {
+                status: res.status,
+                preview: raw.slice(0, 120)
+              })
+            }
+            throw new Error('Failed to load companies')
+          }
+          const contentType = res.headers.get('content-type') || ''
+          if (!contentType.includes('application/json')) {
+            return []
+          }
+          const rows = await parseApiJson<Array<Record<string, unknown>>>(res, [])
+          return Array.isArray(rows)
+            ? rows.map((row) => ({
+                id: String(row.id),
+                name: String(row.name || row.id),
+                locked: Boolean(row.locked)
+              }))
+            : []
+        },
+        {
+          persist: true,
+          force,
+          shouldCache: (data) => Array.isArray(data)
+        }
+      )
+    } catch {
+      return getClientCache<CompanyOption[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS) || []
     }
-
-    const res = await fetch('/api/companies', { cache: 'no-store' })
-    if (!res.ok) {
-      if (res.status === 401) {
-        router.push('/login')
-        return []
-      }
-      const raw = await res.text().catch(() => '')
-      if (res.status >= 500) {
-        console.error('Failed to load companies API', {
-          status: res.status,
-          preview: raw.slice(0, 120)
-        })
-      }
-      return []
-    }
-    const contentType = res.headers.get('content-type') || ''
-    if (!contentType.includes('application/json')) {
-      return []
-    }
-    const rows = await parseApiJson<Array<Record<string, unknown>>>(res, [])
-    const normalized = Array.isArray(rows)
-      ? rows.map((row) => ({
-          id: String(row.id),
-          name: String(row.name || row.id),
-          locked: Boolean(row.locked)
-        }))
-      : []
-    setClientCache(COMPANIES_CACHE_KEY, normalized, { persist: true })
-    return normalized
   }, [router])
 
   const loadCurrentCompanyOption = useCallback(async (force = false): Promise<CompanyOption | null> => {
@@ -461,43 +468,77 @@ export default function MainDashboardPage() {
     }
 
     try {
-      const activeResponse = await fetch('/api/auth/company', { cache: 'no-store' })
-      if (activeResponse.ok) {
-        const activePayload = await parseApiJson<AuthCompanyPayload>(activeResponse, {})
-        const companyId = String(activePayload.company?.id || '').trim()
-        if (companyId) {
-          setClientCache(ACTIVE_COMPANY_CACHE_KEY, companyId, { persist: true })
-          return {
-            id: companyId,
-            name: String(activePayload.company?.name || companyId).trim() || companyId
+      const companyId = await getOrLoadClientCache<string>(
+        ACTIVE_COMPANY_CACHE_KEY,
+        ACTIVE_COMPANY_CACHE_AGE_MS,
+        async () => {
+          try {
+            const activeResponse = await fetch('/api/auth/company', { cache: 'no-store' })
+            if (activeResponse.ok) {
+              const activePayload = await parseApiJson<AuthCompanyPayload>(activeResponse, {})
+              const activeCompanyId = String(activePayload.company?.id || '').trim()
+              if (activeCompanyId) {
+                return activeCompanyId
+              }
+            }
+          } catch {
+            // fall through to /api/auth/me
           }
-        }
-      }
-    } catch {
-      // fall through to /api/auth/me
-    }
 
-    try {
-      const authResponse = await fetch('/api/auth/me', { cache: 'no-store' })
-      if (!authResponse.ok) {
-        if (authResponse.status === 401) {
-          router.push('/login')
+          const authPayload = await getOrLoadClientCache<AuthCompanyPayload | null>(
+            AUTH_CACHE_KEY,
+            AUTH_CACHE_AGE_MS,
+            async () => {
+              const authResponse = await fetch('/api/auth/me', { cache: 'no-store' })
+              if (authResponse.status === 401) {
+                router.push('/login')
+                return null
+              }
+              if (!authResponse.ok) {
+                throw new Error('Failed to load auth session')
+              }
+              return await parseApiJson<AuthCompanyPayload>(authResponse, {})
+            },
+            {
+              persist: true,
+              force,
+              shouldCache: (data) => Boolean(data && (data.user || data.company))
+            }
+          )
+
+          const fallbackCompanyId = String(
+            authPayload?.company?.id ||
+            authPayload?.user?.companyId ||
+            authPayload?.user?.assignedCompanyId ||
+            ''
+          ).trim()
+
+          if (!fallbackCompanyId) {
+            throw new Error('No active company')
+          }
+
+          return fallbackCompanyId
+        },
+        {
+          persist: true,
+          force,
+          shouldCache: (value) => Boolean(String(value || '').trim())
         }
+      )
+
+      if (!companyId) {
         return null
       }
-      const authPayload = await parseApiJson<AuthCompanyPayload>(authResponse, {})
-      setClientCache(AUTH_CACHE_KEY, authPayload, { persist: true })
-      const companyId = String(
-        authPayload.company?.id ||
-        authPayload.user?.companyId ||
-        authPayload.user?.assignedCompanyId ||
-        ''
-      ).trim()
-      if (!companyId) return null
-      setClientCache(ACTIVE_COMPANY_CACHE_KEY, companyId, { persist: true })
+
+      const authPayload = getClientCache<AuthCompanyPayload>(AUTH_CACHE_KEY, AUTH_CACHE_AGE_MS)
       return {
         id: companyId,
-        name: String(authPayload.company?.name || companyId).trim() || companyId
+        name:
+          (String(authPayload?.company?.id || '').trim() === companyId
+            ? String(authPayload?.company?.name || '').trim()
+            : '') ||
+          cachedCompanies.find((company) => company.id === companyId)?.name ||
+          companyId
       }
     } catch {
       return null
@@ -548,7 +589,7 @@ export default function MainDashboardPage() {
     }
   }, [applyCompanySelection, dashboardAccessResolved, getCachedCurrentCompanyOption, hasDashboardAccess, primeDashboardFromCache])
 
-  const fetchDashboardData = useCallback(async (companyIds: string[]) => {
+  const fetchDashboardData = useCallback(async (companyIds: string[], options: { force?: boolean } = {}) => {
     if (companyIds.length === 0) {
       setData(emptyDashboardPayload)
       setFetchFailures([])
@@ -563,98 +604,115 @@ export default function MainDashboardPage() {
       params.set('companyIds', companyIds.join(','))
     }
 
-    try {
-      const response = await fetch(`/api/main-dashboard/overview?${params.toString()}`, { cache: 'no-store' })
-      const payload = await parseApiJson<Partial<DashboardPayload> & { error?: string }>(response, {})
-      if (!response.ok) {
-        if (response.status === 403) {
-          setHasDashboardAccess(false)
-          setDashboardAccessResolved(true)
-          setData(emptyDashboardPayload)
-          setFetchFailures([])
-          await redirectToAccessibleRoute(companyIds[0] || primaryCompanyId)
-          return
-        }
-        setFetchFailures([payload.error || 'dashboard overview'])
-        setData(emptyDashboardPayload)
-        return
-      }
+    const cacheKey = buildDashboardCacheKey(companyIds)
 
-      const nextData: DashboardPayload = {
-        purchaseBills: Array.isArray(payload.purchaseBills) ? payload.purchaseBills : [],
-        salesBills: Array.isArray(payload.salesBills) ? payload.salesBills : [],
-        payments: Array.isArray(payload.payments) ? payload.payments : [],
-        products: Array.isArray(payload.products) ? payload.products : [],
-        parties: Array.isArray(payload.parties) ? payload.parties : [],
-        units: Array.isArray(payload.units) ? payload.units : [],
-        stockLedger: Array.isArray(payload.stockLedger) ? payload.stockLedger : [],
-        summary: {
-          purchase: {
-            total: clampNonNegative(payload.summary?.purchase?.total ?? 0),
-            paid: clampNonNegative(payload.summary?.purchase?.paid ?? 0),
-            pending: clampNonNegative(payload.summary?.purchase?.pending ?? 0),
-            count: clampNonNegative(payload.summary?.purchase?.count ?? 0)
-          },
-          sales: {
-            total: clampNonNegative(payload.summary?.sales?.total ?? 0),
-            received: clampNonNegative(payload.summary?.sales?.received ?? 0),
-            pending: clampNonNegative(payload.summary?.sales?.pending ?? 0),
-            count: clampNonNegative(payload.summary?.sales?.count ?? 0)
-          },
-          cashflow: {
-            inAmount: clampNonNegative(payload.summary?.cashflow?.inAmount ?? 0),
-            outAmount: clampNonNegative(payload.summary?.cashflow?.outAmount ?? 0),
-            net: clampNonNegative(payload.summary?.cashflow?.net ?? 0),
-            count: clampNonNegative(payload.summary?.cashflow?.count ?? 0)
-          },
-          masterRecords: {
-            products: clampNonNegative(payload.summary?.masterRecords?.products ?? 0),
-            parties: clampNonNegative(payload.summary?.masterRecords?.parties ?? 0),
-            units: clampNonNegative(payload.summary?.masterRecords?.units ?? 0)
-          },
-          inventory: {
-            stockEntries: clampNonNegative(payload.summary?.inventory?.stockEntries ?? 0),
-            lowStock: clampNonNegative(payload.summary?.inventory?.lowStock ?? 0),
-            lowStockItems: Array.isArray(payload.summary?.inventory?.lowStockItems)
-              ? payload.summary.inventory.lowStockItems.map((item) => ({
-                  name: String(item?.name || 'Unknown Product'),
-                  balance: Number(item?.balance || 0)
+    try {
+      const nextData = await getOrLoadClientCache<DashboardPayload>(
+        cacheKey,
+        DASHBOARD_CACHE_AGE_MS,
+        async () => {
+          const response = await fetch(`/api/main-dashboard/overview?${params.toString()}`, { cache: 'no-store' })
+          const payload = await parseApiJson<Partial<DashboardPayload> & { error?: string }>(response, {})
+          if (!response.ok) {
+            const error = new Error(payload.error || 'dashboard overview') as Error & { status?: number }
+            error.status = response.status
+            throw error
+          }
+
+          return {
+            purchaseBills: Array.isArray(payload.purchaseBills) ? payload.purchaseBills : [],
+            salesBills: Array.isArray(payload.salesBills) ? payload.salesBills : [],
+            payments: Array.isArray(payload.payments) ? payload.payments : [],
+            products: Array.isArray(payload.products) ? payload.products : [],
+            parties: Array.isArray(payload.parties) ? payload.parties : [],
+            units: Array.isArray(payload.units) ? payload.units : [],
+            stockLedger: Array.isArray(payload.stockLedger) ? payload.stockLedger : [],
+            summary: {
+              purchase: {
+                total: clampNonNegative(payload.summary?.purchase?.total ?? 0),
+                paid: clampNonNegative(payload.summary?.purchase?.paid ?? 0),
+                pending: clampNonNegative(payload.summary?.purchase?.pending ?? 0),
+                count: clampNonNegative(payload.summary?.purchase?.count ?? 0)
+              },
+              sales: {
+                total: clampNonNegative(payload.summary?.sales?.total ?? 0),
+                received: clampNonNegative(payload.summary?.sales?.received ?? 0),
+                pending: clampNonNegative(payload.summary?.sales?.pending ?? 0),
+                count: clampNonNegative(payload.summary?.sales?.count ?? 0)
+              },
+              cashflow: {
+                inAmount: clampNonNegative(payload.summary?.cashflow?.inAmount ?? 0),
+                outAmount: clampNonNegative(payload.summary?.cashflow?.outAmount ?? 0),
+                net: clampNonNegative(payload.summary?.cashflow?.net ?? 0),
+                count: clampNonNegative(payload.summary?.cashflow?.count ?? 0)
+              },
+              masterRecords: {
+                products: clampNonNegative(payload.summary?.masterRecords?.products ?? 0),
+                parties: clampNonNegative(payload.summary?.masterRecords?.parties ?? 0),
+                units: clampNonNegative(payload.summary?.masterRecords?.units ?? 0)
+              },
+              inventory: {
+                stockEntries: clampNonNegative(payload.summary?.inventory?.stockEntries ?? 0),
+                lowStock: clampNonNegative(payload.summary?.inventory?.lowStock ?? 0),
+                lowStockItems: Array.isArray(payload.summary?.inventory?.lowStockItems)
+                  ? payload.summary.inventory.lowStockItems.map((item) => ({
+                      name: String(item?.name || 'Unknown Product'),
+                      balance: Number(item?.balance || 0)
+                    }))
+                  : []
+              },
+              notifications: {
+                pendingBills: clampNonNegative(payload.summary?.notifications?.pendingBills ?? 0)
+              }
+            },
+            companyPerformance: Array.isArray(payload.companyPerformance)
+              ? payload.companyPerformance.map((row) => ({
+                  id: String(row.id || ''),
+                  name: String(row.name || 'Unknown Company'),
+                  purchaseTotal: clampNonNegative(row.purchaseTotal || 0),
+                  salesTotal: clampNonNegative(row.salesTotal || 0),
+                  paymentIn: clampNonNegative(row.paymentIn || 0),
+                  paymentOut: clampNonNegative(row.paymentOut || 0),
+                  purchaseBills: clampNonNegative(row.purchaseBills || 0),
+                  salesBills: clampNonNegative(row.salesBills || 0),
+                  cashflow: clampNonNegative(row.cashflow || 0)
+                }))
+              : [],
+            trendData: Array.isArray(payload.trendData)
+              ? payload.trendData.map((row) => ({
+                  day: String(row.day || ''),
+                  purchase: clampNonNegative(row.purchase || 0),
+                  sales: clampNonNegative(row.sales || 0),
+                  payment: clampNonNegative(row.payment || 0)
                 }))
               : []
-          },
-          notifications: {
-            pendingBills: clampNonNegative(payload.summary?.notifications?.pendingBills ?? 0)
           }
         },
-        companyPerformance: Array.isArray(payload.companyPerformance)
-          ? payload.companyPerformance.map((row) => ({
-              id: String(row.id || ''),
-              name: String(row.name || 'Unknown Company'),
-              purchaseTotal: clampNonNegative(row.purchaseTotal || 0),
-              salesTotal: clampNonNegative(row.salesTotal || 0),
-              paymentIn: clampNonNegative(row.paymentIn || 0),
-              paymentOut: clampNonNegative(row.paymentOut || 0),
-              purchaseBills: clampNonNegative(row.purchaseBills || 0),
-              salesBills: clampNonNegative(row.salesBills || 0),
-              cashflow: clampNonNegative(row.cashflow || 0)
-            }))
-          : [],
-        trendData: Array.isArray(payload.trendData)
-          ? payload.trendData.map((row) => ({
-              day: String(row.day || ''),
-              purchase: clampNonNegative(row.purchase || 0),
-              sales: clampNonNegative(row.sales || 0),
-              payment: clampNonNegative(row.payment || 0)
-            }))
-          : []
-      }
-
+        {
+          persist: true,
+          force: options.force,
+          shouldCache: (payload) => Boolean(payload)
+        }
+      )
       setData(nextData)
       setFetchFailures([])
-      setClientCache(buildDashboardCacheKey(companyIds), nextData, { persist: true })
-    } catch {
-      setData(emptyDashboardPayload)
-      setFetchFailures(['dashboard overview'])
+    } catch (error) {
+      const status = typeof error === 'object' && error && 'status' in error ? Number((error as { status?: number }).status || 0) : 0
+      if (status === 403) {
+        setHasDashboardAccess(false)
+        setDashboardAccessResolved(true)
+        setData(emptyDashboardPayload)
+        setFetchFailures([])
+        await redirectToAccessibleRoute(companyIds[0] || primaryCompanyId)
+        return
+      }
+      const fallback = getClientCache<DashboardPayload>(cacheKey, DASHBOARD_CACHE_AGE_MS)
+      if (fallback) {
+        setData(fallback)
+      } else {
+        setData(emptyDashboardPayload)
+      }
+      setFetchFailures([error instanceof Error ? error.message : 'dashboard overview'])
     }
   }, [primaryCompanyId, redirectToAccessibleRoute])
 
@@ -770,7 +828,7 @@ export default function MainDashboardPage() {
       )
 
       if (!shouldRefresh) return
-      void fetchDashboardData(selectedCompanyIds)
+      void fetchDashboardData(selectedCompanyIds, { force: true })
     })
 
     return unsubscribe

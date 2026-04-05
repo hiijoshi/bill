@@ -7,6 +7,7 @@ import {
   normalizeId,
   requireRoles
 } from '@/lib/api-security'
+import { getCompanySubscriptionAccess, getSubscriptionAccessMessage, isModuleEnabledForEntitlement } from '@/lib/subscription-core'
 import { createBankEntryProvider, SUPPORTED_BANK_SYNC_PROVIDERS } from '@/lib/bank-integration'
 import { normalizeNonNegative, roundCurrency } from '@/lib/billing-calculations'
 import {
@@ -16,6 +17,7 @@ import {
   normalizePartyOpeningBalanceType
 } from '@/lib/party-opening-balance'
 import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-schema'
+import { JOURNAL_VOUCHER_BILL_TYPE } from '@/lib/journal-vouchers'
 import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
 import {
   getPaymentTypeLabel,
@@ -60,6 +62,43 @@ type OutstandingAccumulator = {
   invoiceCount: number
   oldestBillDate: string
   lastBillDate: string
+}
+
+type JournalVoucherLedgerRow = {
+  id: string
+  companyId: string
+  entryDate: Date
+  billId: string
+  direction: string
+  amount: number
+  accountHeadNameSnapshot: string | null
+  accountGroupSnapshot: string | null
+  counterpartyNameSnapshot: string | null
+  note: string | null
+}
+
+type PaymentLedgerRow = {
+  id: string
+  companyId: string
+  billType: string
+  billId: string
+  payDate: Date
+  amount: number
+  mode: string | null
+  cashAmount?: number | null
+  onlinePayAmount?: number | null
+  ifscCode?: string | null
+  beneficiaryBankAccount?: string | null
+  bankNameSnapshot?: string | null
+  bankBranchSnapshot?: string | null
+  txnRef?: string | null
+  note?: string | null
+  party?: {
+    name?: string | null
+  } | null
+  farmer?: {
+    name?: string | null
+  } | null
 }
 
 type OperationsReportView =
@@ -377,6 +416,18 @@ function formatPaymentMode(mode: string | null | undefined): string {
   return normalized
 }
 
+function normalizeLedgerDirection(value: string | null | undefined): 'debit' | 'credit' {
+  return String(value || '').trim().toLowerCase() === 'credit' ? 'credit' : 'debit'
+}
+
+function isBankJournalVoucherEntry(entry: { accountGroupSnapshot?: string | null }): boolean {
+  return String(entry.accountGroupSnapshot || '').trim().toUpperCase() === 'BANK'
+}
+
+function isCashJournalVoucherEntry(entry: { accountGroupSnapshot?: string | null }): boolean {
+  return String(entry.accountGroupSnapshot || '').trim().toUpperCase() === 'CASH'
+}
+
 export async function GET(request: NextRequest) {
   const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin', 'company_user'])
   if (!authResult.ok) return authResult.response
@@ -476,6 +527,19 @@ export async function GET(request: NextRequest) {
 
     if (targetCompanyIds.length === 0) {
       return NextResponse.json({ error: 'Requested company is outside your report access scope' }, { status: 403 })
+    }
+
+    if (authResult.auth.role !== 'super_admin') {
+      const subscriptionAccess = await getCompanySubscriptionAccess(prisma, targetCompanyIds[0])
+      if (
+        subscriptionAccess &&
+        !isModuleEnabledForEntitlement(subscriptionAccess.entitlement, 'REPORTS', 'read')
+      ) {
+        return NextResponse.json(
+          { error: getSubscriptionAccessMessage(subscriptionAccess.entitlement, 'REPORTS') },
+          { status: 403 }
+        )
+      }
     }
 
     if (
@@ -598,11 +662,13 @@ export async function GET(request: NextRequest) {
     }
 
       const needsLedgerView = requestedView === 'ledger'
+      const needsOutstandingView = requestedView === 'outstanding'
       const needsDailyView = requestedView === 'daily-transaction' || requestedView === 'daily-consolidated'
       const needsBankLedgerView = requestedView === 'bank-ledger'
       const needsCashLedgerView = requestedView === 'cash-ledger'
       const needsDetailedPayments = needsDailyView || needsBankLedgerView || needsCashLedgerView
-      const needsPartyBalances = requestedView === 'outstanding' || needsLedgerView
+      const needsPartyBalances = needsOutstandingView || needsLedgerView
+      const needsSummary = needsOutstandingView
 
       const [
       salesTotalAggregate,
@@ -614,6 +680,7 @@ export async function GET(request: NextRequest) {
       purchaseBills,
       specialPurchaseBills,
       payments,
+      journalVoucherEntries,
       stockAdjustments,
       parties,
       masterBanks,
@@ -623,38 +690,48 @@ export async function GET(request: NextRequest) {
       specialPurchaseBillsAsOf,
       paymentsAsOf
       ] = await Promise.all([
-      prisma.salesBill.aggregate({
-        where: salesWhere,
-        _sum: {
-          totalAmount: true
-        }
-      }),
-      prisma.purchaseBill.aggregate({
-        where: purchaseWhere,
-        _sum: {
-          totalAmount: true
-        }
-      }),
-      prisma.specialPurchaseBill.aggregate({
-        where: purchaseWhere,
-        _sum: {
-          totalAmount: true
-        }
-      }),
-      prisma.payment.groupBy({
-        by: ['billType'],
-        where: paymentWhere,
-        _sum: {
-          amount: true
-        }
-      }),
-      prisma.stockLedger.aggregate({
-        where: stockAdjustmentWhere,
-        _sum: {
-          qtyIn: true,
-          qtyOut: true
-        }
-      }),
+      needsSummary
+        ? prisma.salesBill.aggregate({
+            where: salesWhere,
+            _sum: {
+              totalAmount: true
+            }
+          })
+        : Promise.resolve({ _sum: { totalAmount: 0 } }),
+      needsSummary
+        ? prisma.purchaseBill.aggregate({
+            where: purchaseWhere,
+            _sum: {
+              totalAmount: true
+            }
+          })
+        : Promise.resolve({ _sum: { totalAmount: 0 } }),
+      needsSummary
+        ? prisma.specialPurchaseBill.aggregate({
+            where: purchaseWhere,
+            _sum: {
+              totalAmount: true
+            }
+          })
+        : Promise.resolve({ _sum: { totalAmount: 0 } }),
+      needsSummary
+        ? prisma.payment.groupBy({
+            by: ['billType'],
+            where: paymentWhere,
+            _sum: {
+              amount: true
+            }
+          })
+        : Promise.resolve([]),
+      needsSummary
+        ? prisma.stockLedger.aggregate({
+            where: stockAdjustmentWhere,
+            _sum: {
+              qtyIn: true,
+              qtyOut: true
+            }
+          })
+        : Promise.resolve({ _sum: { qtyIn: 0, qtyOut: 0 } }),
       needsDailyView
         ? prisma.salesBill.findMany({
         where: salesWhere,
@@ -801,6 +878,35 @@ export async function GET(request: NextRequest) {
         orderBy: [{ payDate: 'desc' }, { createdAt: 'desc' }]
       })
         : Promise.resolve([]),
+      needsBankLedgerView || needsCashLedgerView
+        ? prisma.ledgerEntry.findMany({
+            where: {
+              companyId: { in: targetCompanyIds },
+              billType: JOURNAL_VOUCHER_BILL_TYPE,
+              ...(dateFrom || dateTo
+                ? {
+                    entryDate: {
+                      ...(dateFrom ? { gte: dateFrom } : {}),
+                      ...(dateTo ? { lte: dateTo } : {})
+                    }
+                  }
+                : {})
+            },
+            select: {
+              id: true,
+              companyId: true,
+              entryDate: true,
+              billId: true,
+              direction: true,
+              amount: true,
+              accountHeadNameSnapshot: true,
+              accountGroupSnapshot: true,
+              counterpartyNameSnapshot: true,
+              note: true
+            },
+            orderBy: [{ entryDate: 'desc' }, { createdAt: 'desc' }]
+          })
+        : Promise.resolve([] as JournalVoucherLedgerRow[]),
       needsDailyView
         ? prisma.stockLedger.findMany({
         where: stockAdjustmentWhere,
@@ -884,48 +990,56 @@ export async function GET(request: NextRequest) {
             )
           )
         : Promise.resolve([]),
-      prisma.salesBill.findMany({
-        where: salesOutstandingWhere,
-        select: {
-          id: true,
-          companyId: true,
-          billDate: true,
-          totalAmount: true,
-          partyId: true,
-          party: {
+      needsPartyBalances
+        ? prisma.salesBill.findMany({
+            where: salesOutstandingWhere,
             select: {
               id: true,
-              name: true,
-              address: true,
-              phone1: true
+              companyId: true,
+              billDate: true,
+              totalAmount: true,
+              partyId: true,
+              party: {
+                select: {
+                  id: true,
+                  name: true,
+                  address: true,
+                  phone1: true
+                }
+              }
+            },
+            orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }]
+          })
+        : Promise.resolve([]),
+      needsSummary
+        ? prisma.purchaseBill.findMany({
+            where: purchaseOutstandingWhere,
+            select: {
+              id: true,
+              companyId: true,
+              totalAmount: true
             }
-          }
-        },
-        orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }]
-      }),
-      prisma.purchaseBill.findMany({
-        where: purchaseOutstandingWhere,
-        select: {
-          id: true,
-          companyId: true,
-          totalAmount: true
-        }
-      }),
-      prisma.specialPurchaseBill.findMany({
-        where: purchaseOutstandingWhere,
-        select: {
-          id: true,
-          companyId: true,
-          totalAmount: true
-        }
-      }),
-      prisma.payment.groupBy({
-        by: ['billType', 'billId'],
-        where: paymentOutstandingWhere,
-        _sum: {
-          amount: true
-        }
-      })
+          })
+        : Promise.resolve([]),
+      needsSummary
+        ? prisma.specialPurchaseBill.findMany({
+            where: purchaseOutstandingWhere,
+            select: {
+              id: true,
+              companyId: true,
+              totalAmount: true
+            }
+          })
+        : Promise.resolve([]),
+      needsPartyBalances
+        ? prisma.payment.groupBy({
+            by: ['billType', 'billId'],
+            where: paymentOutstandingWhere,
+            _sum: {
+              amount: true
+            }
+          })
+        : Promise.resolve([])
     ])
 
       const purchasePaymentBillIds = Array.from(
@@ -1045,6 +1159,260 @@ export async function GET(request: NextRequest) {
         ...referencedSuppliers.map((supplier) => [`supplier:${supplier.id}`, supplier.name || ''] as const)
       ])
 
+      const mapPaymentToBankLedgerRows = (payment: PaymentLedgerRow) => {
+        if (!isBankLikePayment(payment)) {
+          return []
+        }
+
+        const isIncomingReceipt = isIncomingCashflowPaymentType(payment.billType)
+        const isOutgoingPayment = isOutgoingCashflowPaymentType(payment.billType)
+        const isSelfTransfer = isSelfTransferPaymentType(payment.billType)
+        const amount = roundCurrency(normalizeNonNegative(payment.amount))
+        const billNo = isIncomingReceipt
+          ? String(salesBillNoMap.get(payment.billId) || '')
+          : payment.billType === 'purchase'
+            ? String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || '')
+            : ''
+        const referenceNo = billNo || String(payment.txnRef || '')
+        const transferDescription = [payment.bankNameSnapshot, payment.bankBranchSnapshot]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+          .join(' -> ')
+
+        if (isSelfTransfer) {
+          const fromLabel = normalizeTransferAccountLabel(payment.bankNameSnapshot)
+          const toLabel = normalizeTransferAccountLabel(payment.bankBranchSnapshot)
+          const fromCash = isCashDescriptor(fromLabel)
+          const toCash = isCashDescriptor(toLabel)
+
+          if (!fromCash && !toCash && (fromLabel || toLabel)) {
+            const sourceMatches = matchMasterBankLabels({
+              masterBanks: masterBankRecords,
+              nameSnapshot: fromLabel
+            })
+            const destinationMatches = matchMasterBankLabels({
+              masterBanks: masterBankRecords,
+              nameSnapshot: toLabel
+            })
+
+            return [
+              {
+                id: `${payment.id}:source`,
+                date: dateKey(payment.payDate),
+                companyId: payment.companyId,
+                companyName: companyNameMap.get(payment.companyId) || payment.companyId,
+                direction: 'TRANSFER' as const,
+                billType: getPaymentTypeLabel(payment.billType),
+                billNo,
+                refNo: referenceNo,
+                partyName: `Transfer to ${toLabel || 'Bank'}`,
+                bankName: sourceMatches[0] || fromLabel || 'Bank',
+                bankFilterValues: sourceMatches.length > 0 ? sourceMatches : [sourceMatches[0] || fromLabel || 'Bank'],
+                mode: formatPaymentMode(payment.mode),
+                amountIn: 0,
+                amountOut: amount,
+                txnRef: String(payment.txnRef || ''),
+                ifscCode: '',
+                accountNo: '',
+                note: String(payment.note || transferDescription || '').trim()
+              },
+              {
+                id: `${payment.id}:destination`,
+                date: dateKey(payment.payDate),
+                companyId: payment.companyId,
+                companyName: companyNameMap.get(payment.companyId) || payment.companyId,
+                direction: 'TRANSFER' as const,
+                billType: getPaymentTypeLabel(payment.billType),
+                billNo,
+                refNo: referenceNo,
+                partyName: `Transfer from ${fromLabel || 'Bank'}`,
+                bankName: destinationMatches[0] || toLabel || 'Bank',
+                bankFilterValues: destinationMatches.length > 0 ? destinationMatches : [destinationMatches[0] || toLabel || 'Bank'],
+                mode: formatPaymentMode(payment.mode),
+                amountIn: amount,
+                amountOut: 0,
+                txnRef: String(payment.txnRef || ''),
+                ifscCode: '',
+                accountNo: '',
+                note: String(payment.note || transferDescription || '').trim()
+              }
+            ]
+          }
+        }
+
+        const selfTransferSide = isSelfTransfer ? resolveSelfTransferSide(payment, 'bank') : null
+        const matchedMasterBankLabels = isSelfTransfer
+          ? Array.from(
+              new Set(
+                [payment.bankNameSnapshot, payment.bankBranchSnapshot]
+                  .map((value) =>
+                    matchMasterBankLabels({
+                      masterBanks: masterBankRecords,
+                      nameSnapshot: value
+                    })
+                  )
+                  .flat()
+                  .filter((value) => value && !isCashDescriptor(value))
+              )
+            )
+          : matchMasterBankLabels({
+              masterBanks: masterBankRecords,
+              nameSnapshot: payment.bankNameSnapshot,
+              branchSnapshot: payment.bankBranchSnapshot,
+              ifscCode: payment.ifscCode,
+              accountNumber: payment.beneficiaryBankAccount
+            })
+        const amountIn = isSelfTransfer
+          ? roundCurrency(amount * Number(selfTransferSide?.amountIn || 0))
+          : roundCurrency(isIncomingReceipt ? amount : 0)
+        const amountOut = isSelfTransfer
+          ? roundCurrency(amount * Number(selfTransferSide?.amountOut || 0))
+          : roundCurrency(isOutgoingPayment ? amount : 0)
+        const bankLabel = isSelfTransfer
+          ? matchedMasterBankLabels.join(' -> ') || selfTransferSide?.accountName || 'Bank Transfer'
+          : matchedMasterBankLabels[0] || String(payment.bankNameSnapshot || '').trim() || 'Bank / Online'
+
+        return [
+          {
+            id: payment.id,
+            date: dateKey(payment.payDate),
+            companyId: payment.companyId,
+            companyName: companyNameMap.get(payment.companyId) || payment.companyId,
+            direction: selfTransferSide?.direction || (isIncomingReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-'),
+            billType: getPaymentTypeLabel(payment.billType),
+            billNo,
+            refNo: referenceNo,
+            partyName: isSelfTransfer
+              ? selfTransferSide?.description || transferDescription
+              : String(payment.party?.name || payment.farmer?.name || getCashBankTargetLabel(payment.billId) || payment.bankNameSnapshot || ''),
+            bankName: bankLabel,
+            bankFilterValues: matchedMasterBankLabels,
+            mode: formatPaymentMode(payment.mode),
+            amountIn,
+            amountOut,
+            txnRef: String(payment.txnRef || ''),
+            ifscCode: String(payment.ifscCode || ''),
+            accountNo: String(payment.beneficiaryBankAccount || ''),
+            note: String(payment.note || payment.bankBranchSnapshot || '')
+          }
+        ]
+      }
+
+      const mapPaymentToCashLedgerRows = (payment: PaymentLedgerRow) => {
+        if (!isCashLikePayment(payment)) {
+          return []
+        }
+
+        const isIncomingReceipt = isIncomingCashflowPaymentType(payment.billType)
+        const isOutgoingPayment = isOutgoingCashflowPaymentType(payment.billType)
+        const isSelfTransfer = isSelfTransferPaymentType(payment.billType)
+        const amount = roundCurrency(normalizeNonNegative(payment.amount))
+        const selfTransferSide = isSelfTransfer ? resolveSelfTransferSide(payment, 'cash') : null
+        const billNo = isIncomingReceipt
+          ? String(salesBillNoMap.get(payment.billId) || '')
+          : payment.billType === 'purchase'
+            ? String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || '')
+            : ''
+        const amountIn = isSelfTransfer
+          ? roundCurrency(amount * Number(selfTransferSide?.amountIn || 0))
+          : roundCurrency(isIncomingReceipt ? amount : 0)
+        const amountOut = isSelfTransfer
+          ? roundCurrency(amount * Number(selfTransferSide?.amountOut || 0))
+          : roundCurrency(isOutgoingPayment ? amount : 0)
+
+        return [
+          {
+            id: payment.id,
+            date: dateKey(payment.payDate),
+            companyId: payment.companyId,
+            companyName: companyNameMap.get(payment.companyId) || payment.companyId,
+            direction: selfTransferSide?.direction || (isIncomingReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-'),
+            billType: getPaymentTypeLabel(payment.billType),
+            billNo,
+            refNo: billNo || String(payment.txnRef || ''),
+            partyName: isSelfTransfer
+              ? selfTransferSide?.description || [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
+              : String(payment.party?.name || payment.farmer?.name || getCashBankTargetLabel(payment.billId) || payment.bankNameSnapshot || 'Cash'),
+            bankName: isSelfTransfer
+              ? selfTransferSide?.accountName || 'Cash'
+              : String(payment.bankNameSnapshot || '').trim() || 'Cash',
+            mode: formatPaymentMode(payment.mode),
+            amountIn,
+            amountOut,
+            txnRef: String(payment.txnRef || ''),
+            ifscCode: '',
+            accountNo: '',
+            note: String(payment.note || '').trim() || (isSelfTransfer ? selfTransferSide?.description || 'Cash transfer' : formatPaymentMode(payment.mode))
+          }
+        ]
+      }
+
+      const mapJournalVoucherToBankLedgerRows = (entry: JournalVoucherLedgerRow) => {
+        if (!isBankJournalVoucherEntry(entry)) {
+          return []
+        }
+
+        const bankLabel = String(entry.accountHeadNameSnapshot || '').trim() || 'Bank'
+        const matchedMasterBankLabels = matchMasterBankLabels({
+          masterBanks: masterBankRecords,
+          nameSnapshot: bankLabel
+        })
+        const direction = normalizeLedgerDirection(entry.direction) === 'debit' ? 'IN' : 'OUT'
+
+        return [
+          {
+            id: entry.id,
+            date: dateKey(entry.entryDate),
+            companyId: entry.companyId,
+            companyName: companyNameMap.get(entry.companyId) || entry.companyId,
+            direction,
+            billType: 'Journal Voucher',
+            billNo: String(entry.billId || '').trim(),
+            refNo: String(entry.billId || '').trim(),
+            partyName: String(entry.counterpartyNameSnapshot || '').trim() || 'Journal Voucher',
+            bankName: matchedMasterBankLabels[0] || bankLabel,
+            bankFilterValues: matchedMasterBankLabels.length > 0 ? matchedMasterBankLabels : [matchedMasterBankLabels[0] || bankLabel],
+            mode: 'Journal Voucher',
+            amountIn: direction === 'IN' ? roundCurrency(normalizeNonNegative(entry.amount)) : 0,
+            amountOut: direction === 'OUT' ? roundCurrency(normalizeNonNegative(entry.amount)) : 0,
+            txnRef: String(entry.counterpartyNameSnapshot || '').trim(),
+            ifscCode: '',
+            accountNo: '',
+            note: String(entry.note || '').trim()
+          }
+        ]
+      }
+
+      const mapJournalVoucherToCashLedgerRows = (entry: JournalVoucherLedgerRow) => {
+        if (!isCashJournalVoucherEntry(entry)) {
+          return []
+        }
+
+        const direction = normalizeLedgerDirection(entry.direction) === 'debit' ? 'IN' : 'OUT'
+
+        return [
+          {
+            id: entry.id,
+            date: dateKey(entry.entryDate),
+            companyId: entry.companyId,
+            companyName: companyNameMap.get(entry.companyId) || entry.companyId,
+            direction,
+            billType: 'Journal Voucher',
+            billNo: String(entry.billId || '').trim(),
+            refNo: String(entry.billId || '').trim(),
+            partyName: String(entry.counterpartyNameSnapshot || '').trim() || 'Journal Voucher',
+            bankName: '',
+            mode: 'Journal Voucher',
+            amountIn: direction === 'IN' ? roundCurrency(normalizeNonNegative(entry.amount)) : 0,
+            amountOut: direction === 'OUT' ? roundCurrency(normalizeNonNegative(entry.amount)) : 0,
+            txnRef: String(entry.counterpartyNameSnapshot || '').trim(),
+            ifscCode: '',
+            accountNo: '',
+            note: String(entry.note || '').trim()
+          }
+        ]
+      }
+
       const salesReceiptByBillId = new Map<string, number>()
       const purchasePaidByBillId = new Map<string, number>()
       const getCashBankTargetLabel = (billId: string): string => {
@@ -1052,6 +1420,92 @@ export async function GET(request: NextRequest) {
         if (!reference) return ''
         return cashBankReferenceLabelMap.get(`${reference.referenceType}:${reference.referenceId}`) || ''
       }
+
+      const [openingLedgerPayments, openingJournalVoucherEntries] =
+        dateFrom && (needsBankLedgerView || needsCashLedgerView)
+          ? await Promise.all([
+              prisma.payment.findMany({
+                where: {
+                  companyId: { in: targetCompanyIds },
+                  deletedAt: null,
+                  payDate: { lt: dateFrom }
+                },
+                select: {
+                  id: true,
+                  companyId: true,
+                  billType: true,
+                  billId: true,
+                  payDate: true,
+                  amount: true,
+                  mode: true,
+                  cashAmount: true,
+                  onlinePayAmount: true,
+                  ifscCode: true,
+                  beneficiaryBankAccount: true,
+                  bankNameSnapshot: true,
+                  bankBranchSnapshot: true,
+                  txnRef: true,
+                  note: true,
+                  party: {
+                    select: {
+                      name: true
+                    }
+                  },
+                  farmer: {
+                    select: {
+                      name: true
+                    }
+                  }
+                }
+              }),
+              prisma.ledgerEntry.findMany({
+                where: {
+                  companyId: { in: targetCompanyIds },
+                  billType: JOURNAL_VOUCHER_BILL_TYPE,
+                  entryDate: { lt: dateFrom }
+                },
+                select: {
+                  id: true,
+                  companyId: true,
+                  entryDate: true,
+                  billId: true,
+                  direction: true,
+                  amount: true,
+                  accountHeadNameSnapshot: true,
+                  accountGroupSnapshot: true,
+                  counterpartyNameSnapshot: true,
+                  note: true
+                }
+              })
+            ])
+          : [[], []]
+
+      const bankOpeningBalanceByFilter = new Map<string, number>()
+      let bankLedgerOpeningBalance = 0
+      for (const row of [
+        ...openingLedgerPayments.flatMap((payment) => mapPaymentToBankLedgerRows(payment)),
+        ...openingJournalVoucherEntries.flatMap((entry) => mapJournalVoucherToBankLedgerRows(entry))
+      ]) {
+        const netAmount = roundCurrency(Number(row.amountIn || 0) - Number(row.amountOut || 0))
+        bankLedgerOpeningBalance = roundCurrency(bankLedgerOpeningBalance + netAmount)
+        const labels =
+          Array.isArray(row.bankFilterValues) && row.bankFilterValues.length > 0
+            ? row.bankFilterValues
+            : [row.bankName].filter(Boolean)
+        for (const label of labels) {
+          bankOpeningBalanceByFilter.set(
+            label,
+            roundCurrency((bankOpeningBalanceByFilter.get(label) || 0) + netAmount)
+          )
+        }
+      }
+
+      const cashLedgerOpeningBalance = roundCurrency(
+        [
+          ...openingLedgerPayments.flatMap((payment) => mapPaymentToCashLedgerRows(payment)),
+          ...openingJournalVoucherEntries.flatMap((entry) => mapJournalVoucherToCashLedgerRows(entry))
+        ].reduce((sum, row) => sum + Number(row.amountIn || 0) - Number(row.amountOut || 0), 0)
+      )
 
       for (const payment of paymentsAsOf) {
         if (!payment.billId) continue
@@ -1630,123 +2084,33 @@ export async function GET(request: NextRequest) {
       .sort((a, b) => b.date.localeCompare(a.date))
 
       const bankLedgerRows = needsBankLedgerView
-      ? payments
-          .filter((payment) => isBankLikePayment(payment))
-          .map((payment) => {
-            const isIncomingReceipt = isIncomingCashflowPaymentType(payment.billType)
-            const isOutgoingPayment = isOutgoingCashflowPaymentType(payment.billType)
-            const isSelfTransfer = isSelfTransferPaymentType(payment.billType)
-            const amount = roundCurrency(normalizeNonNegative(payment.amount))
-            const selfTransferSide = isSelfTransfer ? resolveSelfTransferSide(payment, 'bank') : null
-            const matchedMasterBankLabels = isSelfTransfer
-              ? Array.from(
-                  new Set(
-                    [payment.bankNameSnapshot, payment.bankBranchSnapshot]
-                      .map((value) =>
-                        matchMasterBankLabels({
-                          masterBanks: masterBankRecords,
-                          nameSnapshot: value
-                        })
-                      )
-                      .flat()
-                      .filter((value) => value && !isCashDescriptor(value))
-                  )
-                )
-              : matchMasterBankLabels({
-                  masterBanks: masterBankRecords,
-                  nameSnapshot: payment.bankNameSnapshot,
-                  branchSnapshot: payment.bankBranchSnapshot,
-                  ifscCode: payment.ifscCode,
-                  accountNumber: payment.beneficiaryBankAccount
-                })
-            const billNo = isIncomingReceipt
-              ? String(salesBillNoMap.get(payment.billId) || '')
-              : payment.billType === 'purchase'
-                ? String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || '')
-                : ''
-            const amountIn = isSelfTransfer
-              ? roundCurrency(amount * Number(selfTransferSide?.amountIn || 0))
-              : roundCurrency(isIncomingReceipt ? amount : 0)
-            const amountOut = isSelfTransfer
-              ? roundCurrency(amount * Number(selfTransferSide?.amountOut || 0))
-              : roundCurrency(isOutgoingPayment ? amount : 0)
-            const bankLabel = isSelfTransfer
-              ? matchedMasterBankLabels.join(' -> ') || selfTransferSide?.accountName || 'Bank Transfer'
-              : matchedMasterBankLabels[0] || String(payment.bankNameSnapshot || '').trim() || 'Bank / Online'
-            const bankFilterValues = matchedMasterBankLabels
-            return {
-              id: payment.id,
-              date: dateKey(payment.payDate),
-              companyId: payment.companyId,
-              companyName: companyNameMap.get(payment.companyId) || payment.companyId,
-              direction: selfTransferSide?.direction || (isIncomingReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-'),
-              billType: getPaymentTypeLabel(payment.billType),
-              billNo,
-              refNo: billNo || String(payment.txnRef || ''),
-              partyName: isSelfTransfer
-                ? selfTransferSide?.description || [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
-                : String(payment.party?.name || payment.farmer?.name || getCashBankTargetLabel(payment.billId) || payment.bankNameSnapshot || ''),
-              bankName: bankLabel,
-              bankFilterValues,
-              mode: formatPaymentMode(payment.mode),
-              amountIn,
-              amountOut,
-              txnRef: String(payment.txnRef || ''),
-              ifscCode: String(payment.ifscCode || ''),
-              accountNo: String(payment.beneficiaryBankAccount || ''),
-              note: String(payment.note || payment.bankBranchSnapshot || '')
-            }
-          })
-          .sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName))
-      : []
+        ? [
+            ...payments.flatMap((payment) => mapPaymentToBankLedgerRows(payment)),
+            ...journalVoucherEntries.flatMap((entry) => mapJournalVoucherToBankLedgerRows(entry))
+          ].sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName) || a.id.localeCompare(b.id))
+        : []
 
       const cashLedgerRows = needsCashLedgerView
-      ? payments
-          .filter((payment) => isCashLikePayment(payment))
-          .map((payment) => {
-            const isIncomingReceipt = isIncomingCashflowPaymentType(payment.billType)
-            const isOutgoingPayment = isOutgoingCashflowPaymentType(payment.billType)
-            const isSelfTransfer = isSelfTransferPaymentType(payment.billType)
-            const amount = roundCurrency(normalizeNonNegative(payment.amount))
-            const selfTransferSide = isSelfTransfer ? resolveSelfTransferSide(payment, 'cash') : null
-            const billNo = isIncomingReceipt
-              ? String(salesBillNoMap.get(payment.billId) || '')
-              : payment.billType === 'purchase'
-                ? String(purchaseBillNoMap.get(payment.billId) || specialPurchaseBillNoMap.get(payment.billId) || '')
-                : ''
-            const amountIn = isSelfTransfer
-              ? roundCurrency(amount * Number(selfTransferSide?.amountIn || 0))
-              : roundCurrency(isIncomingReceipt ? amount : 0)
-            const amountOut = isSelfTransfer
-              ? roundCurrency(amount * Number(selfTransferSide?.amountOut || 0))
-              : roundCurrency(isOutgoingPayment ? amount : 0)
+        ? [
+            ...payments.flatMap((payment) => mapPaymentToCashLedgerRows(payment)),
+            ...journalVoucherEntries.flatMap((entry) => mapJournalVoucherToCashLedgerRows(entry))
+          ].sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName) || a.id.localeCompare(b.id))
+        : []
 
-            return {
-              id: payment.id,
-              date: dateKey(payment.payDate),
-              companyId: payment.companyId,
-              companyName: companyNameMap.get(payment.companyId) || payment.companyId,
-              direction: selfTransferSide?.direction || (isIncomingReceipt ? 'IN' : isOutgoingPayment ? 'OUT' : '-'),
-              billType: getPaymentTypeLabel(payment.billType),
-              billNo,
-              refNo: billNo || String(payment.txnRef || ''),
-              partyName: isSelfTransfer
-                ? selfTransferSide?.description || [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
-                : String(payment.party?.name || payment.farmer?.name || getCashBankTargetLabel(payment.billId) || payment.bankNameSnapshot || 'Cash'),
-              bankName: isSelfTransfer
-                ? selfTransferSide?.accountName || 'Cash'
-                : String(payment.bankNameSnapshot || '').trim() || 'Cash',
-              mode: formatPaymentMode(payment.mode),
-              amountIn,
-              amountOut,
-              txnRef: String(payment.txnRef || ''),
-              ifscCode: '',
-              accountNo: '',
-              note: String(payment.note || '').trim() || (isSelfTransfer ? selfTransferSide?.description || 'Cash transfer' : formatPaymentMode(payment.mode))
-            }
-          })
-          .sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName))
-      : []
+      const bankFilterOptions = needsBankLedgerView
+        ? Array.from(
+            new Set(
+              [
+                ...masterBankFilterOptions,
+                ...bankLedgerRows.flatMap((row) =>
+                  Array.isArray(row.bankFilterValues) && row.bankFilterValues.length > 0
+                    ? row.bankFilterValues
+                    : [row.bankName].filter(Boolean)
+                )
+              ].filter(Boolean)
+            )
+          ).sort((left, right) => left.localeCompare(right))
+        : []
 
       const totalSaleAmount = roundCurrency(normalizeNonNegative(salesTotalAggregate._sum.totalAmount))
       const totalPurchaseAmount = roundCurrency(
@@ -1822,9 +2186,7 @@ export async function GET(request: NextRequest) {
       bankLedger: needsBankLedgerView ? bankLedgerRows : [],
       cashLedger: needsCashLedgerView ? cashLedgerRows : [],
       filterOptions: {
-        banks: needsBankLedgerView
-          ? masterBankFilterOptions
-          : []
+        banks: bankFilterOptions
       },
       meta: {
         scope: 'company',
@@ -1837,6 +2199,11 @@ export async function GET(request: NextRequest) {
         bankSync: {
           activeProvider: 'manual',
           providers: bankSyncProviders
+        },
+        openingBalances: {
+          bankLedger: bankLedgerOpeningBalance,
+          cashLedger: cashLedgerOpeningBalance,
+          bankLedgerByBank: Object.fromEntries(bankOpeningBalanceByFilter)
         },
         dateFrom: searchParams.get('dateFrom') || '',
         dateTo: searchParams.get('dateTo') || '',

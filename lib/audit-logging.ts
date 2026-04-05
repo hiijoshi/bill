@@ -14,6 +14,11 @@ export type AuditAction =
 
 export type AuditResourceType =
   | 'TRADER'
+  | 'TRADER_SUBSCRIPTION'
+  | 'TRADER_DATA_LIFECYCLE'
+  | 'TRADER_DATA_BACKUP'
+  | 'SUBSCRIPTION_PLAN'
+  | 'SUBSCRIPTION_PAYMENT'
   | 'COMPANY'
   | 'USER'
   | 'PAYMENT'

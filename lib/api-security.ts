@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { resolveRoutePermission } from '@/lib/permissions'
 import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
+import { getCompanySubscriptionAccess, getSubscriptionAccessMessage, isModuleEnabledForEntitlement } from '@/lib/subscription-core'
+import { getTraderDataAccessMessage, getTraderDataLifecycleSummary } from '@/lib/trader-retention'
 
 export type AppRole = 'super_admin' | 'trader_admin' | 'company_admin' | 'company_user'
 
@@ -304,6 +306,41 @@ export async function ensureCompanyAccess(
       return forbidden(
         `Missing privilege: ${routePermission.module} (${routePermission.action})`
       )
+    }
+
+    if (authResult.auth.role !== 'super_admin') {
+      const subscriptionAccess = await getCompanySubscriptionAccess(prisma, companyId)
+
+      if (subscriptionAccess) {
+        const allowedBySubscription = isModuleEnabledForEntitlement(
+          subscriptionAccess.entitlement,
+          routePermission.module,
+          routePermission.action
+        )
+
+        if (!allowedBySubscription) {
+          return forbidden(getSubscriptionAccessMessage(subscriptionAccess.entitlement, routePermission.module))
+        }
+
+        const dataLifecycle = await getTraderDataLifecycleSummary(prisma, subscriptionAccess.traderId, new Date(), {
+          entitlement: subscriptionAccess.entitlement
+        })
+
+        if (dataLifecycle) {
+          if (routePermission.action === 'read' && !dataLifecycle.allowReadOperations) {
+            return forbidden(getTraderDataAccessMessage(dataLifecycle))
+          }
+
+          if (routePermission.action === 'write' && !dataLifecycle.allowWriteOperations) {
+            return forbidden(
+              getTraderDataAccessMessage(
+                dataLifecycle,
+                getSubscriptionAccessMessage(subscriptionAccess.entitlement, routePermission.module)
+              )
+            )
+          }
+        }
+      }
     }
   }
 

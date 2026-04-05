@@ -1,16 +1,19 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { rm } from 'node:fs/promises'
 import { NextRequest } from 'next/server'
 import bcrypt from 'bcryptjs'
 import { prisma } from '../lib/prisma'
 import { normalizeAppRole, requireRoles, hasCompanyAccess, ensureCompanyAccess } from '../lib/api-security'
 import { authenticateUser, generateToken } from '../lib/auth'
-import { middleware } from '../middleware.ts'
+import { proxy as middleware } from '../proxy'
 import { writeAuditLog } from '../lib/audit-logging'
+import { getTraderCapacitySnapshot } from '../lib/trader-limits'
 import { GET as getPayments } from '../app/api/payments/route'
 import { POST as postCompanies, PUT as putCompanies } from '../app/api/companies/route'
 import { POST as postSuperAdminUsers } from '../app/api/super-admin/users/route'
 import { PUT as putSuperAdminUserById } from '../app/api/super-admin/users/[id]/route'
+import { POST as postTraderSubscriptionAction } from '../app/api/super-admin/trader-subscriptions/[traderId]/actions/route'
 
 function makeRequest(
   url: string,
@@ -40,6 +43,21 @@ function makeAuthHeaders(role: string) {
     'x-user-db-id': 'test-super-admin-id',
     'x-request-id': `req-${Date.now()}`
   }
+}
+
+async function callTraderSubscriptionAction(
+  traderId: string,
+  body: Record<string, unknown>,
+  headers: Record<string, string> = makeAuthHeaders('super_admin')
+) {
+  return postTraderSubscriptionAction(
+    makeRequest(`http://localhost/api/super-admin/trader-subscriptions/${traderId}/actions`, {
+      method: 'POST',
+      headers,
+      body
+    }),
+    { params: Promise.resolve({ traderId }) }
+  )
 }
 
 test('RBAC requireRoles allow/deny works per role', async () => {
@@ -118,8 +136,53 @@ test('Privilege matrix denies access without module permission and allows after 
       role: 'company_user'
     }
   })
+  const plan = await prisma.subscriptionPlan.create({
+    data: {
+      name: `Perm Plan ${suffix}`,
+      billingCycle: 'yearly',
+      amount: 0,
+      currency: 'INR',
+      isActive: true,
+      isTrialCapable: true
+    }
+  })
 
   try {
+    await prisma.subscriptionPlanFeature.createMany({
+      data: [
+        {
+          planId: plan.id,
+          featureKey: 'dashboard',
+          featureLabel: 'Dashboard Access',
+          enabled: true,
+          sortOrder: 0
+        },
+        {
+          planId: plan.id,
+          featureKey: 'masters',
+          featureLabel: 'Master Data',
+          enabled: true,
+          sortOrder: 1
+        }
+      ]
+    })
+
+    await prisma.traderSubscription.create({
+      data: {
+        traderId: trader.id,
+        planId: plan.id,
+        subscriptionType: 'paid',
+        status: 'active',
+        billingCycle: 'yearly',
+        amount: 0,
+        currency: 'INR',
+        planNameSnapshot: plan.name,
+        startDate: new Date(Date.now() - 86_400_000),
+        endDate: new Date(Date.now() + 10 * 86_400_000),
+        activatedAt: new Date()
+      }
+    })
+
     const request = makeRequest(`http://localhost/api/products?companyId=${company.id}`, {
       headers: {
         'x-user-id': user.userId,
@@ -148,9 +211,224 @@ test('Privilege matrix denies access without module permission and allows after 
     const allowed = await ensureCompanyAccess(request, company.id)
     assert.equal(allowed, null)
   } finally {
+    await prisma.subscriptionPayment.deleteMany({ where: { traderId: trader.id } })
+    await prisma.traderSubscription.deleteMany({ where: { traderId: trader.id } })
+    await prisma.subscriptionPlanFeature.deleteMany({ where: { planId: plan.id } })
+    await prisma.subscriptionPlan.deleteMany({ where: { id: plan.id } })
     await prisma.userPermission.deleteMany({ where: { userId: user.id } })
     await prisma.user.deleteMany({ where: { id: user.id } })
     await prisma.company.deleteMany({ where: { id: company.id } })
+    await prisma.trader.deleteMany({ where: { id: trader.id } })
+  }
+})
+
+test('Expired subscription allows reads but blocks writes in read-only mode', async () => {
+  const suffix = Date.now().toString()
+  const trader = await prisma.trader.create({ data: { name: `readonly-trader-${suffix}` } })
+  const company = await prisma.company.create({ data: { name: `readonly-company-${suffix}`, traderId: trader.id } })
+  const user = await prisma.user.create({
+    data: {
+      traderId: trader.id,
+      companyId: company.id,
+      userId: `readonly-user-${suffix}`,
+      password: 'hashed-password',
+      role: 'company_user'
+    }
+  })
+  const plan = await prisma.subscriptionPlan.create({
+    data: {
+      name: `Readonly Plan ${suffix}`,
+      billingCycle: 'yearly',
+      amount: 0,
+      currency: 'INR',
+      isActive: true
+    }
+  })
+
+  try {
+    await prisma.subscriptionPlanFeature.createMany({
+      data: [
+        {
+          planId: plan.id,
+          featureKey: 'masters',
+          featureLabel: 'Master Data',
+          enabled: true,
+          sortOrder: 0
+        },
+        {
+          planId: plan.id,
+          featureKey: 'dashboard',
+          featureLabel: 'Dashboard',
+          enabled: true,
+          sortOrder: 1
+        }
+      ]
+    })
+
+    await prisma.traderSubscription.create({
+      data: {
+        traderId: trader.id,
+        planId: plan.id,
+        subscriptionType: 'paid',
+        status: 'expired',
+        billingCycle: 'yearly',
+        amount: 0,
+        currency: 'INR',
+        planNameSnapshot: plan.name,
+        startDate: new Date(Date.now() - 20 * 86_400_000),
+        endDate: new Date(Date.now() - 2 * 86_400_000),
+        expiredAt: new Date()
+      }
+    })
+
+    await prisma.userPermission.create({
+      data: {
+        userId: user.id,
+        companyId: company.id,
+        module: 'MASTER_PRODUCTS',
+        canRead: true,
+        canWrite: true
+      }
+    })
+
+    const readRequest = makeRequest(`http://localhost/api/products?companyId=${company.id}`, {
+      headers: {
+        'x-user-id': user.userId,
+        'x-trader-id': trader.id,
+        'x-user-role': 'company_user',
+        'x-user-role-normalized': 'company_user',
+        'x-user-db-id': user.id,
+        'x-company-id': company.id
+      }
+    })
+
+    const writeRequest = makeRequest(`http://localhost/api/products?companyId=${company.id}`, {
+      method: 'POST',
+      headers: {
+        'x-user-id': user.userId,
+        'x-trader-id': trader.id,
+        'x-user-role': 'company_user',
+        'x-user-role-normalized': 'company_user',
+        'x-user-db-id': user.id,
+        'x-company-id': company.id
+      }
+    })
+
+    const readAllowed = await ensureCompanyAccess(readRequest, company.id)
+    assert.equal(readAllowed, null)
+
+    const writeDenied = await ensureCompanyAccess(writeRequest, company.id)
+    assert.ok(writeDenied)
+    assert.equal(writeDenied?.status, 403)
+    const payload = await writeDenied?.json()
+    assert.match(String(payload?.error || ''), /read-only/i)
+  } finally {
+    await prisma.subscriptionPayment.deleteMany({ where: { traderId: trader.id } })
+    await prisma.traderDataBackup.deleteMany({ where: { traderId: trader.id } })
+    await prisma.traderDataLifecycle.deleteMany({ where: { traderId: trader.id } })
+    await prisma.traderSubscription.deleteMany({ where: { traderId: trader.id } })
+    await prisma.subscriptionPlanFeature.deleteMany({ where: { planId: plan.id } })
+    await prisma.subscriptionPlan.deleteMany({ where: { id: plan.id } })
+    await prisma.userPermission.deleteMany({ where: { userId: user.id } })
+    await prisma.user.deleteMany({ where: { id: user.id } })
+    await prisma.company.deleteMany({ where: { id: company.id } })
+    await prisma.trader.deleteMany({ where: { id: trader.id } })
+  }
+})
+
+test('Final deletion requires ready backup and deletion-pending confirmation', async () => {
+  const suffix = Date.now().toString()
+  const trader = await prisma.trader.create({ data: { name: `closure-trader-${suffix}` } })
+  const company = await prisma.company.create({ data: { name: `closure-company-${suffix}`, traderId: trader.id } })
+  const user = await prisma.user.create({
+    data: {
+      traderId: trader.id,
+      companyId: company.id,
+      userId: `closure-user-${suffix}`,
+      password: 'hashed-password',
+      role: 'company_admin'
+    }
+  })
+
+  let backupStoragePath: string | null = null
+
+  try {
+    const missingBackupResponse = await callTraderSubscriptionAction(trader.id, {
+      action: 'confirm_final_deletion',
+      backupId: 'missing-backup',
+      confirmDeletion: true
+    })
+    assert.equal(missingBackupResponse.status, 404)
+
+    const createBackupResponse = await callTraderSubscriptionAction(trader.id, {
+      action: 'request_backup',
+      notes: 'Prepare final export'
+    })
+    assert.equal(createBackupResponse.status, 200)
+    const createBackupPayload = await createBackupResponse.json()
+    const createdBackupId = String(createBackupPayload?.backups?.[0]?.id || '')
+    assert.ok(createdBackupId)
+
+    const createdBackup = await prisma.traderDataBackup.findUnique({
+      where: { id: createdBackupId }
+    })
+    assert.ok(createdBackup)
+    assert.equal(createdBackup?.status, 'ready')
+    backupStoragePath = createdBackup?.storagePath || null
+
+    const beforePendingResponse = await callTraderSubscriptionAction(trader.id, {
+      action: 'confirm_final_deletion',
+      backupId: createdBackupId,
+      confirmDeletion: true
+    })
+    assert.equal(beforePendingResponse.status, 409)
+
+    const pendingResponse = await callTraderSubscriptionAction(trader.id, {
+      action: 'mark_deletion_pending',
+      backupId: createdBackupId,
+      retentionDays: 30,
+      notes: 'Backup verified'
+    })
+    assert.equal(pendingResponse.status, 200)
+
+    const lifecycle = await prisma.traderDataLifecycle.findUnique({
+      where: { traderId: trader.id }
+    })
+    assert.equal(lifecycle?.state, 'deletion_pending')
+
+    const finalDeleteResponse = await callTraderSubscriptionAction(trader.id, {
+      action: 'confirm_final_deletion',
+      backupId: createdBackupId,
+      confirmDeletion: true,
+      notes: 'Approved for final delete'
+    })
+    assert.equal(finalDeleteResponse.status, 200)
+
+    const [deletedTrader, remainingCompanies, remainingUsers, persistedBackup, finalLifecycle] = await Promise.all([
+      prisma.trader.findUnique({ where: { id: trader.id } }),
+      prisma.company.count({ where: { traderId: trader.id } }),
+      prisma.user.count({ where: { traderId: trader.id } }),
+      prisma.traderDataBackup.findUnique({ where: { id: createdBackupId } }),
+      prisma.traderDataLifecycle.findUnique({ where: { traderId: trader.id } })
+    ])
+
+    assert.ok(deletedTrader?.deletedAt)
+    assert.equal(deletedTrader?.locked, true)
+    assert.equal(remainingCompanies, 0)
+    assert.equal(remainingUsers, 0)
+    assert.equal(persistedBackup?.status, 'ready')
+    assert.equal(finalLifecycle?.state, 'deleted')
+  } finally {
+    if (backupStoragePath) {
+      await rm(backupStoragePath, { force: true }).catch(() => undefined)
+    }
+    await prisma.traderDataBackup.deleteMany({ where: { traderId: trader.id } })
+    await prisma.traderDataLifecycle.deleteMany({ where: { traderId: trader.id } })
+    await prisma.subscriptionPayment.deleteMany({ where: { traderId: trader.id } })
+    await prisma.traderSubscription.deleteMany({ where: { traderId: trader.id } })
+    await prisma.userPermission.deleteMany({ where: { userId: user.id } })
+    await prisma.user.deleteMany({ where: { traderId: trader.id } })
+    await prisma.company.deleteMany({ where: { traderId: trader.id } })
     await prisma.trader.deleteMany({ where: { id: trader.id } })
   }
 })
@@ -308,9 +586,10 @@ test('Soft-deleted payments are hidden by default and visible with includeDelete
 test('Middleware returns 429 when global rate limit is exceeded', async () => {
   const rateLimitDisabled = process.env.DISABLE_RATE_LIMIT === 'true'
   const ip = `198.51.100.${Math.floor(Math.random() * 100) + 50}`
+  const globalRateLimitMax = 120
 
   let lastStatus = 200
-  for (let i = 0; i < 61; i += 1) {
+  for (let i = 0; i < globalRateLimitMax + 1; i += 1) {
     const request = makeRequest('http://localhost/api/auth', {
       method: 'POST',
       headers: {
@@ -482,6 +761,169 @@ test('Super admin user role is auto-assigned and role field is rejected on updat
       }
     })
     await prisma.company.deleteMany({ where: { id: company.id } })
+    await prisma.trader.deleteMany({ where: { id: trader.id } })
+  }
+})
+
+test('Subscription feature gating blocks company APIs when plan feature is disabled', async () => {
+  const suffix = Date.now().toString()
+  const trader = await prisma.trader.create({ data: { name: `sub-feature-trader-${suffix}` } })
+  const company = await prisma.company.create({ data: { name: `sub-feature-company-${suffix}`, traderId: trader.id } })
+  const user = await prisma.user.create({
+    data: {
+      traderId: trader.id,
+      companyId: company.id,
+      userId: `sub-feature-user-${suffix}`,
+      password: 'hashed-password',
+      role: 'company_user'
+    }
+  })
+  const plan = await prisma.subscriptionPlan.create({
+    data: {
+      name: `Sub Feature Plan ${suffix}`,
+      billingCycle: 'yearly',
+      amount: 0,
+      currency: 'INR',
+      isActive: true,
+      isTrialCapable: true
+    }
+  })
+
+  try {
+    await prisma.subscriptionPlanFeature.createMany({
+      data: [
+        {
+          planId: plan.id,
+          featureKey: 'dashboard',
+          featureLabel: 'Dashboard Access',
+          enabled: true,
+          sortOrder: 0
+        },
+        {
+          planId: plan.id,
+          featureKey: 'masters',
+          featureLabel: 'Master Data',
+          enabled: false,
+          sortOrder: 1
+        }
+      ]
+    })
+
+    await prisma.traderSubscription.create({
+      data: {
+        traderId: trader.id,
+        planId: plan.id,
+        subscriptionType: 'paid',
+        status: 'active',
+        billingCycle: 'yearly',
+        amount: 0,
+        currency: 'INR',
+        planNameSnapshot: plan.name,
+        startDate: new Date(Date.now() - 86_400_000),
+        endDate: new Date(Date.now() + 10 * 86_400_000),
+        activatedAt: new Date()
+      }
+    })
+
+    await prisma.userPermission.create({
+      data: {
+        userId: user.id,
+        companyId: company.id,
+        module: 'MASTER_PRODUCTS',
+        canRead: true,
+        canWrite: true
+      }
+    })
+
+    const request = makeRequest(`http://localhost/api/products?companyId=${company.id}`, {
+      headers: {
+        'x-user-id': user.userId,
+        'x-trader-id': trader.id,
+        'x-user-role': 'company_user',
+        'x-user-role-normalized': 'company_user',
+        'x-user-db-id': user.id,
+        'x-company-id': company.id
+      }
+    })
+
+    const denied = await ensureCompanyAccess(request, company.id)
+    assert.ok(denied)
+    assert.equal(denied?.status, 403)
+  } finally {
+    await prisma.userPermission.deleteMany({ where: { userId: user.id } })
+    await prisma.subscriptionPayment.deleteMany({ where: { traderId: trader.id } })
+    await prisma.traderSubscription.deleteMany({ where: { traderId: trader.id } })
+    await prisma.subscriptionPlanFeature.deleteMany({ where: { planId: plan.id } })
+    await prisma.subscriptionPlan.deleteMany({ where: { id: plan.id } })
+    await prisma.user.deleteMany({ where: { id: user.id } })
+    await prisma.company.deleteMany({ where: { id: company.id } })
+    await prisma.trader.deleteMany({ where: { id: trader.id } })
+  }
+})
+
+test('Trader capacity snapshot uses active subscription limits', async () => {
+  const suffix = Date.now().toString()
+  const trader = await prisma.trader.create({
+    data: {
+      name: `sub-limit-trader-${suffix}`,
+      maxCompanies: 10,
+      maxUsers: 25
+    }
+  })
+  const plan = await prisma.subscriptionPlan.create({
+    data: {
+      name: `Sub Limit Plan ${suffix}`,
+      billingCycle: 'yearly',
+      amount: 0,
+      currency: 'INR',
+      maxCompanies: 2,
+      maxUsers: 4,
+      isActive: true,
+      isTrialCapable: false
+    }
+  })
+  const companyA = await prisma.company.create({ data: { name: `sub-limit-company-a-${suffix}`, traderId: trader.id } })
+  const companyB = await prisma.company.create({ data: { name: `sub-limit-company-b-${suffix}`, traderId: trader.id } })
+  const user = await prisma.user.create({
+    data: {
+      traderId: trader.id,
+      companyId: companyA.id,
+      userId: `sub-limit-user-${suffix}`,
+      password: 'hashed-password',
+      role: 'company_user'
+    }
+  })
+
+  try {
+    await prisma.traderSubscription.create({
+      data: {
+        traderId: trader.id,
+        planId: plan.id,
+        subscriptionType: 'paid',
+        status: 'active',
+        billingCycle: 'yearly',
+        amount: 0,
+        currency: 'INR',
+        planNameSnapshot: plan.name,
+        startDate: new Date(Date.now() - 86_400_000),
+        endDate: new Date(Date.now() + 30 * 86_400_000),
+        activatedAt: new Date()
+      }
+    })
+
+    const snapshot = await getTraderCapacitySnapshot(prisma, trader.id)
+    assert.ok(snapshot)
+    assert.equal(snapshot?.maxCompanies, 2)
+    assert.equal(snapshot?.maxUsers, 4)
+    assert.equal(snapshot?.currentCompanies, 2)
+    assert.equal(snapshot?.currentUsers, 1)
+    assert.equal(snapshot?.limitSource, 'hybrid')
+  } finally {
+    await prisma.subscriptionPayment.deleteMany({ where: { traderId: trader.id } })
+    await prisma.traderSubscription.deleteMany({ where: { traderId: trader.id } })
+    await prisma.subscriptionPlan.deleteMany({ where: { id: plan.id } })
+    await prisma.user.deleteMany({ where: { id: user.id } })
+    await prisma.company.deleteMany({ where: { id: { in: [companyA.id, companyB.id] } } })
     await prisma.trader.deleteMany({ where: { id: trader.id } })
   }
 })

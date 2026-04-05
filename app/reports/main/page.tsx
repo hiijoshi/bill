@@ -9,7 +9,7 @@ import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import OperationsReportWorkspace from '@/components/reports/OperationsReportWorkspace'
 import ReportDashboard from '@/components/reports/ReportDashboard'
 import StockReportDashboard from '@/components/reports/StockReportDashboard'
-import { resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 
 type ReportType = 'main' | 'purchase' | 'sales' | 'stock' | 'operations'
 type OperationsView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'cash-ledger' | 'bank-ledger'
@@ -60,7 +60,9 @@ function ReportsMainPageContent() {
   useEffect(() => {
     let cancelled = false
 
-    ;(async () => {
+    const loadReportScope = async () => {
+      setCompanyResolving(true)
+
       let resolvedCompanyId = ''
       for (let attempt = 0; attempt < 2; attempt += 1) {
         resolvedCompanyId = await resolveCompanyId(window.location.search)
@@ -76,10 +78,19 @@ function ReportsMainPageContent() {
         stripCompanyParamsFromUrl()
       }
       setCompanyResolving(false)
-    })()
+    }
+
+    void loadReportScope()
+
+    const onCompanyChanged = () => {
+      void loadReportScope()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
 
     return () => {
       cancelled = true
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
   }, [])
 
