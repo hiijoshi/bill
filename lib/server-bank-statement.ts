@@ -64,7 +64,17 @@ type ExtractedStatementText = {
   pageCount: number
 }
 
+type TesseractModule = typeof import('tesseract.js')
+type TesseractWorker = Awaited<ReturnType<TesseractModule['createWorker']>>
+
 let pdfCanvasGlobalsReady: Promise<void> | null = null
+let ocrWorkerReady: Promise<TesseractWorker> | null = null
+let ocrWorkerQueue: Promise<unknown> = Promise.resolve()
+let ocrWorkerIdleTimer: ReturnType<typeof setTimeout> | null = null
+
+const OCR_WORKER_IDLE_TIMEOUT_MS = 2 * 60_000
+const OCR_MAX_IMAGE_EDGE_PX = 1800
+const OCR_MAX_IMAGE_PIXELS = 2_400_000
 
 type StructuredStatementCsvRow = {
   row: CsvImportRow
@@ -201,6 +211,103 @@ async function ensurePdfCanvasGlobals(): Promise<void> {
   } catch (error) {
     pdfCanvasGlobalsReady = null
     throw error
+  }
+}
+
+function clearOcrWorkerIdleTimer() {
+  if (!ocrWorkerIdleTimer) return
+  clearTimeout(ocrWorkerIdleTimer)
+  ocrWorkerIdleTimer = null
+}
+
+function scheduleOcrWorkerCleanup() {
+  clearOcrWorkerIdleTimer()
+  ocrWorkerIdleTimer = setTimeout(() => {
+    const workerPromise = ocrWorkerReady
+    ocrWorkerReady = null
+    if (!workerPromise) return
+
+    void workerPromise
+      .then(async (worker) => {
+        await worker.terminate()
+      })
+      .catch(() => {})
+  }, OCR_WORKER_IDLE_TIMEOUT_MS)
+
+  ocrWorkerIdleTimer.unref?.()
+}
+
+async function getSharedOcrWorker(): Promise<TesseractWorker> {
+  clearOcrWorkerIdleTimer()
+
+  if (!ocrWorkerReady) {
+    ocrWorkerReady = (async () => {
+      const tesseractModule = await import('tesseract.js')
+      const worker = await tesseractModule.createWorker('eng', tesseractModule.OEM.LSTM_ONLY, {
+        logger: () => undefined
+      })
+
+      await worker.setParameters({
+        preserve_interword_spaces: '1',
+        tessedit_pageseg_mode: tesseractModule.PSM.SINGLE_BLOCK
+      })
+
+      return worker
+    })()
+  }
+
+  try {
+    return await ocrWorkerReady
+  } catch (error) {
+    ocrWorkerReady = null
+    throw error
+  }
+}
+
+async function optimizeImageBufferForOcr(buffer: Buffer): Promise<Buffer> {
+  const canvasModule = await import('@napi-rs/canvas')
+  const image = await canvasModule.loadImage(buffer)
+
+  const sourceWidth = Math.max(1, Math.round(Number(image.width || 0)))
+  const sourceHeight = Math.max(1, Math.round(Number(image.height || 0)))
+  if (!sourceWidth || !sourceHeight) return buffer
+
+  const longestEdge = Math.max(sourceWidth, sourceHeight)
+  const totalPixels = sourceWidth * sourceHeight
+  const edgeScale = OCR_MAX_IMAGE_EDGE_PX / longestEdge
+  const areaScale = Math.sqrt(OCR_MAX_IMAGE_PIXELS / totalPixels)
+  const scale = Math.min(1, edgeScale, areaScale)
+
+  if (scale >= 0.995) {
+    return buffer
+  }
+
+  const targetWidth = Math.max(1, Math.round(sourceWidth * scale))
+  const targetHeight = Math.max(1, Math.round(sourceHeight * scale))
+  const canvas = canvasModule.createCanvas(targetWidth, targetHeight)
+  const context = canvas.getContext('2d')
+
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
+  context.filter = 'grayscale(1) contrast(1.08)'
+  context.drawImage(image, 0, 0, targetWidth, targetHeight)
+
+  return canvas.toBuffer('image/jpeg', 0.82)
+}
+
+async function recognizeTextWithSharedOcrWorker(buffer: Buffer): Promise<string> {
+  const task = ocrWorkerQueue.then(async () => {
+    const worker = await getSharedOcrWorker()
+    const result = await worker.recognize(buffer)
+    return normalizeText(result.data?.text || '')
+  })
+
+  ocrWorkerQueue = task.then(() => undefined, () => undefined)
+
+  try {
+    return await task
+  } finally {
+    scheduleOcrWorkerCleanup()
   }
 }
 
@@ -516,25 +623,17 @@ async function extractPdfText(buffer: Buffer): Promise<ExtractedStatementText> {
 }
 
 async function recognizeTextFromImages(buffers: Buffer[]): Promise<string> {
-  const tesseractModule = await import('tesseract.js')
-  const worker = await tesseractModule.createWorker('eng')
+  const pageTexts: string[] = []
 
-  try {
-    const pageTexts: string[] = []
-
-    for (const buffer of buffers) {
-      if (!buffer || buffer.length === 0) continue
-      const result = await worker.recognize(buffer)
-      const text = normalizeText(result.data?.text || '')
-      if (text) {
-        pageTexts.push(text)
-      }
+  for (const buffer of buffers) {
+    if (!buffer || buffer.length === 0) continue
+    const text = await recognizeTextWithSharedOcrWorker(buffer)
+    if (text) {
+      pageTexts.push(text)
     }
-
-    return pageTexts.join('\n\n')
-  } finally {
-    await worker.terminate()
   }
+
+  return pageTexts.join('\n\n')
 }
 
 async function extractPdfOcrText(buffer: Buffer): Promise<ExtractedStatementText> {
@@ -567,7 +666,8 @@ async function extractPdfOcrText(buffer: Buffer): Promise<ExtractedStatementText
 }
 
 async function extractImageText(buffer: Buffer): Promise<string> {
-  return recognizeTextFromImages([buffer])
+  const optimizedBuffer = await optimizeImageBufferForOcr(buffer)
+  return recognizeTextFromImages([optimizedBuffer])
 }
 
 async function parseTextStatement(text: string, bankId: string): Promise<ParsedStatementResult[]> {
