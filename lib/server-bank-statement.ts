@@ -2,7 +2,7 @@ import 'server-only'
 
 import { createHash } from 'crypto'
 
-import { getCsvValue, parseCsvObjects } from '@/lib/master-csv'
+import { getCsvValue, normalizeCsvHeader, parseCsvObjects, parseCsvRows, type CsvImportRow } from '@/lib/master-csv'
 import type { StatementDirection, StatementDocumentKind, StatementDocumentMeta } from '@/lib/bank-statement-types'
 
 export type ParsedStatementEntry = {
@@ -62,6 +62,94 @@ function detectDocumentKind(file: File): StatementDocumentKind | null {
 type ExtractedStatementText = {
   text: string
   pageCount: number
+}
+
+type StructuredStatementCsvRow = {
+  row: CsvImportRow
+  rowNo: number
+}
+
+const STATEMENT_DATE_HEADERS = new Set(
+  ['Date', 'Txn Date', 'Transaction Date', 'Posted Date', 'Value Date', 'Entry Date'].map(normalizeCsvHeader)
+)
+const STATEMENT_DEBIT_HEADERS = new Set(
+  ['Debit', 'Withdrawal', 'Debit Amount', 'Dr Amount', 'Dr', 'Withdrawals', 'Debit (Rs)'].map(normalizeCsvHeader)
+)
+const STATEMENT_CREDIT_HEADERS = new Set(
+  ['Credit', 'Deposit', 'Credit Amount', 'Cr Amount', 'Cr', 'Deposits', 'Credit (Rs)'].map(normalizeCsvHeader)
+)
+const STATEMENT_AMOUNT_HEADERS = new Set(
+  ['Amount', 'Txn Amount', 'Transaction Amount', 'Amount (Rs)'].map(normalizeCsvHeader)
+)
+const STATEMENT_DESCRIPTION_HEADERS = new Set(
+  ['Description', 'Narration', 'Particular', 'Particulars', 'Details', 'Remarks', 'Remark'].map(normalizeCsvHeader)
+)
+const STATEMENT_REFERENCE_HEADERS = new Set(
+  ['Reference', 'Txn Ref', 'Transaction Ref', 'UTR', 'Ref No', 'Cheque No', 'Chq No', 'Voucher No'].map(normalizeCsvHeader)
+)
+
+function rowHasAnyHeader(headers: string[], candidates: Set<string>): boolean {
+  return headers.some((header) => candidates.has(header))
+}
+
+function buildStructuredCsvRecord(headers: string[], rawRow: string[]): CsvImportRow {
+  const record: CsvImportRow = {}
+
+  headers.forEach((header, index) => {
+    if (!header) return
+    record[header] = String(rawRow[index] || '').trim()
+  })
+
+  return record
+}
+
+function shouldSkipStructuredStatementRow(row: CsvImportRow): boolean {
+  const values = Object.values(row).map((value) => normalizeText(value)).filter(Boolean)
+  if (values.length === 0) return true
+
+  const typeValue = normalizeForCompare(getCsvValue(row, ['Type']))
+  const descriptionValue = normalizeForCompare(
+    getCsvValue(row, ['Description', 'Narration', 'Particular', 'Particulars', 'Details', 'Remarks', 'Remark'])
+  )
+  const dateValue = normalizeText(getCsvValue(row, ['Date', 'Txn Date', 'Transaction Date', 'Posted Date', 'Value Date', 'Entry Date']))
+
+  if (!dateValue && (typeValue === 'total' || descriptionValue === 'total')) {
+    return true
+  }
+
+  return false
+}
+
+function extractStructuredStatementCsvRows(text: string): StructuredStatementCsvRow[] {
+  const rawRows = parseCsvRows(text)
+  if (rawRows.length === 0) return []
+
+  const headerRowIndex = rawRows.findIndex((rawRow) => {
+    const headers = rawRow.map((cell) => normalizeCsvHeader(cell))
+    const hasDate = rowHasAnyHeader(headers, STATEMENT_DATE_HEADERS)
+    const hasAmount =
+      rowHasAnyHeader(headers, STATEMENT_DEBIT_HEADERS) ||
+      rowHasAnyHeader(headers, STATEMENT_CREDIT_HEADERS) ||
+      rowHasAnyHeader(headers, STATEMENT_AMOUNT_HEADERS)
+    const hasNarration =
+      rowHasAnyHeader(headers, STATEMENT_DESCRIPTION_HEADERS) ||
+      rowHasAnyHeader(headers, STATEMENT_REFERENCE_HEADERS) ||
+      headers.includes(normalizeCsvHeader('Type'))
+
+    return hasDate && hasAmount && hasNarration
+  })
+
+  if (headerRowIndex < 0) return []
+
+  const headers = rawRows[headerRowIndex].map((cell) => normalizeCsvHeader(cell))
+
+  return rawRows
+    .slice(headerRowIndex + 1)
+    .map((rawRow, index) => ({
+      row: buildStructuredCsvRecord(headers, rawRow),
+      rowNo: headerRowIndex + index + 2
+    }))
+    .filter(({ row }) => !shouldSkipStructuredStatementRow(row))
 }
 
 function parseAmountValue(raw: string): number | null {
@@ -150,10 +238,10 @@ function parseStatementRow(
   }
 
   const debitAmount = parseAmountValue(
-    getCsvValue(row, ['Debit', 'Withdrawal', 'Debit Amount', 'Dr Amount', 'Dr', 'Withdrawals'])
+    getCsvValue(row, ['Debit', 'Withdrawal', 'Debit Amount', 'Dr Amount', 'Dr', 'Withdrawals', 'Debit (Rs)'])
   )
   const creditAmount = parseAmountValue(
-    getCsvValue(row, ['Credit', 'Deposit', 'Credit Amount', 'Cr Amount', 'Cr', 'Deposits'])
+    getCsvValue(row, ['Credit', 'Deposit', 'Credit Amount', 'Cr Amount', 'Cr', 'Deposits', 'Credit (Rs)'])
   )
 
   let amount: number | null = null
@@ -167,7 +255,7 @@ function parseStatementRow(
     direction = 'in'
   } else {
     const signedAmount = Number(
-      normalizeText(getCsvValue(row, ['Amount', 'Txn Amount', 'Transaction Amount'])).replace(/[,\s₹]/g, '')
+      normalizeText(getCsvValue(row, ['Amount', 'Txn Amount', 'Transaction Amount', 'Amount (Rs)'])).replace(/[,\s₹]/g, '')
     )
     const directionRaw = normalizeForCompare(getCsvValue(row, ['Direction', 'Type', 'Txn Type']))
 
@@ -186,10 +274,10 @@ function parseStatementRow(
   }
 
   const description = normalizeText(
-    getCsvValue(row, ['Description', 'Narration', 'Particulars', 'Details', 'Remarks', 'Remark'])
+    getCsvValue(row, ['Description', 'Narration', 'Particular', 'Particulars', 'Details', 'Remarks', 'Remark'])
   )
   const reference = normalizeText(
-    getCsvValue(row, ['Reference', 'Txn Ref', 'Transaction Ref', 'UTR', 'Ref No', 'Cheque No', 'Chq No'])
+    getCsvValue(row, ['Reference', 'Txn Ref', 'Transaction Ref', 'UTR', 'Ref No', 'Cheque No', 'Chq No', 'Voucher No'])
   ) || null
 
   const entryBase = {
@@ -441,7 +529,12 @@ async function extractImageText(buffer: Buffer): Promise<string> {
 }
 
 async function parseTextStatement(text: string, bankId: string): Promise<ParsedStatementResult[]> {
-  const csvRows = parseCsvObjects(text)
+  const structuredCsvRows = extractStructuredStatementCsvRows(text)
+  if (structuredCsvRows.length > 0) {
+    return structuredCsvRows.map(({ row, rowNo }) => parseStatementRow(row, rowNo, bankId))
+  }
+
+  const csvRows = parseCsvObjects(text).filter((row) => !shouldSkipStructuredStatementRow(row))
   if (csvRows.length > 0 && Object.keys(csvRows[0] || {}).length > 1) {
     return csvRows.map((row, index) => parseStatementRow(row, index + 2, bankId))
   }
@@ -472,7 +565,13 @@ export async function parseBankStatementFile(file: File, bankId: string): Promis
   switch (kind) {
     case 'csv': {
       const text = normalizeText(await file.text())
-      const rows = parseCsvObjects(text)
+      const structuredCsvRows = extractStructuredStatementCsvRows(text)
+      const rows = structuredCsvRows.length > 0
+        ? structuredCsvRows
+        : parseCsvObjects(text)
+            .filter((row) => !shouldSkipStructuredStatementRow(row))
+            .map((row, index) => ({ row, rowNo: index + 2 }))
+
       if (rows.length === 0) {
         throw new Error('Uploaded CSV statement is empty')
       }
@@ -483,9 +582,12 @@ export async function parseBankStatementFile(file: File, bankId: string): Promis
           parser: 'CSV table parser',
           fileName: file.name,
           recognitionMode: 'structured',
-          note: 'Rows were read directly from the uploaded CSV file.'
+          note:
+            structuredCsvRows.length > 0
+              ? 'Detected the exported ledger table and read rows directly from the uploaded CSV file.'
+              : 'Rows were read directly from the uploaded CSV file.'
         },
-        entries: rows.map((row, index) => parseStatementRow(row, index + 2, bankId))
+        entries: rows.map(({ row, rowNo }) => parseStatementRow(row, rowNo, bankId))
       }
     }
 
