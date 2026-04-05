@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
 import { authHeadersScoped } from '@/lib/csrf'
 import { KNOWN_SUBSCRIPTION_FEATURES } from '@/lib/subscription-config'
+import { readSubscriptionSchemaState } from '@/lib/subscription-schema'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -102,6 +103,8 @@ export default function SuperAdminSubscriptionPlansPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [schemaReady, setSchemaReady] = useState(true)
+  const [schemaWarning, setSchemaWarning] = useState<string | null>(null)
   const [editId, setEditId] = useState<string | null>(null)
   const [form, setForm] = useState<PlanFormState>(createEmptyForm())
 
@@ -111,6 +114,9 @@ export default function SuperAdminSubscriptionPlansPage() {
 
     try {
       const response = await fetch('/api/super-admin/subscription-plans?includeInactive=true', { cache: 'no-store' })
+      const schemaState = readSubscriptionSchemaState(response.headers)
+      setSchemaReady(schemaState.schemaReady)
+      setSchemaWarning(schemaState.schemaWarning)
       const payload = (await response.json().catch(() => [])) as PlanRecord[] | { error?: string }
       if (!response.ok) {
         throw new Error(Array.isArray(payload) ? 'Failed to load plans' : payload.error || 'Failed to load plans')
@@ -232,6 +238,11 @@ export default function SuperAdminSubscriptionPlansPage() {
     >
       <div className="space-y-6">
         {error ? <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
+        {schemaWarning ? (
+          <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            {schemaWarning}
+          </div>
+        ) : null}
 
         <Card>
           <CardHeader className="pb-3">
@@ -342,7 +353,7 @@ export default function SuperAdminSubscriptionPlansPage() {
             </div>
 
             <div className="flex gap-2">
-              <Button onClick={savePlan} disabled={saving || !form.name.trim()}>
+              <Button onClick={savePlan} disabled={saving || !schemaReady || !form.name.trim()}>
                 {saving ? 'Saving...' : editId ? 'Update Plan' : 'Create Plan'}
               </Button>
               {editId ? (
@@ -404,10 +415,10 @@ export default function SuperAdminSubscriptionPlansPage() {
                       <TableCell>{plan.subscriptionCount}</TableCell>
                       <TableCell>
                         <div className="flex gap-2">
-                          <Button size="sm" variant="outline" onClick={() => startEdit(plan)}>
+                          <Button size="sm" variant="outline" onClick={() => startEdit(plan)} disabled={!schemaReady}>
                             Edit
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => void toggleActive(plan)} disabled={saving}>
+                          <Button size="sm" variant="outline" onClick={() => void toggleActive(plan)} disabled={saving || !schemaReady}>
                             {plan.isActive ? 'Deactivate' : 'Activate'}
                           </Button>
                         </div>

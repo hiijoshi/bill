@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { requireRoles } from '@/lib/api-security'
 import { prisma } from '@/lib/prisma'
+import {
+  buildSubscriptionSchemaHeaders,
+  ensureSubscriptionManagementSchemaReady
+} from '@/lib/subscription-schema'
 import { getCurrentTraderSubscription, getTraderSubscriptionEntitlement } from '@/lib/subscription-core'
 import { getTraderDataLifecycleSummary } from '@/lib/trader-retention'
 import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
@@ -11,6 +15,7 @@ export async function GET(request: NextRequest) {
   if (!authResult.ok) return authResult.response
 
   try {
+    const schemaReady = await ensureSubscriptionManagementSchemaReady(prisma)
     const trader = await prisma.trader.findFirst({
       where: {
         id: authResult.auth.traderId,
@@ -29,17 +34,23 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
     }
 
-    const [entitlement, currentSubscription, capacity, dataLifecycle] = await Promise.all([
-      getTraderSubscriptionEntitlement(prisma, trader.id, new Date(), {
-        ...trader,
-        deletedAt: null
-      }),
-      getCurrentTraderSubscription(prisma, trader.id),
-      getTraderCapacitySnapshot(prisma, trader.id),
-      getTraderDataLifecycleSummary(prisma, trader.id, new Date(), {
-        traderDeletedAt: null
-      })
-    ])
+    const capacity = await getTraderCapacitySnapshot(prisma, trader.id)
+    const [entitlement, currentSubscription, dataLifecycle] = schemaReady
+      ? await Promise.all([
+          getTraderSubscriptionEntitlement(prisma, trader.id, new Date(), {
+            ...trader,
+            deletedAt: null
+          }),
+          getCurrentTraderSubscription(prisma, trader.id),
+          getTraderDataLifecycleSummary(prisma, trader.id, new Date(), {
+            traderDeletedAt: null
+          })
+        ])
+      : await Promise.all([
+          Promise.resolve(null),
+          Promise.resolve(null),
+          Promise.resolve(null)
+        ])
 
     return NextResponse.json({
       trader: {
@@ -59,6 +70,8 @@ export async function GET(request: NextRequest) {
             limitSource: capacity.limitSource
           }
         : null
+    }, {
+      headers: buildSubscriptionSchemaHeaders(schemaReady)
     })
   } catch (error) {
     console.error('subscription/current GET failed:', error)

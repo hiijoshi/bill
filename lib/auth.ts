@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { env } from './config'
 import { prisma } from './prisma'
+import { isPrismaSchemaMismatchError } from './prisma-schema-guard'
 
 // env.JWT_SECRET is already validated in config.ts; REFRESH_SECRET may fall back
 // to JWT_SECRET if not provided explicitly.
@@ -366,19 +367,14 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
     if (process.env.NODE_ENV === 'development') {
       console.error('Authentication error:', error)
     }
-    if (error instanceof Error) {
-      const text = error.message.toLowerCase()
-      if (
-        text.includes('no such column') ||
-        text.includes('unknown column') ||
-        text.includes('inconsistent query result')
-      ) {
-        return {
-          success: false,
-          error: 'Database schema mismatch. Run: npx prisma db push && npx prisma generate'
-        }
+
+    if (isPrismaSchemaMismatchError(error)) {
+      return {
+        success: false,
+        error: 'Database schema mismatch. Run: npx prisma db push && npx prisma generate'
       }
     }
+
     return {
       success: false,
       error: 'Internal server error'

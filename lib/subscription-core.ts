@@ -2,6 +2,7 @@ import type { PermissionAction, PermissionModule } from '@/lib/permissions'
 import { Prisma } from '@prisma/client'
 
 import { prisma } from '@/lib/prisma'
+import { isPrismaSchemaMismatchError } from '@/lib/prisma-schema-guard'
 import {
   PERMISSION_MODULE_TO_SUBSCRIPTION_FEATURE,
   normalizeSubscriptionStatus,
@@ -15,6 +16,14 @@ type DbClient = typeof prisma | Prisma.TransactionClient
 const DAY_IN_MS = 86_400_000
 const NON_TERMINAL_SUBSCRIPTION_STATUSES: SubscriptionStatus[] = ['pending', 'active', 'suspended']
 const ACTIVE_SUBSCRIPTION_STATUSES: SubscriptionStatus[] = ['active']
+const SUBSCRIPTION_SCHEMA_IDENTIFIERS = [
+  'tradersubscription',
+  'subscriptionpayment',
+  'subscriptionplan',
+  'subscriptionplanfeature'
+] as const
+const SUBSCRIPTION_SCHEMA_UNAVAILABLE = Symbol('SUBSCRIPTION_SCHEMA_UNAVAILABLE')
+let subscriptionSchemaAvailability: boolean | null = null
 
 const traderSubscriptionInclude = Prisma.validator<Prisma.TraderSubscriptionInclude>()({
   plan: {
@@ -131,6 +140,8 @@ export type CompanySubscriptionAccess = {
   entitlement: TraderSubscriptionEntitlement
 }
 
+type SubscriptionLookupResult = TraderSubscriptionSummary | null | typeof SUBSCRIPTION_SCHEMA_UNAVAILABLE
+
 function normalizeDate(value: Date | null | undefined): string | null {
   return value instanceof Date ? value.toISOString() : null
 }
@@ -139,6 +150,14 @@ function normalizePositiveInteger(value: number | null | undefined): number | nu
   if (typeof value !== 'number' || !Number.isFinite(value)) return null
   const rounded = Math.trunc(value)
   return rounded >= 0 ? rounded : null
+}
+
+function isSubscriptionSchemaMismatchError(error: unknown) {
+  return isPrismaSchemaMismatchError(error, SUBSCRIPTION_SCHEMA_IDENTIFIERS)
+}
+
+function markSubscriptionSchemaAvailability(isAvailable: boolean) {
+  subscriptionSchemaAvailability = isAvailable
 }
 
 function calculateDaysLeft(endDate: Date, now: Date) {
@@ -412,22 +431,59 @@ async function findRelevantTraderSubscription(db: DbClient, traderId: string, no
 }
 
 export async function getTraderSubscriptionHistory(db: DbClient, traderId: string, now = new Date()) {
-  await synchronizeTraderSubscriptionLifecycle(db, traderId, now)
+  if (subscriptionSchemaAvailability === false) {
+    return []
+  }
 
-  const rows = await db.traderSubscription.findMany({
-    where: {
-      traderId
-    },
-    include: traderSubscriptionInclude,
-    orderBy: [{ startDate: 'desc' }, { createdAt: 'desc' }]
-  })
+  try {
+    await synchronizeTraderSubscriptionLifecycle(db, traderId, now)
 
-  return rows.map((row) => toSubscriptionSummary(row, now))
+    const rows = await db.traderSubscription.findMany({
+      where: {
+        traderId
+      },
+      include: traderSubscriptionInclude,
+      orderBy: [{ startDate: 'desc' }, { createdAt: 'desc' }]
+    })
+
+    markSubscriptionSchemaAvailability(true)
+    return rows.map((row) => toSubscriptionSummary(row, now))
+  } catch (error) {
+    if (isSubscriptionSchemaMismatchError(error)) {
+      markSubscriptionSchemaAvailability(false)
+      return []
+    }
+
+    throw error
+  }
+}
+
+async function getCurrentTraderSubscriptionResult(
+  db: DbClient,
+  traderId: string,
+  now = new Date()
+): Promise<SubscriptionLookupResult> {
+  if (subscriptionSchemaAvailability === false) {
+    return SUBSCRIPTION_SCHEMA_UNAVAILABLE
+  }
+
+  try {
+    const row = await findRelevantTraderSubscription(db, traderId, now)
+    markSubscriptionSchemaAvailability(true)
+    return row ? toSubscriptionSummary(row, now) : null
+  } catch (error) {
+    if (isSubscriptionSchemaMismatchError(error)) {
+      markSubscriptionSchemaAvailability(false)
+      return SUBSCRIPTION_SCHEMA_UNAVAILABLE
+    }
+
+    throw error
+  }
 }
 
 export async function getCurrentTraderSubscription(db: DbClient, traderId: string, now = new Date()) {
-  const row = await findRelevantTraderSubscription(db, traderId, now)
-  return row ? toSubscriptionSummary(row, now) : null
+  const result = await getCurrentTraderSubscriptionResult(db, traderId, now)
+  return result === SUBSCRIPTION_SCHEMA_UNAVAILABLE ? null : result
 }
 
 export async function getTraderSubscriptionEntitlement(
@@ -456,7 +512,16 @@ export async function getTraderSubscriptionEntitlement(
     return null
   }
 
-  const currentSubscription = await getCurrentTraderSubscription(db, traderId, now)
+  if (subscriptionSchemaAvailability === false) {
+    return null
+  }
+
+  const subscriptionResult = await getCurrentTraderSubscriptionResult(db, traderId, now)
+  if (subscriptionResult === SUBSCRIPTION_SCHEMA_UNAVAILABLE) {
+    return null
+  }
+
+  const currentSubscription = subscriptionResult
   const isConfigured = currentSubscription !== null
   const subscriptionMaxCompanies = currentSubscription?.maxCompanies ?? null
   const subscriptionMaxUsers = currentSubscription?.maxUsers ?? null
@@ -552,6 +617,10 @@ export async function getCompanySubscriptionAccess(
   companyId: string,
   now = new Date()
 ): Promise<CompanySubscriptionAccess | null> {
+  if (subscriptionSchemaAvailability === false) {
+    return null
+  }
+
   const company = await db.company.findFirst({
     where: {
       id: companyId,
@@ -576,5 +645,46 @@ export async function getCompanySubscriptionAccess(
     companyId: company.id,
     traderId: company.traderId,
     entitlement
+  }
+}
+
+export async function getTraderSubscriptionPayments(db: DbClient, traderId: string) {
+  if (subscriptionSchemaAvailability === false) {
+    return []
+  }
+
+  try {
+    const payments = await db.subscriptionPayment.findMany({
+      where: {
+        traderId
+      },
+      orderBy: [{ paidAt: 'desc' }, { createdAt: 'desc' }]
+    })
+
+    markSubscriptionSchemaAvailability(true)
+    return payments.map((payment) => ({
+      id: payment.id,
+      traderSubscriptionId: payment.traderSubscriptionId,
+      planId: payment.planId,
+      amount: payment.amount,
+      currency: payment.currency,
+      status: payment.status,
+      paymentMode: payment.paymentMode,
+      referenceNo: payment.referenceNo,
+      paidAt: payment.paidAt?.toISOString() || null,
+      confirmedAt: payment.confirmedAt?.toISOString() || null,
+      confirmedByUserId: payment.confirmedByUserId,
+      planNameSnapshot: payment.planNameSnapshot,
+      notes: payment.notes,
+      createdAt: payment.createdAt.toISOString(),
+      updatedAt: payment.updatedAt.toISOString()
+    }))
+  } catch (error) {
+    if (isSubscriptionSchemaMismatchError(error)) {
+      markSubscriptionSchemaAvailability(false)
+      return []
+    }
+
+    throw error
   }
 }

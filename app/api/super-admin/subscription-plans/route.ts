@@ -5,6 +5,12 @@ import { parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { prisma } from '@/lib/prisma'
 import {
+  buildSubscriptionSchemaHeaders,
+  ensureSubscriptionManagementSchemaReady,
+  isSubscriptionManagementSchemaMismatchError,
+  SUBSCRIPTION_SCHEMA_WARNING_MESSAGE
+} from '@/lib/subscription-schema'
+import {
   normalizeSubscriptionBillingCycle,
   normalizeSubscriptionFeatureInputs
 } from '@/lib/subscription-config'
@@ -97,6 +103,13 @@ export async function GET(request: NextRequest) {
   if (!authResult.ok) return authResult.response
 
   try {
+    const schemaReady = await ensureSubscriptionManagementSchemaReady(prisma)
+    if (!schemaReady) {
+      return NextResponse.json([], {
+        headers: buildSubscriptionSchemaHeaders(false)
+      })
+    }
+
     const includeInactive = parseBooleanParam(new URL(request.url).searchParams.get('includeInactive'))
 
     const plans = await prisma.subscriptionPlan.findMany({
@@ -116,6 +129,12 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(plans.map((plan) => normalizePlanForResponse(plan)))
   } catch (error) {
+    if (isSubscriptionManagementSchemaMismatchError(error)) {
+      return NextResponse.json([], {
+        headers: buildSubscriptionSchemaHeaders(false)
+      })
+    }
+
     console.error('subscription-plans GET failed:', error)
     return NextResponse.json({ error: 'Failed to fetch subscription plans' }, { status: 500 })
   }
@@ -126,6 +145,14 @@ export async function POST(request: NextRequest) {
   if (!authResult.ok) return authResult.response
 
   try {
+    const schemaReady = await ensureSubscriptionManagementSchemaReady(prisma)
+    if (!schemaReady) {
+      return NextResponse.json(
+        { error: SUBSCRIPTION_SCHEMA_WARNING_MESSAGE },
+        { status: 503, headers: buildSubscriptionSchemaHeaders(false) }
+      )
+    }
+
     const body = await request.json().catch(() => null)
     const parsed = createPlanSchema.safeParse(body)
 
@@ -207,6 +234,13 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(normalizePlanForResponse(plan), { status: 201 })
   } catch (error) {
+    if (isSubscriptionManagementSchemaMismatchError(error)) {
+      return NextResponse.json(
+        { error: SUBSCRIPTION_SCHEMA_WARNING_MESSAGE },
+        { status: 503, headers: buildSubscriptionSchemaHeaders(false) }
+      )
+    }
+
     console.error('subscription-plans POST failed:', error)
     return NextResponse.json({ error: 'Failed to create subscription plan' }, { status: 500 })
   }

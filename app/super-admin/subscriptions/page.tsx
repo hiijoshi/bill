@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
 import { authHeadersScoped } from '@/lib/csrf'
+import { readSubscriptionSchemaState } from '@/lib/subscription-schema'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -235,10 +236,15 @@ export default function SuperAdminTraderSubscriptionsPage() {
   const [query, setQuery] = useState('')
   const [expiringWithinDays, setExpiringWithinDays] = useState('30')
   const [error, setError] = useState<string | null>(null)
+  const [schemaReady, setSchemaReady] = useState(true)
+  const [schemaWarning, setSchemaWarning] = useState<string | null>(null)
   const [form, setForm] = useState<ActionFormState>(createEmptyActionForm())
 
   const loadPlans = useCallback(async () => {
     const response = await fetch('/api/super-admin/subscription-plans?includeInactive=true', { cache: 'no-store' })
+    const schemaState = readSubscriptionSchemaState(response.headers)
+    setSchemaReady((current) => current && schemaState.schemaReady)
+    setSchemaWarning(schemaState.schemaWarning)
     const payload = (await response.json().catch(() => [])) as PlanOption[]
     setPlans(Array.isArray(payload) ? payload : [])
   }, [])
@@ -253,6 +259,9 @@ export default function SuperAdminTraderSubscriptionsPage() {
       if (expiringWithinDays.trim()) params.set('expiringWithinDays', expiringWithinDays.trim())
 
       const response = await fetch(`/api/super-admin/trader-subscriptions?${params.toString()}`, { cache: 'no-store' })
+      const schemaState = readSubscriptionSchemaState(response.headers)
+      setSchemaReady(schemaState.schemaReady)
+      setSchemaWarning(schemaState.schemaWarning)
       const payload = (await response.json().catch(() => [])) as TraderRow[] | { error?: string }
       if (!response.ok) {
         throw new Error(Array.isArray(payload) ? 'Failed to load traders' : payload.error || 'Failed to load traders')
@@ -284,6 +293,9 @@ export default function SuperAdminTraderSubscriptionsPage() {
 
     try {
       const response = await fetch(`/api/super-admin/trader-subscriptions/${traderId}`, { cache: 'no-store' })
+      const schemaState = readSubscriptionSchemaState(response.headers)
+      setSchemaReady(schemaState.schemaReady)
+      setSchemaWarning(schemaState.schemaWarning)
       const payload = (await response.json().catch(() => ({}))) as TraderDetailPayload & { error?: string }
       if (!response.ok) {
         throw new Error(payload.error || 'Failed to load trader detail')
@@ -392,6 +404,11 @@ export default function SuperAdminTraderSubscriptionsPage() {
     >
       <div className="space-y-6">
         {error ? <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
+        {schemaWarning ? (
+          <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            {schemaWarning}
+          </div>
+        ) : null}
 
         <Card>
           <CardHeader className="pb-3">
@@ -872,7 +889,7 @@ export default function SuperAdminTraderSubscriptionsPage() {
                   onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}
                 />
 
-                <Button onClick={() => void submitAction()} disabled={saving || !selectedTraderId}>
+                <Button onClick={() => void submitAction()} disabled={saving || !schemaReady || !selectedTraderId}>
                   {saving ? 'Saving...' : 'Apply Action'}
                 </Button>
               </div>

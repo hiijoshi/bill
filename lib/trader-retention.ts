@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client'
 
 import { prisma } from '@/lib/prisma'
+import { isPrismaSchemaMismatchError } from '@/lib/prisma-schema-guard'
 import {
   getTraderSubscriptionEntitlement,
   type SubscriptionLifecycleState,
@@ -8,6 +9,8 @@ import {
 } from '@/lib/subscription-core'
 
 type DbClient = typeof prisma | Prisma.TransactionClient
+const TRADER_RETENTION_SCHEMA_IDENTIFIERS = ['traderdatalifecycle', 'traderdatabackup'] as const
+let traderRetentionSchemaAvailability: boolean | null = null
 
 export const TRADER_DATA_LIFECYCLE_STATES = [
   'active',
@@ -96,6 +99,14 @@ function normalizePositiveInteger(value: number | null | undefined) {
 
   const normalized = Math.trunc(value)
   return normalized >= 0 ? normalized : null
+}
+
+function isTraderRetentionSchemaMismatchError(error: unknown) {
+  return isPrismaSchemaMismatchError(error, TRADER_RETENTION_SCHEMA_IDENTIFIERS)
+}
+
+function markTraderRetentionSchemaAvailability(isAvailable: boolean) {
+  traderRetentionSchemaAvailability = isAvailable
 }
 
 function parseCountsJson(value: string | null | undefined) {
@@ -265,14 +276,28 @@ function toBackupSummary(
 }
 
 export async function getTraderBackupHistory(db: DbClient, traderId: string) {
-  const rows = await db.traderDataBackup.findMany({
-    where: {
-      traderId
-    },
-    orderBy: [{ createdAt: 'desc' }, { updatedAt: 'desc' }]
-  })
+  if (traderRetentionSchemaAvailability === false) {
+    return []
+  }
 
-  return rows.map((row) => toBackupSummary(row)).filter((row): row is TraderBackupSummary => Boolean(row))
+  try {
+    const rows = await db.traderDataBackup.findMany({
+      where: {
+        traderId
+      },
+      orderBy: [{ createdAt: 'desc' }, { updatedAt: 'desc' }]
+    })
+
+    markTraderRetentionSchemaAvailability(true)
+    return rows.map((row) => toBackupSummary(row)).filter((row): row is TraderBackupSummary => Boolean(row))
+  } catch (error) {
+    if (isTraderRetentionSchemaMismatchError(error)) {
+      markTraderRetentionSchemaAvailability(false)
+      return []
+    }
+
+    throw error
+  }
 }
 
 export async function ensureTraderDataLifecycleRecord(db: DbClient, traderId: string) {
@@ -297,36 +322,65 @@ export async function getTraderDataLifecycleSummary(
     traderDeletedAt?: Date | null
   }
 ): Promise<TraderDataLifecycleSummary | null> {
-  const [lifecycle, latestBackupRow, latestReadyBackupRow, traderRow] = await Promise.all([
-    db.traderDataLifecycle.findUnique({
-      where: {
-        traderId
+  if (traderRetentionSchemaAvailability === false) {
+    return null
+  }
+
+  let lifecycle:
+    | Awaited<ReturnType<DbClient['traderDataLifecycle']['findUnique']>>
+    | null = null
+  let latestBackupRow:
+    | Awaited<ReturnType<DbClient['traderDataBackup']['findFirst']>>
+    | null = null
+  let latestReadyBackupRow:
+    | Awaited<ReturnType<DbClient['traderDataBackup']['findFirst']>>
+    | null = null
+  let traderRow:
+    | {
+        deletedAt: Date | null
       }
-    }),
-    db.traderDataBackup.findFirst({
-      where: {
-        traderId
-      },
-      orderBy: [{ createdAt: 'desc' }, { updatedAt: 'desc' }]
-    }),
-    db.traderDataBackup.findFirst({
-      where: {
-        traderId,
-        status: 'ready'
-      },
-      orderBy: [{ exportedAt: 'desc' }, { createdAt: 'desc' }]
-    }),
-    input?.traderDeletedAt !== undefined
-      ? Promise.resolve({ deletedAt: input.traderDeletedAt })
-      : db.trader.findFirst({
-          where: {
-            id: traderId
-          },
-          select: {
-            deletedAt: true
-          }
-        })
-  ])
+    | null = null
+
+  try {
+    ;[lifecycle, latestBackupRow, latestReadyBackupRow, traderRow] = await Promise.all([
+      db.traderDataLifecycle.findUnique({
+        where: {
+          traderId
+        }
+      }),
+      db.traderDataBackup.findFirst({
+        where: {
+          traderId
+        },
+        orderBy: [{ createdAt: 'desc' }, { updatedAt: 'desc' }]
+      }),
+      db.traderDataBackup.findFirst({
+        where: {
+          traderId,
+          status: 'ready'
+        },
+        orderBy: [{ exportedAt: 'desc' }, { createdAt: 'desc' }]
+      }),
+      input?.traderDeletedAt !== undefined
+        ? Promise.resolve({ deletedAt: input.traderDeletedAt })
+        : db.trader.findFirst({
+            where: {
+              id: traderId
+            },
+            select: {
+              deletedAt: true
+            }
+          })
+    ])
+    markTraderRetentionSchemaAvailability(true)
+  } catch (error) {
+    if (isTraderRetentionSchemaMismatchError(error)) {
+      markTraderRetentionSchemaAvailability(false)
+      return null
+    }
+
+    throw error
+  }
 
   const entitlement =
     input && Object.prototype.hasOwnProperty.call(input, 'entitlement')

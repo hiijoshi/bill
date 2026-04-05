@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { prisma } from '@/lib/prisma'
+import {
+  buildSubscriptionSchemaHeaders,
+  ensureSubscriptionManagementSchemaReady,
+  isSubscriptionManagementSchemaMismatchError
+} from '@/lib/subscription-schema'
 import { getTraderSubscriptionEntitlement } from '@/lib/subscription-core'
 import { getTraderDataLifecycleSummary } from '@/lib/trader-retention'
 import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
@@ -16,6 +21,7 @@ export async function GET(request: NextRequest) {
     const stateFilter = String(searchParams.get('state') || '').trim().toLowerCase()
     const expiringWithinDays = Number(searchParams.get('expiringWithinDays') || '')
     const includeLocked = parseBooleanParam(searchParams.get('includeLocked'))
+    const schemaReady = await ensureSubscriptionManagementSchemaReady(prisma)
 
     const traders = await prisma.trader.findMany({
       where: {
@@ -35,14 +41,16 @@ export async function GET(request: NextRequest) {
 
     const rows = await Promise.all(
       traders.map(async (trader) => {
-        const [capacity, entitlement] = await Promise.all([
-          getTraderCapacitySnapshot(prisma, trader.id),
-          getTraderSubscriptionEntitlement(prisma, trader.id, new Date(), trader)
-        ])
-        const dataLifecycle = await getTraderDataLifecycleSummary(prisma, trader.id, new Date(), {
-          entitlement,
-          traderDeletedAt: trader.deletedAt
-        })
+        const capacity = await getTraderCapacitySnapshot(prisma, trader.id)
+        const entitlement = schemaReady
+          ? await getTraderSubscriptionEntitlement(prisma, trader.id, new Date(), trader)
+          : null
+        const dataLifecycle = schemaReady
+          ? await getTraderDataLifecycleSummary(prisma, trader.id, new Date(), {
+              entitlement,
+              traderDeletedAt: trader.deletedAt
+            })
+          : null
 
         return {
           id: trader.id,
@@ -91,7 +99,7 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      if (Number.isFinite(expiringWithinDays) && expiringWithinDays >= 0) {
+      if (schemaReady && Number.isFinite(expiringWithinDays) && expiringWithinDays >= 0) {
         if (row.daysLeft === null || row.daysLeft > expiringWithinDays) {
           return false
         }
@@ -109,8 +117,16 @@ export async function GET(request: NextRequest) {
       return left.name.localeCompare(right.name)
     })
 
-    return NextResponse.json(filtered)
+    return NextResponse.json(filtered, {
+      headers: buildSubscriptionSchemaHeaders(schemaReady)
+    })
   } catch (error) {
+    if (isSubscriptionManagementSchemaMismatchError(error)) {
+      return NextResponse.json([], {
+        headers: buildSubscriptionSchemaHeaders(false)
+      })
+    }
+
     console.error('trader-subscriptions GET failed:', error)
     return NextResponse.json({ error: 'Failed to fetch trader subscriptions' }, { status: 500 })
   }

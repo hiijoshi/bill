@@ -14,6 +14,7 @@ import { getAppCompanyCookieOptions } from '@/lib/supabase/app-session'
 import { getCompanyCookieName } from '@/lib/session-cookies'
 import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
 import { loadPermissionAccessForCompany } from '@/lib/permission-access'
+import { isPrismaSchemaMismatchError } from '@/lib/prisma-schema-guard'
 
 // Simple in-memory rate limiting store
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
@@ -511,9 +512,13 @@ export async function POST(request: NextRequest) {
       userAgent,
       error instanceof Error ? error.message : 'Unknown error'
     )
+
+    const errorMessage = isPrismaSchemaMismatchError(error)
+      ? 'Database schema mismatch. Run: npx prisma db push && npx prisma generate'
+      : 'Internal server error'
     
     return NextResponse.json({ 
-      error: 'Internal server error'
+      error: errorMessage
     }, { 
       status: 500,
       headers: {

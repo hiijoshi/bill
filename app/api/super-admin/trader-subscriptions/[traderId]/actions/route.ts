@@ -10,6 +10,12 @@ import {
   markUserSessionLiveUpdates
 } from '@/lib/live-update-state'
 import { prisma } from '@/lib/prisma'
+import {
+  buildSubscriptionSchemaHeaders,
+  ensureSubscriptionManagementSchemaReady,
+  isSubscriptionManagementSchemaMismatchError,
+  SUBSCRIPTION_SCHEMA_WARNING_MESSAGE
+} from '@/lib/subscription-schema'
 import { getCurrentTraderSubscription, getTraderSubscriptionHistory } from '@/lib/subscription-core'
 import {
   normalizeSubscriptionBillingCycle,
@@ -195,6 +201,14 @@ export async function POST(
   if (!authResult.ok) return authResult.response
 
   try {
+    const schemaReady = await ensureSubscriptionManagementSchemaReady(prisma)
+    if (!schemaReady) {
+      return NextResponse.json(
+        { error: SUBSCRIPTION_SCHEMA_WARNING_MESSAGE },
+        { status: 503, headers: buildSubscriptionSchemaHeaders(false) }
+      )
+    }
+
     const parsedParams = paramsSchema.safeParse(await params)
     if (!parsedParams.success) {
       return NextResponse.json({ error: 'Invalid trader ID' }, { status: 400 })
@@ -726,6 +740,13 @@ export async function POST(
 
     if (error instanceof TraderRetentionError) {
       return NextResponse.json({ error: error.message }, { status: error.status })
+    }
+
+    if (isSubscriptionManagementSchemaMismatchError(error)) {
+      return NextResponse.json(
+        { error: SUBSCRIPTION_SCHEMA_WARNING_MESSAGE },
+        { status: 503, headers: buildSubscriptionSchemaHeaders(false) }
+      )
     }
 
     console.error('trader-subscription action failed:', error)

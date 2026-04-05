@@ -9,6 +9,8 @@ import { authenticateUser, generateToken } from '../lib/auth'
 import { proxy as middleware } from '../proxy'
 import { writeAuditLog } from '../lib/audit-logging'
 import { getTraderCapacitySnapshot } from '../lib/trader-limits'
+import { isPrismaSchemaMismatchError } from '../lib/prisma-schema-guard'
+import { buildSubscriptionSchemaHeaders, readSubscriptionSchemaState } from '../lib/subscription-schema'
 import { GET as getPayments } from '../app/api/payments/route'
 import { POST as postCompanies, PUT as putCompanies } from '../app/api/companies/route'
 import { POST as postSuperAdminUsers } from '../app/api/super-admin/users/route'
@@ -86,6 +88,29 @@ test('RBAC requireRoles allow/deny works per role', async () => {
 test('Legacy admin role normalizes to company_admin', () => {
   assert.equal(normalizeAppRole('admin'), 'company_admin')
   assert.equal(normalizeAppRole('company_admin'), 'company_admin')
+})
+
+test('Schema guard detects optional-table mismatches cleanly', () => {
+  assert.equal(
+    isPrismaSchemaMismatchError(
+      new Error('SQLITE_UNKNOWN: SQLite error: no such table: main.TraderSubscription'),
+      ['TraderSubscription']
+    ),
+    true
+  )
+
+  assert.equal(
+    isPrismaSchemaMismatchError(new Error('Invalid credentials'), ['TraderSubscription']),
+    false
+  )
+})
+
+test('Subscription schema headers expose warning state consistently', () => {
+  const headers = buildSubscriptionSchemaHeaders(false)
+  const parsed = readSubscriptionSchemaState(headers)
+
+  assert.equal(parsed.schemaReady, false)
+  assert.ok(parsed.schemaWarning)
 })
 
 test('Scope checks block out-of-scope company access', async () => {

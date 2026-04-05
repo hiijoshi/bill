@@ -5,6 +5,12 @@ import { requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { prisma } from '@/lib/prisma'
 import {
+  buildSubscriptionSchemaHeaders,
+  ensureSubscriptionManagementSchemaReady,
+  isSubscriptionManagementSchemaMismatchError,
+  SUBSCRIPTION_SCHEMA_WARNING_MESSAGE
+} from '@/lib/subscription-schema'
+import {
   normalizeSubscriptionBillingCycle,
   normalizeSubscriptionFeatureInputs
 } from '@/lib/subscription-config'
@@ -107,6 +113,14 @@ export async function GET(
   if (!authResult.ok) return authResult.response
 
   try {
+    const schemaReady = await ensureSubscriptionManagementSchemaReady(prisma)
+    if (!schemaReady) {
+      return NextResponse.json(
+        { error: SUBSCRIPTION_SCHEMA_WARNING_MESSAGE },
+        { status: 503, headers: buildSubscriptionSchemaHeaders(false) }
+      )
+    }
+
     const parsedParams = paramsSchema.safeParse(await params)
     if (!parsedParams.success) {
       return NextResponse.json({ error: 'Invalid plan ID' }, { status: 400 })
@@ -134,6 +148,13 @@ export async function GET(
 
     return NextResponse.json(normalizePlanForResponse(plan))
   } catch (error) {
+    if (isSubscriptionManagementSchemaMismatchError(error)) {
+      return NextResponse.json(
+        { error: SUBSCRIPTION_SCHEMA_WARNING_MESSAGE },
+        { status: 503, headers: buildSubscriptionSchemaHeaders(false) }
+      )
+    }
+
     console.error('subscription-plan GET failed:', error)
     return NextResponse.json({ error: 'Failed to fetch subscription plan' }, { status: 500 })
   }
@@ -147,6 +168,14 @@ export async function PUT(
   if (!authResult.ok) return authResult.response
 
   try {
+    const schemaReady = await ensureSubscriptionManagementSchemaReady(prisma)
+    if (!schemaReady) {
+      return NextResponse.json(
+        { error: SUBSCRIPTION_SCHEMA_WARNING_MESSAGE },
+        { status: 503, headers: buildSubscriptionSchemaHeaders(false) }
+      )
+    }
+
     const parsedParams = paramsSchema.safeParse(await params)
     if (!parsedParams.success) {
       return NextResponse.json({ error: 'Invalid plan ID' }, { status: 400 })
@@ -266,6 +295,13 @@ export async function PUT(
 
     return NextResponse.json(normalizePlanForResponse(plan))
   } catch (error) {
+    if (isSubscriptionManagementSchemaMismatchError(error)) {
+      return NextResponse.json(
+        { error: SUBSCRIPTION_SCHEMA_WARNING_MESSAGE },
+        { status: 503, headers: buildSubscriptionSchemaHeaders(false) }
+      )
+    }
+
     console.error('subscription-plan PUT failed:', error)
     return NextResponse.json({ error: 'Failed to update subscription plan' }, { status: 500 })
   }

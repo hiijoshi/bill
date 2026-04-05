@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { getTraderSubscriptionEntitlement } from '@/lib/subscription-core'
+import { ensureSubscriptionManagementSchemaReady } from '@/lib/subscription-schema'
 import { getTraderDataLifecycleSummary } from '@/lib/trader-retention'
 
 type DbClient = typeof prisma | Prisma.TransactionClient
@@ -65,6 +66,23 @@ export async function getTraderCapacitySnapshot(
       }
     })
   ])
+
+  const schemaReady = await ensureSubscriptionManagementSchemaReady(db)
+  if (!schemaReady) {
+    return {
+      ...trader,
+      maxCompanies: trader.maxCompanies,
+      maxUsers: trader.maxUsers,
+      currentCompanies,
+      currentUsers,
+      limitSource: 'legacy',
+      subscriptionState: 'none',
+      subscriptionMessage: null,
+      subscriptionConfigured: false,
+      canManageCompanies: true,
+      canManageUsers: true
+    }
+  }
 
   const entitlement = await getTraderSubscriptionEntitlement(db, traderId, new Date(), trader)
   const dataLifecycle = await getTraderDataLifecycleSummary(db, traderId, new Date(), {
