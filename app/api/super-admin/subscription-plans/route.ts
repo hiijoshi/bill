@@ -3,19 +3,23 @@ import { z } from 'zod'
 
 import { parseBooleanParam, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
+import { markSuperAdminLiveUpdate } from '@/lib/live-update-state'
 import { prisma } from '@/lib/prisma'
+import {
+  getSuperAdminSubscriptionPlans,
+  normalizeSubscriptionPlanForResponse
+} from '@/lib/super-admin-subscription-data'
+import {
+  normalizeSubscriptionBillingCycle,
+  normalizeSubscriptionFeatureInputs
+} from '@/lib/subscription-config'
 import {
   buildSubscriptionSchemaHeaders,
   ensureSubscriptionManagementSchemaReady,
   isSubscriptionManagementSchemaMismatchError,
   SUBSCRIPTION_SCHEMA_WARNING_MESSAGE
 } from '@/lib/subscription-schema'
-import {
-  normalizeSubscriptionBillingCycle,
-  normalizeSubscriptionFeatureInputs
-} from '@/lib/subscription-config'
 import { replaceSubscriptionPlanFeatures } from '@/lib/subscription-mutations'
-import { markSuperAdminLiveUpdate } from '@/lib/live-update-state'
 
 const planFeatureSchema = z
   .object({
@@ -44,90 +48,17 @@ const createPlanSchema = z
   })
   .strict()
 
-function normalizePlanForResponse(plan: {
-  id: string
-  name: string
-  description: string | null
-  billingCycle: string
-  amount: number
-  currency: string
-  maxCompanies: number | null
-  maxUsers: number | null
-  defaultTrialDays: number | null
-  isActive: boolean
-  isTrialCapable: boolean
-  sortOrder: number
-  createdAt: Date
-  updatedAt: Date
-  features: Array<{
-    id: string
-    featureKey: string
-    featureLabel: string
-    description: string | null
-    enabled: boolean
-    sortOrder: number
-  }>
-  _count?: {
-    subscriptions: number
-  }
-}) {
-  return {
-    id: plan.id,
-    name: plan.name,
-    description: plan.description,
-    billingCycle: plan.billingCycle,
-    amount: plan.amount,
-    currency: plan.currency,
-    maxCompanies: plan.maxCompanies,
-    maxUsers: plan.maxUsers,
-    defaultTrialDays: plan.defaultTrialDays,
-    isActive: plan.isActive,
-    isTrialCapable: plan.isTrialCapable,
-    sortOrder: plan.sortOrder,
-    createdAt: plan.createdAt.toISOString(),
-    updatedAt: plan.updatedAt.toISOString(),
-    features: plan.features.map((feature) => ({
-      id: feature.id,
-      featureKey: feature.featureKey,
-      featureLabel: feature.featureLabel,
-      description: feature.description,
-      enabled: feature.enabled,
-      sortOrder: feature.sortOrder
-    })),
-    subscriptionCount: plan._count?.subscriptions ?? 0
-  }
-}
-
 export async function GET(request: NextRequest) {
   const authResult = requireRoles(request, ['super_admin'])
   if (!authResult.ok) return authResult.response
 
   try {
-    const schemaReady = await ensureSubscriptionManagementSchemaReady(prisma)
-    if (!schemaReady) {
-      return NextResponse.json([], {
-        headers: buildSubscriptionSchemaHeaders(false)
-      })
-    }
-
     const includeInactive = parseBooleanParam(new URL(request.url).searchParams.get('includeInactive'))
+    const result = await getSuperAdminSubscriptionPlans(prisma, { includeInactive })
 
-    const plans = await prisma.subscriptionPlan.findMany({
-      where: includeInactive ? undefined : { isActive: true },
-      include: {
-        features: {
-          orderBy: [{ sortOrder: 'asc' }, { featureLabel: 'asc' }]
-        },
-        _count: {
-          select: {
-            subscriptions: true
-          }
-        }
-      },
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }]
+    return NextResponse.json(result.plans, {
+      headers: buildSubscriptionSchemaHeaders(result.schemaReady)
     })
-
-    return NextResponse.json(plans.map((plan) => normalizePlanForResponse(plan)))
   } catch (error) {
     if (isSubscriptionManagementSchemaMismatchError(error)) {
       return NextResponse.json([], {
@@ -232,7 +163,7 @@ export async function POST(request: NextRequest) {
     })
     markSuperAdminLiveUpdate()
 
-    return NextResponse.json(normalizePlanForResponse(plan), { status: 201 })
+    return NextResponse.json(normalizeSubscriptionPlanForResponse(plan), { status: 201 })
   } catch (error) {
     if (isSubscriptionManagementSchemaMismatchError(error)) {
       return NextResponse.json(
