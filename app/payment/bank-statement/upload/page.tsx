@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, CheckCircle2, Landmark, ScanSearch, Upload } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, CheckCircle2, FileText, Landmark, ScanSearch, Upload } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
@@ -87,14 +87,21 @@ function normalizeCollection<T>(payload: CollectionPayload<T>): T[] {
 }
 
 function formatCurrency(value: number): string {
-  return `₹${Number(value || 0).toFixed(2)}`
+  const normalizedValue = Number(value || 0)
+  return `₹${new Intl.NumberFormat('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(Number.isFinite(normalizedValue) ? normalizedValue : 0)}`
 }
 
-function formatStatementDate(value: string): string {
+function formatCompactStatementDate(value: string): string {
   if (!value) return '-'
   const parsed = new Date(value)
   if (!Number.isFinite(parsed.getTime())) return value
-  return parsed.toLocaleDateString('en-IN')
+  const month = parsed.toLocaleDateString('en-IN', { month: 'short' })
+  const day = parsed.toLocaleDateString('en-IN', { day: '2-digit' })
+  const year = parsed.toLocaleDateString('en-IN', { year: '2-digit' })
+  return `${month} ${day}-${year}`
 }
 
 function formatFileSize(size: number): string {
@@ -175,11 +182,97 @@ function getProcessingMessage(kind: StatementDocumentKind | null, action: 'previ
   }
 }
 
-function getStatusVariant(status: StatementPreviewRow['status']): 'default' | 'secondary' | 'destructive' | 'outline' {
-  if (status === 'settled' || status === 'imported') return 'default'
-  if (status === 'unsettled') return 'secondary'
-  if (status === 'invalid') return 'destructive'
-  return 'outline'
+function getDocumentStatusMeta(
+  document: StatementDocumentMeta | null | undefined,
+  fallbackKind: StatementDocumentKind | null
+): { label: string; className: string } {
+  if (document?.recognitionMode === 'ocr') {
+    return {
+      label: 'Scanned',
+      className: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200'
+    }
+  }
+
+  if (document?.recognitionMode === 'structured') {
+    return {
+      label: 'Mapped',
+      className: 'bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200'
+    }
+  }
+
+  if (document?.recognitionMode === 'text') {
+    return {
+      label: 'Recognized',
+      className: 'bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200'
+    }
+  }
+
+  if (fallbackKind === 'pdf' || fallbackKind === 'image') {
+    return {
+      label: 'Ready for Scan',
+      className: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200'
+    }
+  }
+
+  if (fallbackKind) {
+    return {
+      label: 'Ready for Review',
+      className: 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200'
+    }
+  }
+
+  return {
+    label: 'Waiting for File',
+    className: 'bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200'
+  }
+}
+
+function getEntryDebitAmount(entry: StatementPreviewRow): string {
+  return entry.direction === 'out' ? formatCurrency(entry.amount) : '₹0.00'
+}
+
+function getEntryCreditAmount(entry: StatementPreviewRow): string {
+  return entry.direction === 'in' ? formatCurrency(entry.amount) : '₹0.00'
+}
+
+function getEntryTargetLabel(
+  entry: StatementPreviewRow,
+  selectedTargetOption?: SearchableSelectOption | null
+): string {
+  return (
+    entry.matchedTargetLabel ||
+    entry.selectedTarget?.targetLabel ||
+    selectedTargetOption?.label ||
+    entry.suggestedTarget?.targetLabel ||
+    '-'
+  )
+}
+
+function getEntryRemark(
+  entry: StatementPreviewRow,
+  selectedTargetOption?: SearchableSelectOption | null
+): string {
+  if (entry.status === 'imported') {
+    return entry.reason || 'Posted to the ledger.'
+  }
+
+  if (entry.status === 'settled') {
+    return entry.reason || 'Auto-matched with an existing ERP entry.'
+  }
+
+  if (selectedTargetOption?.label) {
+    return `Ready to post as ${selectedTargetOption.label}.`
+  }
+
+  if (entry.selectedTarget?.targetLabel) {
+    return `Ready to post as ${entry.selectedTarget.targetLabel}.`
+  }
+
+  if (entry.suggestedTarget?.reason) {
+    return entry.suggestedTarget.reason
+  }
+
+  return entry.reason || 'Awaiting ERP account or supplier selection.'
 }
 
 function encodeTargetSelection(target: StatementTargetSelection | null | undefined): string {
@@ -495,28 +588,14 @@ function BankStatementUploadPageContent() {
     !uploadingStatement &&
     !verifyingStatement
 
-  const stepCards = [
-    {
-      title: 'Select Bank',
-      value: selectedBank ? selectedBank.name : 'Pending',
-      description: selectedBank ? 'Using this bank for statement verification.' : 'Choose the bank account first.'
-    },
-    {
-      title: 'Upload Document',
-      value: selectedFile ? selectedFile.name : 'Pending',
-      description: selectedFile ? 'Statement file attached and ready for verification.' : 'CSV, Excel, PDF, image, or text file.'
-    },
-    {
-      title: 'System Verification',
-      value: hasPreview ? `${summary.settled} settled / ${summary.unsettled} not settled` : 'Pending',
-      description: hasPreview ? 'The system checked every row against recorded payments.' : 'Verification starts after upload.'
-    },
-    {
-      title: 'Ready Settlement',
-      value: readyToImportCount > 0 ? `${readyToImportCount} selected` : 'Pending',
-      description: readyToImportCount > 0 ? 'Only selected unmatched rows will import.' : 'Map unmatched rows to party, supplier, or account head.'
-    }
-  ]
+  const activeDocumentName = result?.document?.fileName || selectedFile?.name || 'No document selected'
+  const activeBank = result?.bank || selectedBank
+  const documentStatus = getDocumentStatusMeta(result?.document, selectedFileKind)
+  const recognizedEntriesCount = settledEntries.length + unsettledEntries.length
+  const sortedInvalidEntries = useMemo(
+    () => [...invalidEntries].sort((left, right) => left.rowNo - right.rowNo),
+    [invalidEntries]
+  )
 
   const submitStatement = async (action: 'preview' | 'import') => {
     if (!companyId) {
@@ -611,51 +690,63 @@ function BankStatementUploadPageContent() {
 
   return (
     <DashboardLayout companyId={companyId}>
-      <div className="p-6">
+      <div className="min-h-full bg-[radial-gradient(circle_at_top_right,_rgba(59,130,246,0.08),_transparent_26%),linear-gradient(180deg,#f8fafc_0%,#eff6ff_100%)] p-6">
         <div className="mx-auto max-w-7xl space-y-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h1 className="text-3xl font-bold">Bank Statement Verification</h1>
-              <p className="mt-1 text-sm text-slate-600">
-                Upload CSV, Excel, PDF, text, or statement image. The system recognizes the document type, verifies rows against saved payments, then separates settled rows from rows that still need a target selection.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => router.push('/payment/dashboard')}>
-                View Payment History
-              </Button>
-              <Button variant="outline" onClick={() => router.push('/payment/cash-bank/entry')}>
-                Record Cash / Bank Payment
-              </Button>
-              <Button variant="outline" onClick={() => router.push('/main/dashboard')}>
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back to Dashboard
-              </Button>
+          <div className="rounded-[28px] border border-slate-200/80 bg-white/90 p-6 shadow-[0_18px_55px_rgba(15,23,42,0.08)] backdrop-blur">
+            <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-blue-700">ERP Bank Workspace</p>
+                <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">Bank Statement Reconciliation</h1>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-600">
+                  <span className="inline-flex max-w-full items-center gap-2 rounded-full bg-slate-100 px-3 py-1 font-medium text-slate-700">
+                    <FileText className="h-4 w-4 text-slate-500" />
+                    <span>Document:</span>
+                    <span className="max-w-[320px] truncate text-slate-900">{activeDocumentName}</span>
+                  </span>
+                  <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 font-medium ${documentStatus.className}`}>
+                    <span>Status:</span>
+                    <span>{documentStatus.label}</span>
+                  </span>
+                  {activeBank ? (
+                    <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                      <span>Bank:</span>
+                      <span className="text-emerald-900">{activeBank.name}</span>
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-4 max-w-3xl text-sm text-slate-600">
+                  Upload CSV, Excel, PDF, text, or a statement image. The system scans each row, separates matched and unmatched entries, and lists any unread rows below exactly as part of the reconciliation review.
+                </p>
+                {result?.document?.note ? (
+                  <p className="mt-3 text-xs text-slate-500">{result.document.note}</p>
+                ) : null}
+              </div>
+
+              <div className="flex flex-wrap gap-2 xl:justify-end">
+                <Button variant="outline" onClick={() => router.push('/payment/dashboard')}>
+                  View Payment History
+                </Button>
+                <Button variant="outline" onClick={() => router.push('/payment/cash-bank/entry')}>
+                  Record Cash / Bank Payment
+                </Button>
+                <Button variant="outline" onClick={() => router.push('/main/dashboard')}>
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                  Back to Dashboard
+                </Button>
+              </div>
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {stepCards.map((card) => (
-              <Card key={card.title}>
-                <CardContent className="pt-6">
-                  <p className="text-sm font-medium text-slate-500">{card.title}</p>
-                  <p className="mt-2 text-xl font-semibold text-slate-900 break-all">{card.value}</p>
-                  <p className="mt-2 text-sm text-slate-600">{card.description}</p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Landmark className="h-5 w-5" />
+          <Card className="gap-0 overflow-hidden border-slate-200/80 bg-white/95 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+            <CardHeader className="border-b border-slate-100 bg-slate-50/80">
+              <CardTitle className="flex items-center gap-2 text-base text-slate-900">
+                <Landmark className="h-5 w-5 text-blue-700" />
                 Statement Details
               </CardTitle>
             </CardHeader>
-            <CardContent className="grid gap-5">
+            <CardContent className="grid gap-5 pt-6">
               {banks.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
                   <p className="text-sm text-slate-700">No bank master found for this company.</p>
                   <Button className="mt-4" onClick={() => router.push('/master/bank')}>
                     Add Bank Master
@@ -663,7 +754,7 @@ function BankStatementUploadPageContent() {
                 </div>
               ) : (
                 <>
-                  <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-4 lg:grid-cols-[1fr_1.25fr]">
                     <div className="grid gap-2">
                       <Label htmlFor="bankId">Select Bank</Label>
                       <Select
@@ -676,7 +767,7 @@ function BankStatementUploadPageContent() {
                           setStatusTone(null)
                         }}
                       >
-                        <SelectTrigger id="bankId">
+                        <SelectTrigger id="bankId" className="bg-white">
                           <SelectValue placeholder="Select bank" />
                         </SelectTrigger>
                         <SelectContent>
@@ -718,24 +809,30 @@ function BankStatementUploadPageContent() {
                     </div>
                   </div>
 
-                  {selectedFile ? (
-                    <div className="rounded-lg border border-blue-200 bg-blue-50/70 p-4 text-sm text-blue-900">
-                      <p className="font-medium">{getDocumentKindLabel(selectedFileKind)}</p>
-                      <p className="mt-1">{getDocumentKindGuidance(selectedFileKind)}</p>
-                      <p className="mt-2 text-xs text-blue-700">
-                        File: {selectedFile.name} • Size: {formatFileSize(selectedFile.size)}
-                      </p>
-                    </div>
-                  ) : null}
+                  <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+                    {selectedFile ? (
+                      <div className="rounded-2xl border border-blue-200 bg-blue-50/70 p-4 text-sm text-blue-900">
+                        <p className="font-semibold">{getDocumentKindLabel(selectedFileKind)}</p>
+                        <p className="mt-1">{getDocumentKindGuidance(selectedFileKind)}</p>
+                        <p className="mt-2 text-xs text-blue-700">
+                          File: {selectedFile.name} | Size: {formatFileSize(selectedFile.size)}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">
+                        Attach a statement file to begin reconciliation.
+                      </div>
+                    )}
 
-                  {selectedBank ? (
-                    <div className="rounded-lg border bg-slate-50 p-4 text-sm text-slate-700">
-                      <p className="font-medium text-slate-900">{selectedBank.name}</p>
-                      <p className="mt-1">
-                        Branch: {selectedBank.branch || 'N/A'} | Account No: {selectedBank.accountNumber || 'N/A'} | IFSC: {selectedBank.ifscCode || 'N/A'}
-                      </p>
-                    </div>
-                  ) : null}
+                    {activeBank ? (
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700">
+                        <p className="font-semibold text-slate-900">{activeBank.name}</p>
+                        <p className="mt-1">
+                          Branch: {activeBank.branch || 'N/A'} | Account No: {activeBank.accountNumber || 'N/A'} | IFSC: {activeBank.ifscCode || 'N/A'}
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
 
                   <div className="flex flex-wrap gap-3">
                     <Button
@@ -755,18 +852,18 @@ function BankStatementUploadPageContent() {
                       disabled={!canUpload}
                     >
                       <Upload className="mr-2 h-4 w-4" />
-                      {uploadingStatement ? 'Importing Settlements...' : 'Import Selected Settlements'}
+                      {uploadingStatement ? 'Posting to Ledger...' : 'Post to Ledger'}
                     </Button>
                   </div>
 
                   {statusMessage ? (
                     <div
-                      className={`rounded-lg border px-4 py-3 text-sm ${
+                      className={`rounded-2xl border px-4 py-3 text-sm ${
                         statusTone === 'error'
                           ? 'border-red-200 bg-red-50 text-red-800'
                           : statusTone === 'info'
                             ? 'border-blue-200 bg-blue-50 text-blue-800'
-                          : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                            : 'border-emerald-200 bg-emerald-50 text-emerald-800'
                       }`}
                     >
                       {statusMessage}
@@ -777,244 +874,303 @@ function BankStatementUploadPageContent() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <CheckCircle2 className="h-5 w-5" />
-                Verification Summary
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-                <div className="rounded-lg border bg-slate-50 p-4">
-                  <p className="text-sm text-slate-500">Total Rows</p>
-                  <p className="mt-2 text-2xl font-semibold">{summary.total}</p>
-                  <p className="mt-1 text-xs text-slate-500">{formatCurrency(amountSummary.totalAmount)}</p>
+          {hasPreview ? (
+            <>
+              <div className="grid gap-4 xl:grid-cols-3">
+                <div className="rounded-[24px] border border-amber-200 bg-[linear-gradient(135deg,rgba(255,255,255,1)_0%,rgba(255,247,237,0.95)_100%)] p-5 shadow-sm">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">Total Transactions</p>
+                      <p className="mt-3 text-4xl font-bold text-slate-950">{recognizedEntriesCount}</p>
+                      <p className="mt-2 text-sm font-medium text-emerald-700">{formatCurrency(amountSummary.totalAmount)}</p>
+                    </div>
+                    <div className="rounded-full bg-amber-100 p-3 text-amber-700 ring-1 ring-inset ring-amber-200">
+                      <FileText className="h-5 w-5" />
+                    </div>
+                  </div>
                 </div>
-                <div className="rounded-lg border bg-slate-50 p-4">
-                  <p className="text-sm text-slate-500">Settled</p>
-                  <p className="mt-2 text-2xl font-semibold text-emerald-700">{summary.settled}</p>
-                  <p className="mt-1 text-xs text-emerald-700">{formatCurrency(amountSummary.settledAmount)}</p>
+
+                <div className="rounded-[24px] border border-emerald-200 bg-[linear-gradient(135deg,rgba(255,255,255,1)_0%,rgba(236,253,245,0.95)_100%)] p-5 shadow-sm">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">Settled Entries</p>
+                      <p className="mt-3 text-4xl font-bold text-slate-950">{settledEntries.length}</p>
+                      <p className="mt-2 text-sm font-medium text-emerald-700">{formatCurrency(amountSummary.settledAmount)}</p>
+                    </div>
+                    <div className="rounded-full bg-emerald-100 p-3 text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                      <CheckCircle2 className="h-5 w-5" />
+                    </div>
+                  </div>
                 </div>
-                <div className="rounded-lg border bg-slate-50 p-4">
-                  <p className="text-sm text-slate-500">Ready to Import</p>
-                  <p className="mt-2 text-2xl font-semibold text-blue-700">{readyToImportCount}</p>
-                  <p className="mt-1 text-xs text-slate-500">Mapped unmatched rows</p>
-                </div>
-                <div className="rounded-lg border bg-slate-50 p-4">
-                  <p className="text-sm text-slate-500">Not Settled</p>
-                  <p className="mt-2 text-2xl font-semibold text-amber-700">{summary.unsettled}</p>
-                  <p className="mt-1 text-xs text-amber-700">{formatCurrency(amountSummary.unsettledAmount)}</p>
-                </div>
-                <div className="rounded-lg border bg-slate-50 p-4">
-                  <p className="text-sm text-slate-500">Imported / Errors</p>
-                  <p className="mt-2 text-2xl font-semibold text-slate-900">
-                    {summary.imported} / {summary.errors}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500">{formatCurrency(amountSummary.importedAmount)}</p>
+
+                <div className="rounded-[24px] border border-rose-200 bg-[linear-gradient(135deg,rgba(255,255,255,1)_0%,rgba(255,241,242,0.95)_100%)] p-5 shadow-sm">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-rose-700">Unsettled Entries</p>
+                      <p className="mt-3 text-4xl font-bold text-slate-950">{unsettledEntries.length}</p>
+                      <p className="mt-2 text-sm font-medium text-rose-700">{formatCurrency(amountSummary.unsettledAmount)}</p>
+                    </div>
+                    <div className="rounded-full bg-rose-100 p-3 text-rose-700 ring-1 ring-inset ring-rose-200">
+                      <AlertTriangle className="h-5 w-5" />
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {result?.document ? (
-                <div className="rounded-lg border bg-white p-4 text-sm text-slate-700">
-                  <p className="font-medium text-slate-900">{result.document.fileName}</p>
-                  <p className="mt-1">
-                    Document Type: <span className="font-medium uppercase">{result.document.kind}</span> | Parser: {result.document.parser}
-                  </p>
-                  {result.document.recognitionMode ? (
-                    <p className="mt-1">
-                      Recognition: <span className="font-medium uppercase">{result.document.recognitionMode}</span>
-                      {result.document.pageCount ? ` | Pages: ${result.document.pageCount}` : ''}
-                    </p>
-                  ) : null}
-                  {result.document.note ? (
-                    <p className="mt-2 text-xs text-slate-500">{result.document.note}</p>
-                  ) : null}
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
+              <div className="flex flex-wrap gap-2">
+                <Badge className="bg-slate-900 px-3 py-1 text-white hover:bg-slate-900">Parser: {result?.document?.parser || 'N/A'}</Badge>
+                <Badge variant="outline" className="border-blue-200 bg-blue-50 px-3 py-1 text-blue-700 hover:bg-blue-50">
+                  Ready to Post: {readyToImportCount}
+                </Badge>
+                <Badge variant="outline" className="border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700 hover:bg-emerald-50">
+                  Imported: {summary.imported}
+                </Badge>
+                <Badge variant="outline" className="border-amber-200 bg-amber-50 px-3 py-1 text-amber-700 hover:bg-amber-50">
+                  Rows Not Read: {summary.errors}
+                </Badge>
+              </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Settled / Matched Rows</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
+              <div className="grid gap-6 xl:grid-cols-[1.1fr_1fr]">
+                <Card className="gap-0 overflow-hidden border-slate-200/80 bg-white/95 shadow-sm">
+                  <CardHeader className="border-b border-emerald-100 bg-emerald-50/70">
+                    <CardTitle className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-900">
+                      Settled Entries (Matched with ERP Ledger)
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <Table>
+                      <TableHeader className="bg-slate-50/85">
+                        <TableRow>
+                          <TableHead className="h-12 px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Date</TableHead>
+                          <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Description</TableHead>
+                          <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Reference</TableHead>
+                          <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Debit (-₹)</TableHead>
+                          <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Credit (+₹)</TableHead>
+                          <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Match Status</TableHead>
+                          <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">ERP Account / Supplier</TableHead>
+                          <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Remarks</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {settledEntries.map((entry) => (
+                          <TableRow key={`${entry.externalId || 'row'}-${entry.rowNo}`} className="bg-white">
+                            <TableCell className="px-4 py-3 align-top">
+                              <div className="space-y-1 whitespace-normal">
+                                <div className="font-medium text-slate-900">{formatCompactStatementDate(entry.postedAt)}</div>
+                                <div className="text-xs text-slate-500">Row {entry.rowNo}</div>
+                              </div>
+                            </TableCell>
+                            <TableCell className="max-w-[220px] px-4 py-3 align-top whitespace-normal text-sm text-slate-700">
+                              {entry.description || '-'}
+                            </TableCell>
+                            <TableCell className="max-w-[140px] px-4 py-3 align-top whitespace-normal text-sm text-slate-600">
+                              {entry.reference || '-'}
+                            </TableCell>
+                            <TableCell className="px-4 py-3 align-top text-sm font-medium text-slate-700">
+                              {getEntryDebitAmount(entry)}
+                            </TableCell>
+                            <TableCell className="px-4 py-3 align-top text-sm font-medium text-slate-700">
+                              {getEntryCreditAmount(entry)}
+                            </TableCell>
+                            <TableCell className="px-4 py-3 align-top">
+                              <Badge
+                                className={
+                                  entry.status === 'imported'
+                                    ? 'bg-blue-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-blue-700 hover:bg-blue-100'
+                                    : 'bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 hover:bg-emerald-100'
+                                }
+                              >
+                                {entry.status === 'imported' ? 'Posted' : 'Matched'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="max-w-[220px] px-4 py-3 align-top whitespace-normal text-sm text-slate-700">
+                              <div className="space-y-1">
+                                <div>{getEntryTargetLabel(entry)}</div>
+                                {entry.matchedTypeLabel ? (
+                                  <div className="text-xs text-slate-500">{entry.matchedTypeLabel}</div>
+                                ) : null}
+                              </div>
+                            </TableCell>
+                            <TableCell className="max-w-[240px] px-4 py-3 align-top whitespace-normal text-sm text-slate-600">
+                              {getEntryRemark(entry)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                        {!settledEntries.length ? (
+                          <TableRow>
+                            <TableCell colSpan={8} className="px-4 py-8 text-center whitespace-normal text-slate-500">
+                              Verified settled rows will appear here after statement recognition.
+                            </TableCell>
+                          </TableRow>
+                        ) : null}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+
+                <Card className="gap-0 overflow-hidden border-slate-200/80 bg-white/95 shadow-sm">
+                  <CardHeader className="border-b border-rose-100 bg-rose-50/70">
+                    <CardTitle className="text-sm font-semibold uppercase tracking-[0.18em] text-rose-900">
+                      Unsettled Entries (No ERP Match)
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <Table>
+                      <TableHeader className="bg-slate-50/85">
+                        <TableRow>
+                          <TableHead className="h-12 px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Date</TableHead>
+                          <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Reference</TableHead>
+                          <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Debit (-₹)</TableHead>
+                          <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Credit (+₹)</TableHead>
+                          <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">ERP Account / Supplier</TableHead>
+                          <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Remark</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {unsettledEntries.map((entry) => {
+                          const selectedTargetOption = statementTargetMap.get(manualTargets[entry.externalId] || '') || null
+
+                          return (
+                            <TableRow key={entry.externalId} className="bg-white">
+                              <TableCell className="px-4 py-3 align-top">
+                                <div className="space-y-1 whitespace-normal">
+                                  <div className="font-medium text-slate-900">{formatCompactStatementDate(entry.postedAt)}</div>
+                                  <div className="text-xs text-slate-500">Row {entry.rowNo}</div>
+                                </div>
+                              </TableCell>
+                              <TableCell className="max-w-[220px] px-4 py-3 align-top whitespace-normal">
+                                <div className="space-y-1">
+                                  <div className="text-sm text-slate-700">{entry.description || 'Unrecognized statement row'}</div>
+                                  <div className="text-xs text-slate-500">{entry.reference || 'No reference'}</div>
+                                </div>
+                              </TableCell>
+                              <TableCell className="px-4 py-3 align-top text-sm font-medium text-slate-700">
+                                {getEntryDebitAmount(entry)}
+                              </TableCell>
+                              <TableCell className="px-4 py-3 align-top text-sm font-medium text-slate-700">
+                                {getEntryCreditAmount(entry)}
+                              </TableCell>
+                              <TableCell className="min-w-[260px] px-4 py-3 align-top">
+                                <div className="space-y-2">
+                                  <SearchableSelect
+                                    id={`settlement-${entry.externalId}`}
+                                    value={manualTargets[entry.externalId] || ''}
+                                    onValueChange={(value) => {
+                                      setManualTargets((current) => ({
+                                        ...current,
+                                        [entry.externalId]: value
+                                      }))
+                                    }}
+                                    options={statementTargetOptions}
+                                    placeholder="Select ERP target"
+                                    searchPlaceholder="Search account, party, or supplier..."
+                                    emptyText="No settlement targets found."
+                                    triggerClassName="h-9 rounded-lg border-slate-200 bg-white text-xs shadow-none"
+                                  />
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    {manualTargets[entry.externalId] ? (
+                                      <Badge className="bg-blue-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-blue-700 hover:bg-blue-100">
+                                        Ready to post
+                                      </Badge>
+                                    ) : (
+                                      <Badge variant="outline" className="border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-700 hover:bg-rose-50">
+                                        Unsettled
+                                      </Badge>
+                                    )}
+                                    {entry.suggestedTarget ? (
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-8 rounded-full border-slate-200 px-3 text-xs"
+                                        onClick={() => {
+                                          setManualTargets((current) => ({
+                                            ...current,
+                                            [entry.externalId]: encodeTargetSelection(entry.suggestedTarget)
+                                          }))
+                                        }}
+                                      >
+                                        Use Suggestion
+                                      </Button>
+                                    ) : null}
+                                    {manualTargets[entry.externalId] ? (
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-8 rounded-full px-3 text-xs text-slate-600"
+                                        onClick={() => {
+                                          setManualTargets((current) => {
+                                            const next = { ...current }
+                                            delete next[entry.externalId]
+                                            return next
+                                          })
+                                        }}
+                                      >
+                                        Clear
+                                      </Button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell className="max-w-[240px] px-4 py-3 align-top whitespace-normal text-sm text-slate-600">
+                                {getEntryRemark(entry, selectedTargetOption)}
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
+                        {!unsettledEntries.length ? (
+                          <TableRow>
+                            <TableCell colSpan={6} className="px-4 py-8 text-center whitespace-normal text-slate-500">
+                              All verified rows are already settled, or there are no unmatched rows to map.
+                            </TableCell>
+                          </TableRow>
+                        ) : null}
+                      </TableBody>
+                    </Table>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-slate-50/80 px-6 py-4">
+                      <p className="text-xs text-slate-600">
+                        Review unmatched rows, choose the ERP account or supplier, then post only the selected entries to the ledger.
+                      </p>
+                      <Button onClick={() => void submitStatement('import')} disabled={!canUpload}>
+                        <Upload className="mr-2 h-4 w-4" />
+                        {uploadingStatement ? 'Posting to Ledger...' : 'Post to Ledger'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </>
+          ) : null}
+
+          {sortedInvalidEntries.length > 0 ? (
+            <Card className="gap-0 overflow-hidden border-amber-200/80 bg-white/95 shadow-sm">
+              <CardHeader className="border-b border-amber-100 bg-amber-50/70">
+                <CardTitle className="flex items-center gap-2 text-base text-amber-950">
+                  <AlertTriangle className="h-5 w-5 text-amber-700" />
+                  Rows That Could Not Be Read
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
                 <Table>
-                  <TableHeader>
+                  <TableHeader className="bg-slate-50/85">
                     <TableRow>
-                      <TableHead>Row</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Direction</TableHead>
-                      <TableHead>Amount</TableHead>
-                      <TableHead>Reference</TableHead>
-                      <TableHead>Remark</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>System Match</TableHead>
-                      <TableHead>Match Note</TableHead>
+                      <TableHead className="h-12 px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Row</TableHead>
+                      <TableHead className="px-4 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Reason</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {settledEntries.map((entry) => {
-                      return (
-                        <TableRow key={`${entry.externalId || 'row'}-${entry.rowNo}`}>
-                          <TableCell>{entry.rowNo}</TableCell>
-                          <TableCell>{formatStatementDate(entry.postedAt)}</TableCell>
-                          <TableCell>
-                            <Badge variant="outline">{entry.direction === 'in' ? 'Credit' : 'Debit'}</Badge>
-                          </TableCell>
-                          <TableCell>{formatCurrency(entry.amount)}</TableCell>
-                          <TableCell>{entry.reference || '-'}</TableCell>
-                          <TableCell className="max-w-[260px] truncate">{entry.description || '-'}</TableCell>
-                          <TableCell>
-                            <Badge variant={getStatusVariant(entry.status)}>{entry.status}</Badge>
-                          </TableCell>
-                          <TableCell>
-                            <div className="space-y-1 text-sm">
-                              <div>{entry.matchedTypeLabel || entry.reason || '-'}</div>
-                              {entry.matchedTargetLabel ? (
-                                <div className="text-xs text-slate-500">{entry.matchedTargetLabel}</div>
-                              ) : null}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            {entry.reason || '-'}
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })}
-                    {!settledEntries.length ? (
-                      <TableRow>
-                        <TableCell colSpan={9} className="text-center text-slate-500">
-                          Verified settled rows will appear here after statement recognition.
+                    {sortedInvalidEntries.map((entry) => (
+                      <TableRow key={`invalid-${entry.rowNo}`} className="bg-white">
+                        <TableCell className="px-4 py-3 font-medium text-slate-900">{entry.rowNo}</TableCell>
+                        <TableCell className="px-4 py-3 whitespace-normal text-slate-600">
+                          {entry.reason || 'Could not read this row.'}
                         </TableCell>
                       </TableRow>
-                    ) : null}
+                    ))}
                   </TableBody>
                 </Table>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Rows Needing Settlement Mapping</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {unsettledEntries.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-600">
-                  All verified rows are already settled, or there are no unmatched rows to map.
-                </div>
-              ) : (
-                unsettledEntries.map((entry) => (
-                  <div key={entry.externalId} className="rounded-2xl border bg-slate-50/70 p-4">
-                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge variant="outline">Row {entry.rowNo}</Badge>
-                          <Badge variant="outline">{entry.direction === 'in' ? 'Credit' : 'Debit'}</Badge>
-                          <span className="text-sm font-medium text-slate-900">{formatCurrency(entry.amount)}</span>
-                          <span className="text-sm text-slate-500">{formatStatementDate(entry.postedAt)}</span>
-                        </div>
-                        <p className="text-sm text-slate-700">{entry.description || 'No narration found.'}</p>
-                        <p className="text-xs text-slate-500">Reference: {entry.reference || 'N/A'}</p>
-                        <p className="text-xs text-slate-500">
-                          {entry.suggestedTarget
-                            ? `${entry.suggestedTarget.reason || 'System found a likely settlement match.'} ${entry.suggestedTarget.confidence ? `Confidence: ${entry.suggestedTarget.confidence}.` : ''}`
-                            : 'No automatic settlement suggestion was found for this row.'}
-                        </p>
-                      </div>
-
-                      <div className="space-y-3">
-                        <div className="grid gap-2">
-                          <Label htmlFor={`settlement-${entry.externalId}`}>Settlement Target</Label>
-                          <SearchableSelect
-                            id={`settlement-${entry.externalId}`}
-                            value={manualTargets[entry.externalId] || ''}
-                            onValueChange={(value) => {
-                              setManualTargets((current) => ({
-                                ...current,
-                                [entry.externalId]: value
-                              }))
-                            }}
-                            options={statementTargetOptions}
-                            placeholder="Search account head, party, or supplier"
-                            searchPlaceholder="Search target..."
-                            emptyText="No settlement targets found."
-                          />
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-2">
-                          {manualTargets[entry.externalId] ? (
-                            <Badge variant="default">Ready to import</Badge>
-                          ) : (
-                            <Badge variant="secondary">Not settled yet</Badge>
-                          )}
-                          {entry.suggestedTarget ? (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                setManualTargets((current) => ({
-                                  ...current,
-                                  [entry.externalId]: encodeTargetSelection(entry.suggestedTarget)
-                                }))
-                              }}
-                            >
-                              Use Suggestion
-                            </Button>
-                          ) : null}
-                          {manualTargets[entry.externalId] ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setManualTargets((current) => {
-                                  const next = { ...current }
-                                  delete next[entry.externalId]
-                                  return next
-                                })
-                              }}
-                            >
-                              Clear
-                            </Button>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
-
-          {invalidEntries.length > 0 ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Rows That Could Not Be Read</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Row</TableHead>
-                        <TableHead>Reason</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {invalidEntries.map((entry) => (
-                        <TableRow key={`invalid-${entry.rowNo}`}>
-                          <TableCell>{entry.rowNo}</TableCell>
-                          <TableCell>{entry.reason || 'Could not read this row.'}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
               </CardContent>
             </Card>
           ) : null}
