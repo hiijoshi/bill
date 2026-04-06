@@ -314,13 +314,18 @@ function JournalVoucherEntryPageContent() {
     return accountHeadOptions
   }
 
-  const totalDebit = useMemo(
-    () => lines.reduce((sum, line) => sum + parseAmount(line.debitAmount), 0),
+  const filledLines = useMemo(
+    () => lines.filter((line) => parseAmount(line.debitAmount) > 0 || parseAmount(line.creditAmount) > 0),
     [lines]
   )
+
+  const totalDebit = useMemo(
+    () => filledLines.reduce((sum, line) => sum + parseAmount(line.debitAmount), 0),
+    [filledLines]
+  )
   const totalCredit = useMemo(
-    () => lines.reduce((sum, line) => sum + parseAmount(line.creditAmount), 0),
-    [lines]
+    () => filledLines.reduce((sum, line) => sum + parseAmount(line.creditAmount), 0),
+    [filledLines]
   )
   const difference = useMemo(() => totalDebit - totalCredit, [totalCredit, totalDebit])
 
@@ -360,7 +365,8 @@ function JournalVoucherEntryPageContent() {
       return
     }
 
-    const normalizedLines = lines.map((line) => ({
+    const filledLines = lines.filter((line) => parseAmount(line.debitAmount) > 0 || parseAmount(line.creditAmount) > 0)
+    const normalizedLines = filledLines.map((line) => ({
       ledgerType: line.ledgerType,
       ledgerId: line.ledgerType === 'CASH' ? null : line.ledgerId || null,
       debitAmount: parseAmount(line.debitAmount),
@@ -368,14 +374,18 @@ function JournalVoucherEntryPageContent() {
       remark: line.remark.trim() || null
     }))
 
-    const hasIncompleteLine = lines.some((line) => {
+    const hasIncompleteLine = filledLines.some((line) => {
       const hasLedger = line.ledgerType === 'CASH' || Boolean(line.ledgerId)
-      const hasAmount = parseAmount(line.debitAmount) > 0 || parseAmount(line.creditAmount) > 0
-      return !hasLedger || !hasAmount
+      return !hasLedger
     })
 
+    if (normalizedLines.length < 2) {
+      alert('At least two ledger rows with amounts are required.')
+      return
+    }
+
     if (hasIncompleteLine) {
-      alert('Select ledger account and amount for every row.')
+      alert('Select ledger account for every filled row.')
       return
     }
 

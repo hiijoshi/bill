@@ -262,14 +262,6 @@ function formatFlowSummaryText(value: number, positiveLabel = 'Inflow', negative
   return `${normalized >= 0 ? positiveLabel : negativeLabel} ${absoluteCurrencyText(normalized)}`
 }
 
-function formatLedgerBalanceSummary(value: number): string {
-  const normalized = Number(value || 0)
-  if (Math.abs(normalized) < 0.005) {
-    return `Balanced ${currencyText(0)}`
-  }
-  return `${normalized >= 0 ? 'Debit' : 'Credit'} ${absoluteCurrencyText(normalized)}`
-}
-
 function csvEscape(value: string | number): string {
   const text = String(value ?? '')
   if (text.includes(',') || text.includes('"') || text.includes('\n')) {
@@ -920,9 +912,43 @@ export default function OperationsReportWorkspace({
     return parties.find((party) => party.id === targetId) || null
   }, [parties, reportData?.partyLedger?.selectedPartyId, selectedPartyId])
 
+  const buildSearchText = (row: BankLedgerRow): string => {
+    return [
+      row.date,
+      row.refNo,
+      row.billNo,
+      row.partyName,
+      row.bankName,
+      row.mode,
+      row.txnRef,
+      row.ifscCode,
+      row.accountNo,
+      row.companyName,
+      row.direction,
+      row.note
+    ]
+      .filter(Boolean)
+      .join(' | ')
+      .toLowerCase()
+  }
+
+  const bankLedgerRowsWithSearch = useMemo(() => {
+    return (reportData?.bankLedger || []).map((row) => ({
+      ...row,
+      searchText: buildSearchText(row)
+    }))
+  }, [reportData?.bankLedger])
+
+  const cashLedgerRowsWithSearch = useMemo(() => {
+    return (reportData?.cashLedger || []).map((row) => ({
+      ...row,
+      searchText: buildSearchText(row)
+    }))
+  }, [reportData?.cashLedger])
+
   const filteredBankLedger = useMemo(() => {
     const query = searchTerm.trim().toLowerCase()
-    return (reportData?.bankLedger || []).filter((row) => {
+    return bankLedgerRowsWithSearch.filter((row) => {
       const rowBankFilters =
         Array.isArray(row.bankFilterValues) && row.bankFilterValues.length > 0
           ? row.bankFilterValues
@@ -930,42 +956,18 @@ export default function OperationsReportWorkspace({
       if (bankFilter !== 'all' && !rowBankFilters.includes(bankFilter)) return false
       if (bankDirectionFilter !== 'all' && row.direction.toLowerCase() !== bankDirectionFilter) return false
       if (!query) return true
-      return (
-        row.date.toLowerCase().includes(query) ||
-        row.refNo.toLowerCase().includes(query) ||
-        row.billNo.toLowerCase().includes(query) ||
-        row.partyName.toLowerCase().includes(query) ||
-        row.bankName.toLowerCase().includes(query) ||
-        row.mode.toLowerCase().includes(query) ||
-        row.txnRef.toLowerCase().includes(query) ||
-        row.ifscCode.toLowerCase().includes(query) ||
-        row.accountNo.toLowerCase().includes(query) ||
-        row.companyName.toLowerCase().includes(query) ||
-        row.direction.toLowerCase().includes(query) ||
-        row.note.toLowerCase().includes(query)
-      )
+      return row.searchText.includes(query)
     })
-  }, [bankDirectionFilter, bankFilter, reportData?.bankLedger, searchTerm])
+  }, [bankDirectionFilter, bankFilter, bankLedgerRowsWithSearch, searchTerm])
 
   const filteredCashLedger = useMemo(() => {
     const query = searchTerm.trim().toLowerCase()
-    return (reportData?.cashLedger || []).filter((row) => {
+    return cashLedgerRowsWithSearch.filter((row) => {
       if (bankDirectionFilter !== 'all' && row.direction.toLowerCase() !== bankDirectionFilter) return false
       if (!query) return true
-      return (
-        row.date.toLowerCase().includes(query) ||
-        row.refNo.toLowerCase().includes(query) ||
-        row.billNo.toLowerCase().includes(query) ||
-        row.partyName.toLowerCase().includes(query) ||
-        row.bankName.toLowerCase().includes(query) ||
-        row.mode.toLowerCase().includes(query) ||
-        row.txnRef.toLowerCase().includes(query) ||
-        row.companyName.toLowerCase().includes(query) ||
-        row.direction.toLowerCase().includes(query) ||
-        row.note.toLowerCase().includes(query)
-      )
+      return row.searchText.includes(query)
     })
-  }, [bankDirectionFilter, reportData?.cashLedger, searchTerm])
+  }, [bankDirectionFilter, cashLedgerRowsWithSearch, searchTerm])
 
   const partyLedgerStatementRows = useMemo(
     () =>
@@ -1019,7 +1021,7 @@ export default function OperationsReportWorkspace({
   const bankLedgerStatementRows = useMemo(() => {
     const sortedRows = [...filteredBankLedger].sort(
       (a, b) =>
-        new Date(a.date).getTime() - new Date(b.date).getTime() ||
+        a.date.localeCompare(b.date) ||
         a.refNo.localeCompare(b.refNo) ||
         a.id.localeCompare(b.id)
     )
@@ -1051,7 +1053,7 @@ export default function OperationsReportWorkspace({
   const cashLedgerStatementRows = useMemo(() => {
     const sortedRows = [...filteredCashLedger].sort(
       (a, b) =>
-        new Date(a.date).getTime() - new Date(b.date).getTime() ||
+        a.date.localeCompare(b.date) ||
         a.refNo.localeCompare(b.refNo) ||
         a.id.localeCompare(b.id)
     )
@@ -1081,17 +1083,22 @@ export default function OperationsReportWorkspace({
   }, [cashLedgerOpeningBalance, filteredCashLedger, showCompanyColumn])
 
   const selectedBankLabel = bankFilter === 'all' ? 'All Banks' : bankFilter
+  const companyNameById = useMemo(
+    () => new Map(companies.map((company) => [company.id, company.name])),
+    [companies]
+  )
+
   const selectedCompanySummary = useMemo(() => {
     const targetIds = reportData?.meta?.companyIds?.length ? reportData.meta.companyIds : selectedCompanyIds
     const targetNames = targetIds
-      .map((companyId) => companies.find((company) => company.id === companyId)?.name || companyId)
+      .map((companyId) => companyNameById.get(companyId) || companyId)
       .filter(Boolean)
 
     if (targetNames.length === 0) return 'No company selected'
     if (targetNames.length === 1) return targetNames[0]
     if (targetNames.length === 2) return targetNames.join(', ')
     return `${targetNames[0]}, ${targetNames[1]} +${targetNames.length - 2} more`
-  }, [companies, reportData?.meta?.companyIds, selectedCompanyIds])
+  }, [companyNameById, reportData?.meta?.companyIds, selectedCompanyIds])
 
   const closeCompanyFilter = useCallback(() => {
     if (companyFilterRef.current) {

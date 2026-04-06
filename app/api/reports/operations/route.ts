@@ -259,47 +259,93 @@ function getMasterBankLabel(bank: { name?: string | null; branch?: string | null
   return branch ? `${name} (${branch})` : name
 }
 
+type MasterBankLookupRecord = {
+  byIfsc: Map<string, string[]>
+  byAccountNumber: Map<string, string[]>
+  byNameBranch: Map<string, string[]>
+  byLabelOrName: Map<string, string[]>
+}
+
+function addUniqueLookupValue(map: Map<string, string[]>, key: string, value: string) {
+  if (!key) return
+  const existing = map.get(key)
+  if (existing) {
+    if (!existing.includes(value)) existing.push(value)
+  } else {
+    map.set(key, [value])
+  }
+}
+
+function buildMasterBankLookup(masterBanks: MasterBankFilterRecord[]): MasterBankLookupRecord {
+  const lookup: MasterBankLookupRecord = {
+    byIfsc: new Map<string, string[]>(),
+    byAccountNumber: new Map<string, string[]>(),
+    byNameBranch: new Map<string, string[]>(),
+    byLabelOrName: new Map<string, string[]>()
+  }
+
+  for (const bank of masterBanks) {
+    const normalizedLabel = normalizeBankLookupValue(bank.label)
+    const normalizedName = normalizeBankLookupValue(bank.name)
+    const normalizedBranch = normalizeBankLookupValue(bank.branch)
+    const normalizedIfsc = normalizeBankLookupValue(bank.ifscCode)
+    const normalizedAccountNumber = normalizeBankAccountLookupValue(bank.accountNumber)
+
+    if (normalizedIfsc) {
+      addUniqueLookupValue(lookup.byIfsc, normalizedIfsc, bank.label)
+    }
+
+    if (normalizedAccountNumber) {
+      addUniqueLookupValue(lookup.byAccountNumber, normalizedAccountNumber, bank.label)
+    }
+
+    if (normalizedName && normalizedBranch) {
+      addUniqueLookupValue(lookup.byNameBranch, `${normalizedName}|${normalizedBranch}`, bank.label)
+    }
+
+    if (normalizedLabel) {
+      addUniqueLookupValue(lookup.byLabelOrName, normalizedLabel, bank.label)
+    }
+
+    if (normalizedName) {
+      addUniqueLookupValue(lookup.byLabelOrName, normalizedName, bank.label)
+    }
+  }
+
+  return lookup
+}
+
 function matchMasterBankLabels(args: {
-  masterBanks: MasterBankFilterRecord[]
+  masterBankLookup?: MasterBankLookupRecord
+  masterBanks?: MasterBankFilterRecord[]
   nameSnapshot?: string | null
   branchSnapshot?: string | null
   ifscCode?: string | null
   accountNumber?: string | null
 }): string[] {
+  const lookup = args.masterBankLookup ?? buildMasterBankLookup(args.masterBanks ?? [])
   const normalizedName = normalizeBankLookupValue(args.nameSnapshot)
   const normalizedBranch = normalizeBankLookupValue(args.branchSnapshot)
   const normalizedIfsc = normalizeBankLookupValue(args.ifscCode)
   const normalizedAccountNumber = normalizeBankAccountLookupValue(args.accountNumber)
 
-  let matchedBanks: MasterBankFilterRecord[] = []
-
   if (normalizedIfsc) {
-    matchedBanks = args.masterBanks.filter((bank) => normalizeBankLookupValue(bank.ifscCode) === normalizedIfsc)
+    return lookup.byIfsc.get(normalizedIfsc) ?? []
   }
 
-  if (matchedBanks.length === 0 && normalizedAccountNumber) {
-    matchedBanks = args.masterBanks.filter(
-      (bank) => normalizeBankAccountLookupValue(bank.accountNumber) === normalizedAccountNumber
-    )
+  if (normalizedAccountNumber) {
+    return lookup.byAccountNumber.get(normalizedAccountNumber) ?? []
   }
 
-  if (matchedBanks.length === 0 && normalizedName && normalizedBranch) {
-    matchedBanks = args.masterBanks.filter(
-      (bank) =>
-        normalizeBankLookupValue(bank.name) === normalizedName &&
-        normalizeBankLookupValue(bank.branch) === normalizedBranch
-    )
+  if (normalizedName && normalizedBranch) {
+    return lookup.byNameBranch.get(`${normalizedName}|${normalizedBranch}`) ?? []
   }
 
-  if (matchedBanks.length === 0 && normalizedName) {
-    matchedBanks = args.masterBanks.filter((bank) => {
-      const normalizedLabel = normalizeBankLookupValue(bank.label)
-      const normalizedBankName = normalizeBankLookupValue(bank.name)
-      return normalizedLabel === normalizedName || normalizedBankName === normalizedName
-    })
+  if (normalizedName) {
+    return lookup.byLabelOrName.get(normalizedName) ?? []
   }
 
-  return Array.from(new Set(matchedBanks.map((bank) => bank.label).filter(Boolean)))
+  return []
 }
 
 function isCashDescriptor(value: string | null | undefined): boolean {
@@ -1166,6 +1212,7 @@ export async function GET(request: NextRequest) {
         accountNumber: String(bank.accountNumber || '').trim(),
         label: getMasterBankLabel(bank)
       }))
+      const masterBankLookup = buildMasterBankLookup(masterBankRecords)
       const masterBankFilterOptions = Array.from(
         new Set(masterBankRecords.map((bank) => bank.label).filter(Boolean))
       ).sort((left, right) => left.localeCompare(right))
@@ -1203,11 +1250,11 @@ export async function GET(request: NextRequest) {
 
           if (!fromCash && !toCash && (fromLabel || toLabel)) {
             const sourceMatches = matchMasterBankLabels({
-              masterBanks: masterBankRecords,
+              masterBankLookup,
               nameSnapshot: fromLabel
             })
             const destinationMatches = matchMasterBankLabels({
-              masterBanks: masterBankRecords,
+              masterBankLookup,
               nameSnapshot: toLabel
             })
 
@@ -1263,7 +1310,7 @@ export async function GET(request: NextRequest) {
                 [payment.bankNameSnapshot, payment.bankBranchSnapshot]
                   .map((value) =>
                     matchMasterBankLabels({
-                      masterBanks: masterBankRecords,
+                      masterBankLookup,
                       nameSnapshot: value
                     })
                   )
@@ -1272,7 +1319,7 @@ export async function GET(request: NextRequest) {
               )
             )
           : matchMasterBankLabels({
-              masterBanks: masterBankRecords,
+              masterBankLookup,
               nameSnapshot: payment.bankNameSnapshot,
               branchSnapshot: payment.bankBranchSnapshot,
               ifscCode: payment.ifscCode,
@@ -1370,7 +1417,7 @@ export async function GET(request: NextRequest) {
 
         const bankLabel = String(entry.accountHeadNameSnapshot || '').trim() || 'Bank'
         const matchedMasterBankLabels = matchMasterBankLabels({
-          masterBanks: masterBankRecords,
+          masterBankLookup,
           nameSnapshot: bankLabel
         })
         const direction = normalizeLedgerDirection(entry.direction) === 'debit' ? 'IN' : 'OUT'
