@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { canAccessCompanyRoute, requireRoles } from '@/lib/api-security'
+import { getFinancialYearDateFilter } from '@/lib/financial-years'
 import { loadReportDashboardData, type ReportDashboardType } from '@/lib/server-report-dashboard'
 
 function normalizeReportType(value: string | null): ReportDashboardType {
@@ -31,11 +32,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
     }
 
+    const financialYearFilter = await getFinancialYearDateFilter({
+      request,
+      auth: authResult.auth,
+      companyId
+    })
+
     const payload = await loadReportDashboardData(companyId, reportType, {
       loadPurchase: hasPurchaseAccess,
       loadSales: hasSalesAccess,
       loadPayments: hasPaymentsAccess,
-      loadBanks: hasBanksAccess
+      loadBanks: hasBanksAccess,
+      dateFrom: financialYearFilter.dateFrom,
+      dateTo: financialYearFilter.dateTo
     })
 
     return NextResponse.json({
@@ -43,7 +52,8 @@ export async function GET(request: NextRequest) {
       specialPurchaseBills: hasPurchaseAccess ? payload.specialPurchaseBills : [],
       salesBills: hasSalesAccess ? payload.salesBills : [],
       payments: hasPaymentsAccess ? payload.payments : [],
-      banks: hasBanksAccess ? payload.banks : []
+      banks: hasBanksAccess ? payload.banks : [],
+      activeFinancialYear: financialYearFilter.effectiveFinancialYear
     })
   } catch (error) {
     return NextResponse.json(

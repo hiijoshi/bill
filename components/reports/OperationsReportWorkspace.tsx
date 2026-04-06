@@ -11,8 +11,10 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { getFinancialYearDateRangeInput } from '@/lib/client-financial-years'
 import { loadShellCompanies } from '@/lib/client-shell-data'
 import { printHtmlDocument } from '@/lib/report-print'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 type ReportView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'bank-ledger' | 'cash-ledger'
 type OutstandingSort = 'highest' | 'lowest'
@@ -545,13 +547,12 @@ export default function OperationsReportWorkspace({
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const today = useMemo(() => new Date(), [])
-  const firstDay = useMemo(() => new Date(today.getFullYear(), today.getMonth(), 1), [today])
 
   const [companies, setCompanies] = useState<CompanyRecord[]>([])
   const [scope] = useState<ReportScope>('company')
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>(initialCompanyId ? [initialCompanyId] : [])
-  const [dateFrom, setDateFrom] = useState(toDateInputValue(firstDay))
-  const [dateTo, setDateTo] = useState(toDateInputValue(today))
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [selectedPartyId, setSelectedPartyId] = useState('')
   const [activeView, setActiveView] = useState<ReportView>(initialView)
   const [outstandingSort, setOutstandingSort] = useState<OutstandingSort>('highest')
@@ -564,6 +565,7 @@ export default function OperationsReportWorkspace({
   const [errorMessage, setErrorMessage] = useState('')
   const [lastGeneratedAt, setLastGeneratedAt] = useState('')
   const [reportData, setReportData] = useState<OperationsReportPayload | null>(null)
+  const { financialYear } = useClientFinancialYear()
   const companyFilterRef = useRef<HTMLDetailsElement | null>(null)
   const selectedCompanyId = selectedCompanyIds[0] || ''
   const canAggregateCompanies = reportData?.meta?.canAggregateCompanies ?? true
@@ -618,6 +620,12 @@ export default function OperationsReportWorkspace({
       setSelectedCompanyIds([companies[0].id])
     }
   }, [companies, scope, selectedCompanyIds.length])
+
+  useEffect(() => {
+    const range = getFinancialYearDateRangeInput(financialYear)
+    setDateFrom(range.dateFrom)
+    setDateTo(range.dateTo)
+  }, [financialYear?.id])
 
   useEffect(() => {
     if (canAggregateCompanies || selectedCompanyIds.length <= 1) return

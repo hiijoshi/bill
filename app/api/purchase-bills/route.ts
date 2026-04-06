@@ -16,6 +16,11 @@ import { normalizeTenDigitPhone, parseNonNegativeNumber } from '@/lib/field-vali
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 import { calculateTaxBreakdown } from '@/lib/billing-calculations'
 import { calculateBillMandiCharges, syncBillChargesAndLedger } from '@/lib/mandi-billing'
+import {
+  assertFinancialYearOpenForDate,
+  FinancialYearValidationError,
+  getFinancialYearDateFilter
+} from '@/lib/financial-years'
 import { assertMandiTypeBelongsToCompany, normalizeOptionalMandiTypeId } from '@/lib/mandi-type-utils'
 import { buildPurchasePaymentSyncNote } from '@/lib/purchase-payment-sync'
 
@@ -245,6 +250,11 @@ export async function POST(request: NextRequest) {
 
     const normalizedBillDate = parseBillDate(billDate)
     if (normalizedBillDate instanceof NextResponse) return normalizedBillDate
+    await assertFinancialYearOpenForDate({
+      companyId,
+      date: normalizedBillDate,
+      actionLabel: 'Purchase bill'
+    })
 
     const farmerPhone = normalizeTenDigitPhone(farmerContact)
     if (farmerContact !== undefined && farmerContact !== null && farmerContact !== '' && !farmerPhone) {
@@ -427,6 +437,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, id: purchaseBill.id, purchaseBill })
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     const message = error instanceof Error ? error.message : 'Internal server error'
     const status =
       message.includes('cannot exceed') ||
@@ -536,6 +549,19 @@ export async function GET(request: NextRequest) {
       whereClause.billDate = {}
       if (dateFrom) whereClause.billDate.gte = new Date(dateFrom)
       if (dateTo) whereClause.billDate.lte = new Date(dateTo)
+    }
+
+    const financialYearFilter = await getFinancialYearDateFilter({
+      request,
+      auth: getRequestAuthContext(request),
+      companyId
+    })
+
+    whereClause.billDate = {}
+    if (financialYearFilter.dateFrom) whereClause.billDate.gte = financialYearFilter.dateFrom
+    if (financialYearFilter.dateTo) whereClause.billDate.lte = financialYearFilter.dateTo
+    if (!whereClause.billDate.gte && !whereClause.billDate.lte) {
+      delete whereClause.billDate
     }
 
     const pagination = parsePaginationParams(searchParams, { defaultPageSize: 50, maxPageSize: 200 })
@@ -680,7 +706,10 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json(safePurchaseBills)
-  } catch {
+  } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -756,6 +785,11 @@ export async function PUT(request: NextRequest) {
 
     const normalizedBillDate = parseBillDate(billDate)
     if (normalizedBillDate instanceof NextResponse) return normalizedBillDate
+    await assertFinancialYearOpenForDate({
+      companyId,
+      date: normalizedBillDate,
+      actionLabel: 'Purchase bill update'
+    })
 
     const farmerPhone = normalizeTenDigitPhone(farmerContact)
     if (farmerContact !== undefined && farmerContact !== null && farmerContact !== '' && !farmerPhone) {
@@ -1016,6 +1050,9 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json({ success: true, id: purchaseBill.id, purchaseBill })
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     const message = error instanceof Error ? error.message : 'Internal server error'
     const status =
       message.includes('cannot exceed') ||

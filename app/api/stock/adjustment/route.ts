@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { z } from 'zod'
 import { ensureCompanyAccess, normalizeId, parseJsonWithSchema, requireAuthContext } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
+import { assertFinancialYearOpenForDate, FinancialYearValidationError } from '@/lib/financial-years'
 import { parseNonNegativeNumber } from '@/lib/field-validation'
 
 const stockAdjustmentSchema = z.object({
@@ -41,6 +42,13 @@ export async function POST(request: NextRequest) {
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
+
+    const adjustmentDateValue = safeToDate(adjustmentDate)
+    await assertFinancialYearOpenForDate({
+      companyId,
+      date: adjustmentDateValue,
+      actionLabel: 'Stock adjustment'
+    })
 
     const parsedQuantity = parseNonNegativeNumber(rawQuantity)
     if (parsedQuantity === null || parsedQuantity <= 0) {
@@ -99,7 +107,7 @@ export async function POST(request: NextRequest) {
     const adjustment = await prisma.stockLedger.create({
       data: {
         companyId,
-        entryDate: safeToDate(adjustmentDate),
+        entryDate: adjustmentDateValue,
         productId,
         type: 'adjustment',
         qtyOut,
@@ -148,6 +156,9 @@ export async function POST(request: NextRequest) {
       unit: product.unit.symbol
     })
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     const errorMessage = error instanceof Error ? error.message : 'Internal server error'
     return NextResponse.json({ error: errorMessage }, { status: 500 })
   }

@@ -15,6 +15,7 @@ import {
   isIncomingCashflowPaymentType,
   isOutgoingCashflowPaymentType
 } from '@/lib/payment-entry-types'
+import { getFinancialYearDateFilter, type FinancialYearSummary } from '@/lib/financial-years'
 
 type OverviewSection =
   | 'purchaseBills'
@@ -319,6 +320,9 @@ async function loadOverviewPayload(params: {
   includes: Set<OverviewSection>
   scopes: OverviewScopedCompanyIds
   companies: Array<{ id: string; name: string }>
+  dateFrom: Date | null
+  dateTo: Date | null
+  financialYear: FinancialYearSummary | null
 }) {
   const {
     purchaseCompanyIds,
@@ -332,17 +336,62 @@ async function loadOverviewPayload(params: {
 
   const purchaseWhere =
     purchaseCompanyIds.length > 0
-      ? { companyId: { in: purchaseCompanyIds }, status: { not: 'cancelled' as const } }
+      ? {
+          companyId: { in: purchaseCompanyIds },
+          status: { not: 'cancelled' as const },
+          ...(params.dateFrom || params.dateTo
+            ? {
+                billDate: {
+                  ...(params.dateFrom ? { gte: params.dateFrom } : {}),
+                  ...(params.dateTo ? { lte: params.dateTo } : {})
+                }
+              }
+            : {})
+        }
       : null
   const salesWhere =
     salesCompanyIds.length > 0
-      ? { companyId: { in: salesCompanyIds }, status: { not: 'cancelled' as const } }
+      ? {
+          companyId: { in: salesCompanyIds },
+          status: { not: 'cancelled' as const },
+          ...(params.dateFrom || params.dateTo
+            ? {
+                billDate: {
+                  ...(params.dateFrom ? { gte: params.dateFrom } : {}),
+                  ...(params.dateTo ? { lte: params.dateTo } : {})
+                }
+              }
+            : {})
+        }
       : null
   const paymentWhere =
-    paymentCompanyIds.length > 0 ? { companyId: { in: paymentCompanyIds }, deletedAt: null } : null
+    paymentCompanyIds.length > 0
+      ? {
+          companyId: { in: paymentCompanyIds },
+          deletedAt: null,
+          ...(params.dateFrom || params.dateTo
+            ? {
+                payDate: {
+                  ...(params.dateFrom ? { gte: params.dateFrom } : {}),
+                  ...(params.dateTo ? { lte: params.dateTo } : {})
+                }
+              }
+            : {})
+        }
+      : null
 
-  const trendStart = startOfToday()
-  trendStart.setDate(trendStart.getDate() - (TREND_WINDOW_DAYS - 1))
+  const trendEnd = (() => {
+    const today = startOfToday()
+    if (params.dateTo && params.dateTo.getTime() < today.getTime()) {
+      return new Date(params.dateTo)
+    }
+    return today
+  })()
+  const trendStart = new Date(trendEnd)
+  trendStart.setDate(trendEnd.getDate() - (TREND_WINDOW_DAYS - 1))
+  if (params.dateFrom && trendStart.getTime() < params.dateFrom.getTime()) {
+    trendStart.setTime(params.dateFrom.getTime())
+  }
   const needsCompanyBreakdown = params.companies.length > 1
 
   const [
@@ -469,11 +518,35 @@ async function loadOverviewPayload(params: {
     productCompanyIds.length > 0 ? prisma.product.count({ where: { companyId: { in: productCompanyIds } } }) : Promise.resolve(0),
     partyCompanyIds.length > 0 ? prisma.party.count({ where: { companyId: { in: partyCompanyIds } } }) : Promise.resolve(0),
     unitCompanyIds.length > 0 ? prisma.unit.count({ where: { companyId: { in: unitCompanyIds } } }) : Promise.resolve(0),
-    stockCompanyIds.length > 0 ? prisma.stockLedger.count({ where: { companyId: { in: stockCompanyIds } } }) : Promise.resolve(0),
+    stockCompanyIds.length > 0
+      ? prisma.stockLedger.count({
+          where: {
+            companyId: { in: stockCompanyIds },
+            ...(params.dateFrom || params.dateTo
+              ? {
+                  entryDate: {
+                    ...(params.dateFrom ? { gte: params.dateFrom } : {}),
+                    ...(params.dateTo ? { lte: params.dateTo } : {})
+                  }
+                }
+              : {})
+          }
+        })
+      : Promise.resolve(0),
     stockCompanyIds.length > 0
       ? prisma.stockLedger.groupBy({
           by: ['productId'],
-          where: { companyId: { in: stockCompanyIds } },
+          where: {
+            companyId: { in: stockCompanyIds },
+            ...(params.dateFrom || params.dateTo
+              ? {
+                  entryDate: {
+                    ...(params.dateFrom ? { gte: params.dateFrom } : {}),
+                    ...(params.dateTo ? { lte: params.dateTo } : {})
+                  }
+                }
+              : {})
+          },
           _sum: {
             qtyIn: true,
             qtyOut: true
@@ -507,7 +580,10 @@ async function loadOverviewPayload(params: {
       ? prisma.purchaseBill.findMany({
           where: {
             ...purchaseWhere,
-            billDate: { gte: trendStart }
+            billDate: {
+              gte: trendStart,
+              ...(params.dateTo ? { lte: params.dateTo } : {})
+            }
           },
           select: {
             billDate: true,
@@ -519,7 +595,10 @@ async function loadOverviewPayload(params: {
       ? prisma.salesBill.findMany({
           where: {
             ...salesWhere,
-            billDate: { gte: trendStart }
+            billDate: {
+              gte: trendStart,
+              ...(params.dateTo ? { lte: params.dateTo } : {})
+            }
           },
           select: {
             billDate: true,
@@ -531,7 +610,10 @@ async function loadOverviewPayload(params: {
       ? prisma.payment.findMany({
           where: {
             ...paymentWhere,
-            payDate: { gte: trendStart }
+            payDate: {
+              gte: trendStart,
+              ...(params.dateTo ? { lte: params.dateTo } : {})
+            }
           },
           select: {
             payDate: true,
@@ -684,7 +766,8 @@ async function loadOverviewPayload(params: {
       purchaseRows: purchaseTrendRows,
       salesRows: salesTrendRows,
       paymentRows: paymentTrendRows
-    })
+    }),
+    activeFinancialYear: params.financialYear
   }
 }
 
@@ -744,9 +827,28 @@ export async function GET(request: NextRequest) {
         .filter((company) => scopes.dashboardCompanyIds.includes(company.id))
         .map((company) => ({ id: company.id, name: company.name }))
 
-      const cacheKey = makeServerCacheKey('overview', [Array.from(includes).sort(), scopes, companies])
+      const financialYearFilter = await getFinancialYearDateFilter({
+        request,
+        auth,
+        companyId: targetCompanyIds[0]
+      })
+      const cacheKey = makeServerCacheKey('overview', [
+        Array.from(includes).sort(),
+        scopes,
+        companies,
+        financialYearFilter.selectedFinancialYearId,
+        financialYearFilter.dateFrom?.toISOString() || '',
+        financialYearFilter.dateTo?.toISOString() || ''
+      ])
       const payload = await getOrSetServerCache(cacheKey, OVERVIEW_CACHE_TTL_MS, () =>
-        loadOverviewPayload({ includes, scopes, companies })
+        loadOverviewPayload({
+          includes,
+          scopes,
+          companies,
+          dateFrom: financialYearFilter.dateFrom,
+          dateTo: financialYearFilter.dateTo,
+          financialYear: financialYearFilter.effectiveFinancialYear
+        })
       )
 
       return supabaseSession.applyCookies(NextResponse.json(payload))
@@ -775,10 +877,29 @@ export async function GET(request: NextRequest) {
     }
 
     const companies = unlockedCompanies.filter((company) => scopes.dashboardCompanyIds.includes(company.id))
-    const cacheKey = makeServerCacheKey('overview', [Array.from(includes).sort(), scopes, companies])
+    const financialYearFilter = await getFinancialYearDateFilter({
+      request,
+      auth: authResult.auth,
+      companyId: targetCompanyIds[0]
+    })
+    const cacheKey = makeServerCacheKey('overview', [
+      Array.from(includes).sort(),
+      scopes,
+      companies,
+      financialYearFilter.selectedFinancialYearId,
+      financialYearFilter.dateFrom?.toISOString() || '',
+      financialYearFilter.dateTo?.toISOString() || ''
+    ])
 
     const payload = await getOrSetServerCache(cacheKey, OVERVIEW_CACHE_TTL_MS, () =>
-      loadOverviewPayload({ includes, scopes, companies })
+      loadOverviewPayload({
+        includes,
+        scopes,
+        companies,
+        dateFrom: financialYearFilter.dateFrom,
+        dateTo: financialYearFilter.dateTo,
+        financialYear: financialYearFilter.effectiveFinancialYear
+      })
     )
 
     return NextResponse.json(payload)

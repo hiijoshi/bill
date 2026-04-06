@@ -27,10 +27,33 @@ model Trader {
   subscriptionPayments SubscriptionPayment[]
   dataLifecycle        TraderDataLifecycle?
   dataBackups          TraderDataBackup[]
+  financialYears       FinancialYear[]
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
 
   @@index([deletedAt], map: "idx_traders_deleted_at")
+}
+
+model FinancialYear {
+  id          String   @id @default(cuid())
+  traderId    String
+  trader      Trader   @relation(fields: [traderId], references: [id], onDelete: Cascade)
+  label       String
+  startDate   DateTime
+  endDate     DateTime
+  isActive    Boolean  @default(false)
+  status      String   @default("open")
+  activatedAt DateTime?
+  closedAt    DateTime?
+  lockedAt    DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([traderId, label], map: "uniq_financial_years_trader_label")
+  @@unique([traderId, startDate, endDate], map: "uniq_financial_years_trader_window")
+  @@index([traderId, isActive, status], map: "idx_financial_years_trader_active_status")
+  @@index([traderId, startDate, endDate], map: "idx_financial_years_trader_window")
+  @@index([traderId, createdAt], map: "idx_financial_years_trader_created")
 }
 
 model SubscriptionPlan {

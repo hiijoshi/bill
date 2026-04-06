@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,10 +12,14 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
+import { TransactionListSkeleton } from '@/components/performance/page-placeholders'
+import { RefreshOverlay } from '@/components/performance/refresh-overlay'
 import { Eye, Edit, Ban, Printer, FileText, Download, CreditCard } from 'lucide-react'
 import { invalidateAppDataCaches, matchesAppDataChange, notifyAppDataChanged, subscribeAppDataChanged } from '@/lib/app-live-data'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { getFinancialYearDateRangeInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 interface Farmer {
   id: string
@@ -219,9 +223,13 @@ function getBillSelectionKey(bill: PurchaseBill): string {
 
 export default function PurchaseListPage() {
   const router = useRouter()
+  const { financialYear } = useClientFinancialYear()
   const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [companyId, setCompanyId] = useState('')
+  const hasVisibleDataRef = useRef(false)
   const [billView, setBillView] = useState<BillViewTab>('active')
   const [selectedBillKeys, setSelectedBillKeys] = useState<string[]>([])
 
@@ -238,8 +246,20 @@ export default function PurchaseListPage() {
   const [markaNumber, setMarkaNumber] = useState('')
   const [purchaseType, setPurchaseType] = useState<PurchaseTypeFilter>('all')
 
+  useEffect(() => {
+    const range = getFinancialYearDateRangeInput(financialYear)
+    setDateFrom(range.dateFrom)
+    setDateTo(range.dateTo)
+  }, [financialYear?.id])
+
+  useEffect(() => {
+    hasVisibleDataRef.current = purchaseBills.length > 0
+  }, [purchaseBills.length])
+
   const fetchPurchaseBills = useCallback(async (isCancelled: () => boolean = () => false) => {
+    let hydratedFromCache = false
     try {
+      setErrorMessage(null)
       const companyIdParam = await resolveCompanyId(window.location.search)
       if (isCancelled()) return
 
@@ -255,8 +275,15 @@ export default function PurchaseListPage() {
       const cacheKey = `purchase-bills:${companyIdParam}`
       const cached = getClientCache<PurchaseBill[]>(cacheKey, 15_000)
       if (cached) {
+        hydratedFromCache = true
         setPurchaseBills(cached)
         setLoading(false)
+      }
+
+      if (!hasVisibleDataRef.current && !hydratedFromCache) {
+        setLoading(true)
+      } else {
+        setRefreshing(true)
       }
 
       // Fetch both regular and special purchase bills
@@ -273,8 +300,8 @@ export default function PurchaseListPage() {
       }
 
       if (regularResponse.status === 403 || specialResponse.status === 403) {
-        setPurchaseBills([])
         setLoading(false)
+        setRefreshing(false)
         return
       }
 
@@ -355,10 +382,12 @@ export default function PurchaseListPage() {
       setPurchaseBills(allBills)
       setClientCache(cacheKey, allBills)
       setLoading(false)
+      setRefreshing(false)
     } catch (error) {
       console.error('Error fetching purchase bills:', error)
-      setPurchaseBills([])
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to refresh purchase list.')
       setLoading(false)
+      setRefreshing(false)
     }
   }, [router])
 
@@ -842,7 +871,9 @@ export default function PurchaseListPage() {
   const totalWeightQt = visibleBills.reduce((sum, bill) => sum + getBillWeightQt(bill), 0)
   const totalWeightKg = totalWeightQt * 100
 
-  if (loading) {
+  const hasPurchaseData = purchaseBills.length > 0
+
+  if (loading && !companyId && !hasPurchaseData) {
     return (
       <AppLoaderShell
         kind="purchase"
@@ -856,12 +887,23 @@ export default function PurchaseListPage() {
   return (
     <DashboardLayout companyId={companyId}>
       <div className="space-y-6">
+        {errorMessage ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {errorMessage}
+          </div>
+        ) : null}
+
+        {loading && !hasPurchaseData ? (
+          <TransactionListSkeleton />
+        ) : (
+          <>
         <div className="flex justify-between items-center">
           <h1 className="text-3xl font-bold">Purchase List</h1>
         </div>
 
         {/* Filters */}
-        <Card>
+        <Card className="relative">
+          <RefreshOverlay refreshing={refreshing} label="Refreshing purchase filters" />
           <CardHeader>
             <CardTitle>Filters</CardTitle>
           </CardHeader>
@@ -996,7 +1038,8 @@ export default function PurchaseListPage() {
         </Card>
 
         {/* Purchase Bills Table */}
-        <Card>
+        <Card className="relative">
+          <RefreshOverlay refreshing={refreshing} label="Refreshing purchase bills" />
           <CardHeader>
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <CardTitle>Purchase Bills</CardTitle>
@@ -1221,6 +1264,8 @@ export default function PurchaseListPage() {
             </div>
           </CardContent>
         </Card>
+          </>
+        )}
       </div>
     </DashboardLayout>
   )

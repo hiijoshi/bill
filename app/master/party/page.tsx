@@ -16,6 +16,8 @@ import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId } from '@/lib/company-conte
 import { useRouter } from 'next/navigation'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { isAbortError } from '@/lib/http'
+import { getFinancialYearDateRangeInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 interface Party {
   id: string
@@ -67,11 +69,6 @@ type PartyResponsePayload = Party[] | {
   aborted?: boolean
 }
 
-const getFinancialYearStartValue = (date = new Date()): string => {
-  const year = date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1
-  return `${year}-04-01`
-}
-
 const formatDateLabel = (value: string | null | undefined): string => {
   if (!value) return '-'
   const parsed = new Date(value)
@@ -93,6 +90,11 @@ export default function PartyMasterPage() {
   const [mandiTypes, setMandiTypes] = useState<MandiType[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const { financialYear } = useClientFinancialYear()
+  const financialYearStartValue = useMemo(
+    () => getFinancialYearDateRangeInput(financialYear).dateFrom,
+    [financialYear?.id]
+  )
 
   // Form state
   const [formData, setFormData] = useState({
@@ -102,7 +104,7 @@ export default function PartyMasterPage() {
     phone1: '',
     phone2: '',
     openingBalance: '',
-    openingBalanceDate: getFinancialYearStartValue(),
+    openingBalanceDate: '',
     creditLimit: '',
     creditDays: '',
     ifscCode: '',
@@ -110,6 +112,17 @@ export default function PartyMasterPage() {
     accountNo: '',
     mandiTypeId: ''
   })
+
+  useEffect(() => {
+    if (!financialYearStartValue) return
+    setFormData((previous) => {
+      if (previous.openingBalanceDate) return previous
+      return {
+        ...previous,
+        openingBalanceDate: financialYearStartValue
+      }
+    })
+  }, [financialYearStartValue])
 
   const applyParties = useCallback((rows: Party[], cacheKey: string) => {
     setParties(rows)
@@ -331,7 +344,7 @@ export default function PartyMasterPage() {
       phone1: party.phone1 || '',
       phone2: party.phone2 || '',
       openingBalance: party.openingBalance != null ? String(party.openingBalance) : '',
-      openingBalanceDate: party.openingBalanceDate ? String(party.openingBalanceDate).slice(0, 10) : getFinancialYearStartValue(),
+      openingBalanceDate: party.openingBalanceDate ? String(party.openingBalanceDate).slice(0, 10) : financialYearStartValue,
       creditLimit: party.creditLimit != null ? String(party.creditLimit) : '',
       creditDays: party.creditDays != null ? String(party.creditDays) : '',
       ifscCode: party.ifscCode || '',
@@ -495,7 +508,7 @@ export default function PartyMasterPage() {
       phone1: '',
       phone2: '',
       openingBalance: '',
-      openingBalanceDate: getFinancialYearStartValue(),
+      openingBalanceDate: financialYearStartValue,
       creditLimit: '',
       creditDays: '',
       ifscCode: '',

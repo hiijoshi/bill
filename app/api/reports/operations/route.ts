@@ -26,6 +26,7 @@ import {
   isSelfTransferPaymentType
 } from '@/lib/payment-entry-types'
 import { isCashPaymentMode } from '@/lib/payment-mode-utils'
+import { getFinancialYearDateFilter } from '@/lib/financial-years'
 
 type CompanyOption = {
   id: string
@@ -462,14 +463,14 @@ export async function GET(request: NextRequest) {
     const requestedCompanyId = normalizeId(searchParams.get('companyId'))
     const requestedPartyId = normalizeId(searchParams.get('partyId'))
     const requestedView = normalizeReportView(searchParams.get('view'))
-    const dateFrom = parseDateAtBoundary(searchParams.get('dateFrom'))
-    const dateTo = parseDateAtBoundary(searchParams.get('dateTo'), true)
+    const explicitDateFrom = parseDateAtBoundary(searchParams.get('dateFrom'))
+    const explicitDateTo = parseDateAtBoundary(searchParams.get('dateTo'), true)
 
-    if ((searchParams.get('dateFrom') && !dateFrom) || (searchParams.get('dateTo') && !dateTo)) {
+    if ((searchParams.get('dateFrom') && !explicitDateFrom) || (searchParams.get('dateTo') && !explicitDateTo)) {
       return NextResponse.json({ error: 'Invalid date range provided' }, { status: 400 })
     }
 
-    if (dateFrom && dateTo && dateFrom > dateTo) {
+    if (explicitDateFrom && explicitDateTo && explicitDateFrom > explicitDateTo) {
       return NextResponse.json({ error: 'Date from cannot be after date to' }, { status: 400 })
     }
 
@@ -505,6 +506,14 @@ export async function GET(request: NextRequest) {
     if (targetCompanyIds.length === 0) {
       return NextResponse.json({ error: 'Requested company is outside your report access scope' }, { status: 403 })
     }
+
+    const financialYearFilter = await getFinancialYearDateFilter({
+      request,
+      auth: authResult.auth,
+      companyId: targetCompanyIds[0]
+    })
+    const dateFrom = financialYearFilter.dateFrom
+    const dateTo = financialYearFilter.dateTo
 
     const aggregateEligibleCompanyIds =
       targetCompanyIds.length <= 1
@@ -568,6 +577,7 @@ export async function GET(request: NextRequest) {
       requestedView,
       targetCompanyIds,
       requestedView === 'ledger' ? requestedPartyId || '' : '',
+      financialYearFilter.selectedFinancialYearId,
       dateFrom?.toISOString() || '',
       dateTo?.toISOString() || '',
       permittedCompanies.map((company) => company.id),
@@ -1842,7 +1852,7 @@ export async function GET(request: NextRequest) {
             ? [
                 {
                   id: 'opening-balance',
-                  date: searchParams.get('dateFrom') || '',
+                  date: dateFrom ? dateKey(dateFrom) : '',
                   type: 'opening' as PartyLedgerEntryType,
                   refNo: '-',
                   description: 'Opening Receivable',
@@ -2197,8 +2207,10 @@ export async function GET(request: NextRequest) {
           cashLedger: cashLedgerOpeningBalance,
           bankLedgerByBank: Object.fromEntries(bankOpeningBalanceByFilter)
         },
-        dateFrom: searchParams.get('dateFrom') || '',
-        dateTo: searchParams.get('dateTo') || '',
+        financialYearId: financialYearFilter.selectedFinancialYearId || '',
+        financialYearLabel: financialYearFilter.effectiveFinancialYear?.label || '',
+        dateFrom: dateFrom ? dateKey(dateFrom) : '',
+        dateTo: dateTo ? dateKey(dateTo) : '',
         generatedAt: new Date().toISOString()
       }
       }

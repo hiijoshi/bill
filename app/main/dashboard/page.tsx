@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { TaskLoader } from '@/components/loaders/task-loader'
+import { MainDashboardSkeleton } from '@/components/performance/page-placeholders'
+import { RefreshOverlay } from '@/components/performance/refresh-overlay'
 import {
   ShoppingCart,
   Receipt,
@@ -1203,8 +1205,43 @@ export default function MainDashboardPage() {
     }
   }
 
-  if (loading || !dashboardAccessResolved) {
+  const hasDashboardData =
+    data.purchaseBills.length > 0 ||
+    data.salesBills.length > 0 ||
+    data.payments.length > 0 ||
+    data.products.length > 0 ||
+    data.stockLedger.length > 0 ||
+    data.companyPerformance.length > 0 ||
+    data.trendData.length > 0
+
+  useEffect(() => {
+    if (!hasDashboardAccess || !primaryCompanyId) return
+
+    const routes = [
+      '/purchase/entry',
+      '/sales/entry',
+      '/payment/dashboard',
+      '/stock/adjustment',
+      '/reports/main'
+    ]
+
+    routes.forEach((route) => router.prefetch(route))
+  }, [hasDashboardAccess, primaryCompanyId, router])
+
+  if (!dashboardAccessResolved) {
     return <AppLoaderShell kind="dashboard" companyId={primaryCompanyId} />
+  }
+
+  if (loading && !hasDashboardData) {
+    return (
+      <DashboardLayout companyId={primaryCompanyId}>
+        <div className="min-h-full bg-[#f5f5f7]">
+          <div className="mx-auto max-w-7xl space-y-8 p-6 md:p-8">
+            <MainDashboardSkeleton />
+          </div>
+        </div>
+      </DashboardLayout>
+    )
   }
 
   if (!hasDashboardAccess) {
@@ -1322,7 +1359,8 @@ export default function MainDashboardPage() {
 
   return (
     <DashboardLayout companyId={primaryCompanyId} headerActions={headerActions}>
-      <div className="min-h-full bg-[#f5f5f7]">
+      <div className="relative min-h-full bg-[#f5f5f7]">
+        <RefreshOverlay refreshing={loading && hasDashboardData} label="Refreshing dashboard" subtle />
         <div className="mx-auto max-w-7xl space-y-8 p-6 md:p-8">
           <section className="grid gap-6 xl:grid-cols-[1.45fr_0.85fr]">
             <div className="rounded-[2rem] border border-black/5 bg-white p-8 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.22)]">

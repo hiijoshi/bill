@@ -19,6 +19,8 @@ import {
 } from '@/lib/journal-vouchers'
 import { loadClientCachedValue } from '@/lib/client-cached-value'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { getDefaultTransactionDateInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 type AccountingHeadRecord = {
   id: string
@@ -121,8 +123,9 @@ function JournalVoucherEntryPageContent() {
   const [companyId, setCompanyId] = useState('')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const { financialYear } = useClientFinancialYear()
 
-  const [voucherDate, setVoucherDate] = useState(new Date().toISOString().split('T')[0])
+  const [voucherDate, setVoucherDate] = useState('')
   const [voucherNo, setVoucherNo] = useState('')
   const [referenceNo, setReferenceNo] = useState('')
   const [remark, setRemark] = useState('')
@@ -132,6 +135,10 @@ function JournalVoucherEntryPageContent() {
   const [parties, setParties] = useState<PartyRecord[]>([])
   const [farmers, setFarmers] = useState<FarmerRecord[]>([])
   const [banks, setBanks] = useState<BankRecord[]>([])
+
+  useEffect(() => {
+    setVoucherDate(getDefaultTransactionDateInput(financialYear))
+  }, [financialYear?.id])
 
   useEffect(() => {
     let cancelled = false

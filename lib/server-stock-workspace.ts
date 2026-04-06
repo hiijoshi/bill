@@ -1,17 +1,5 @@
 import { prisma } from '@/lib/prisma'
-
-type StockOverviewSummaryQueryRow = {
-  productId: string
-  productName: string
-  productUnit: string | null
-  productIsActive: boolean | number | bigint | string | null
-  totalIn: number | string | null
-  totalOut: number | string | null
-  closingStock: number | string | null
-  movementCount: number | bigint | null
-  adjustmentEntries: number | bigint | null
-  lastMovementDate: Date | string | null
-}
+import { buildDateRangeWhere } from '@/lib/financial-years'
 
 function toNumber(value: number | bigint | string | null | undefined): number {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0
@@ -29,38 +17,73 @@ function toDateOrNull(value: Date | string | null | undefined): Date | null {
   return Number.isFinite(parsed.getTime()) ? parsed : null
 }
 
-export async function loadStockWorkspaceData(companyId: string, recentLimit = 60) {
-  const [overviewRows, totalTransactions, stockLedger] = await Promise.all([
-    prisma.$queryRaw<StockOverviewSummaryQueryRow[]>`
-      SELECT
-        p."id" AS "productId",
-        p."name" AS "productName",
-        u."symbol" AS "productUnit",
-        p."isActive" AS "productIsActive",
-        COALESCE(SUM(sl."qtyIn"), 0) AS "totalIn",
-        COALESCE(SUM(sl."qtyOut"), 0) AS "totalOut",
-        COALESCE(SUM(sl."qtyIn"), 0) - COALESCE(SUM(sl."qtyOut"), 0) AS "closingStock",
-        COUNT(sl."id") AS "movementCount",
-        COALESCE(SUM(CASE WHEN sl."type" = 'adjustment' THEN 1 ELSE 0 END), 0) AS "adjustmentEntries",
-        MAX(sl."entryDate") AS "lastMovementDate"
-      FROM "Product" p
-      LEFT JOIN "Unit" u
-        ON u."id" = p."unitId"
-      LEFT JOIN "StockLedger" sl
-        ON sl."productId" = p."id"
-       AND sl."companyId" = p."companyId"
-      WHERE p."companyId" = ${companyId}
-      GROUP BY p."id", p."name", u."symbol", p."isActive"
-      ORDER BY p."name" ASC
-    `,
-    prisma.stockLedger.count({
+export async function loadStockWorkspaceData(
+  companyId: string,
+  recentLimit = 60,
+  options: {
+    dateFrom?: Date | null
+    dateTo?: Date | null
+  } = {}
+) {
+  const stockDateWhere = buildDateRangeWhere('entryDate', options.dateFrom || null, options.dateTo || null)
+
+  const [products, stockMovementRows, adjustmentRows, totalTransactions, stockLedger] = await Promise.all([
+    prisma.product.findMany({
       where: {
         companyId
+      },
+      select: {
+        id: true,
+        name: true,
+        isActive: true,
+        unit: {
+          select: {
+            symbol: true
+          }
+        }
+      },
+      orderBy: {
+        name: 'asc'
+      }
+    }),
+    prisma.stockLedger.groupBy({
+      by: ['productId'],
+      where: {
+        companyId,
+        ...stockDateWhere
+      },
+      _sum: {
+        qtyIn: true,
+        qtyOut: true
+      },
+      _count: {
+        _all: true
+      },
+      _max: {
+        entryDate: true
+      }
+    }),
+    prisma.stockLedger.groupBy({
+      by: ['productId'],
+      where: {
+        companyId,
+        type: 'adjustment',
+        ...stockDateWhere
+      },
+      _count: {
+        _all: true
+      }
+    }),
+    prisma.stockLedger.count({
+      where: {
+        companyId,
+        ...stockDateWhere
       }
     }),
     prisma.stockLedger.findMany({
       where: {
-        companyId
+        companyId,
+        ...stockDateWhere
       },
       select: {
         id: true,
@@ -88,31 +111,50 @@ export async function loadStockWorkspaceData(companyId: string, recentLimit = 60
     })
   ])
 
+  const movementByProductId = new Map(
+    stockMovementRows.map((row) => [
+      row.productId,
+      {
+        totalIn: toNumber(row._sum.qtyIn),
+        totalOut: toNumber(row._sum.qtyOut),
+        movementCount: toNumber(row._count._all),
+        lastMovementDate: toDateOrNull(row._max.entryDate)
+      }
+    ])
+  )
+  const adjustmentCountByProductId = new Map(
+    adjustmentRows.map((row) => [row.productId, toNumber(row._count._all)])
+  )
+
+  const stockSummary = products.map((product) => {
+    const movement = movementByProductId.get(product.id)
+    const totalIn = movement?.totalIn || 0
+    const totalOut = movement?.totalOut || 0
+    return {
+      productId: product.id,
+      productName: product.name,
+      productUnit: product.unit?.symbol || '',
+      totalIn,
+      totalOut,
+      closingStock: totalIn - totalOut,
+      movementCount: movement?.movementCount || 0,
+      adjustmentEntries: adjustmentCountByProductId.get(product.id) || 0,
+      lastMovementDate: movement?.lastMovementDate || null
+    }
+  })
+
   return {
-    products: overviewRows.map((row) => ({
-      id: row.productId,
-      name: row.productName,
-      unit: row.productUnit || '',
-      isActive:
-        row.productIsActive === false ||
-        row.productIsActive === 0 ||
-        row.productIsActive === '0' ||
-        row.productIsActive === 'false'
-          ? false
-          : true,
-      currentStock: toNumber(row.closingStock)
-    })),
-    stockSummary: overviewRows.map((row) => ({
-      productId: row.productId,
-      productName: row.productName,
-      productUnit: row.productUnit || '',
-      totalIn: toNumber(row.totalIn),
-      totalOut: toNumber(row.totalOut),
-      closingStock: toNumber(row.closingStock),
-      movementCount: toNumber(row.movementCount),
-      adjustmentEntries: toNumber(row.adjustmentEntries),
-      lastMovementDate: toDateOrNull(row.lastMovementDate)
-    })),
+    products: products.map((product) => {
+      const summary = stockSummary.find((row) => row.productId === product.id)
+      return {
+        id: product.id,
+        name: product.name,
+        unit: product.unit?.symbol || '',
+        isActive: product.isActive,
+        currentStock: summary?.closingStock || 0
+      }
+    }),
+    stockSummary,
     totalTransactions,
     stockLedger: stockLedger.map((entry) => ({
       id: entry.id,

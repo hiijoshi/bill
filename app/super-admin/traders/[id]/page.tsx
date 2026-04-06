@@ -9,6 +9,9 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Loader2 } from 'lucide-react'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 type TraderDetail = {
   id: string
@@ -19,13 +22,29 @@ type TraderDetail = {
   _count: { companies: number; users: number }
 }
 
+function toDateLabel(value: string): string {
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return '-'
+  return parsed.toLocaleDateString('en-IN')
+}
+
 export default function SuperAdminTraderDetailPage() {
   const params = useParams<{ id: string }>()
-  const traderId = params?.id
+  const traderId = String(params?.id || '')
   const [trader, setTrader] = useState<TraderDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [financialYearStart, setFinancialYearStart] = useState('')
+  const [financialYearBusyId, setFinancialYearBusyId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const {
+    payload: financialYearPayload,
+    financialYear,
+    reload: reloadFinancialYears
+  } = useClientFinancialYear({
+    traderId: traderId || undefined,
+    enabled: Boolean(traderId)
+  })
 
   const load = useCallback(async () => {
     if (!traderId) return
@@ -47,6 +66,18 @@ export default function SuperAdminTraderDetailPage() {
     void load()
   }, [load])
 
+  useEffect(() => {
+    if (financialYearStart) return
+    const startDate = financialYear?.startDate ? new Date(financialYear.startDate) : null
+    if (startDate && Number.isFinite(startDate.getTime())) {
+      setFinancialYearStart(String(startDate.getFullYear() + 1))
+      return
+    }
+
+    const today = new Date()
+    setFinancialYearStart(String((today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1) + 1))
+  }, [financialYear, financialYearStart])
+
   const toggleLock = async () => {
     if (!trader) return
     setSaving(true)
@@ -64,6 +95,68 @@ export default function SuperAdminTraderDetailPage() {
       setError(err instanceof Error ? err.message : 'Failed to update lock state')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const createFinancialYear = async (activate: boolean) => {
+    const startYear = Number(financialYearStart || 0)
+    if (!Number.isFinite(startYear) || startYear < 2000) {
+      setError('Enter a valid financial year start year')
+      return
+    }
+
+    setFinancialYearBusyId('create')
+    setError(null)
+    try {
+      const response = await fetch('/api/financial-years', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          traderId,
+          startYear,
+          activate,
+          status: 'open'
+        })
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Failed to create financial year')
+      await reloadFinancialYears(true)
+      setFinancialYearStart(String(startYear + 1))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create financial year')
+    } finally {
+      setFinancialYearBusyId(null)
+    }
+  }
+
+  const updateFinancialYear = async (
+    financialYearId: string,
+    action: 'activate' | 'open' | 'closed' | 'locked'
+  ) => {
+    setFinancialYearBusyId(financialYearId)
+    setError(null)
+    try {
+      const response = await fetch(
+        action === 'activate'
+          ? `/api/financial-years/${financialYearId}/activate`
+          : `/api/financial-years/${financialYearId}/status`,
+        {
+          method: action === 'activate' ? 'POST' : 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            action === 'activate'
+              ? { traderId }
+              : { traderId, status: action }
+          )
+        }
+      )
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Failed to update financial year')
+      await reloadFinancialYears(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update financial year')
+    } finally {
+      setFinancialYearBusyId(null)
     }
   }
 
@@ -108,6 +201,118 @@ export default function SuperAdminTraderDetailPage() {
                     {saving ? 'Saving...' : trader.locked ? 'Unlock Trader' : 'Lock Trader'}
                   </Button>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Financial Years</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 md:grid-cols-[1.2fr_1fr]">
+                  <div className="space-y-2">
+                    <div className="text-sm text-slate-500">Active / selected year</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="text-lg font-semibold">{financialYear?.label || 'Not configured'}</div>
+                      {financialYear ? (
+                        <Badge variant={financialYear.status === 'open' ? 'default' : 'secondary'}>
+                          {financialYear.status}
+                        </Badge>
+                      ) : null}
+                      {financialYearPayload.activeFinancialYear?.id === financialYear?.id ? (
+                        <Badge variant="outline">Active</Badge>
+                      ) : null}
+                    </div>
+                    <div className="text-sm text-slate-600">
+                      {financialYear ? `${toDateLabel(financialYear.startDate)} to ${toDateLabel(financialYear.endDate)}` : 'No financial years configured yet.'}
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <div>
+                      <Label htmlFor="financialYearStart">Create new year</Label>
+                      <Input
+                        id="financialYearStart"
+                        inputMode="numeric"
+                        value={financialYearStart}
+                        onChange={(event) => setFinancialYearStart(event.target.value.replace(/[^\d]/g, '').slice(0, 4))}
+                        placeholder="2026"
+                        className="mt-2"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void createFinancialYear(false)}
+                        disabled={financialYearBusyId === 'create'}
+                      >
+                        Create
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={() => void createFinancialYear(true)}
+                        disabled={financialYearBusyId === 'create'}
+                      >
+                        Create And Activate
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                {financialYearPayload.financialYears.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-500">
+                    No financial years found for this trader yet.
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Label</TableHead>
+                        <TableHead>Window</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Active</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {financialYearPayload.financialYears.map((row) => {
+                        const isBusy = financialYearBusyId === row.id
+                        return (
+                          <TableRow key={row.id}>
+                            <TableCell className="font-medium">{row.label}</TableCell>
+                            <TableCell>{toDateLabel(row.startDate)} to {toDateLabel(row.endDate)}</TableCell>
+                            <TableCell>{row.status}</TableCell>
+                            <TableCell>{row.isActive ? 'Yes' : 'No'}</TableCell>
+                            <TableCell>
+                              <div className="flex flex-wrap justify-end gap-2">
+                                {!row.isActive && row.status === 'open' ? (
+                                  <Button type="button" size="sm" onClick={() => void updateFinancialYear(row.id, 'activate')} disabled={isBusy}>
+                                    Activate
+                                  </Button>
+                                ) : null}
+                                {row.status !== 'open' ? (
+                                  <Button type="button" size="sm" variant="outline" onClick={() => void updateFinancialYear(row.id, 'open')} disabled={isBusy}>
+                                    Reopen
+                                  </Button>
+                                ) : null}
+                                {row.status === 'open' ? (
+                                  <>
+                                    <Button type="button" size="sm" variant="outline" onClick={() => void updateFinancialYear(row.id, 'closed')} disabled={isBusy}>
+                                      Close
+                                    </Button>
+                                    <Button type="button" size="sm" variant="outline" onClick={() => void updateFinancialYear(row.id, 'locked')} disabled={isBusy}>
+                                      Lock
+                                    </Button>
+                                  </>
+                                ) : null}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </TableBody>
+                  </Table>
+                )}
               </CardContent>
             </Card>
 

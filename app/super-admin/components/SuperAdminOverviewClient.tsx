@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
+import { RefreshOverlay } from '@/components/performance/refresh-overlay'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -414,8 +415,6 @@ export default function SuperAdminOverviewClient({ initialOverview }: SuperAdmin
     setSelectedTraderId(traderId)
     setSelectedCompanyId(null)
     setSelectedUserId(null)
-    setCompanies([])
-    setUsers([])
     setPermissionPreview(null)
     await fetchOverview({ traderId }, { sections: ['companies'] })
   }
@@ -423,7 +422,6 @@ export default function SuperAdminOverviewClient({ initialOverview }: SuperAdmin
   const handleSelectCompany = async (companyId: string) => {
     setSelectedCompanyId(companyId)
     setSelectedUserId(null)
-    setUsers([])
     setPermissionPreview(null)
     await fetchOverview({ traderId: selectedTraderId, companyId }, { sections: ['users'] })
   }
@@ -690,6 +688,8 @@ export default function SuperAdminOverviewClient({ initialOverview }: SuperAdmin
               selectedTrader ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-4 opacity-50'
             }`}
           >
+            <div className="relative">
+              <RefreshOverlay refreshing={loadingCompanies} label="Refreshing companies" />
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base">
                 <Building2 className="h-4 w-4" />
@@ -708,7 +708,26 @@ export default function SuperAdminOverviewClient({ initialOverview }: SuperAdmin
               ) : (
                 <div ref={companyListRef} className="max-h-[430px] space-y-2 overflow-y-auto pr-1">
                   {loadingCompanies ? (
-                    <div className="py-8 text-center text-sm text-slate-500">Loading companies...</div>
+                    filteredCompanies.length === 0 ? (
+                      <div className="py-8 text-center text-sm text-slate-500">Loading companies...</div>
+                    ) : (
+                      filteredCompanies.map((row) => (
+                        <div
+                          key={row.id}
+                          ref={(node) => {
+                            companyNodeRefs.current[row.id] = node
+                          }}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-left"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-semibold">{row.name}</p>
+                              <p className="text-xs opacity-80">{row._count.users} users connected</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )
                   ) : (
                     filteredCompanies.map((row) => (
                       <div
@@ -754,6 +773,7 @@ export default function SuperAdminOverviewClient({ initialOverview }: SuperAdmin
                 </div>
               )}
             </CardContent>
+            </div>
           </Card>
 
           <Card
@@ -761,6 +781,8 @@ export default function SuperAdminOverviewClient({ initialOverview }: SuperAdmin
               selectedCompany ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-4 opacity-50'
             }`}
           >
+            <div className="relative">
+              <RefreshOverlay refreshing={loadingUsers} label="Refreshing users" />
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base">
                 <Users className="h-4 w-4" />
@@ -779,7 +801,28 @@ export default function SuperAdminOverviewClient({ initialOverview }: SuperAdmin
               ) : (
                 <div ref={userListRef} className="max-h-[430px] space-y-2 overflow-y-auto pr-1">
                   {loadingUsers ? (
-                    <div className="py-8 text-center text-sm text-slate-500">Loading users...</div>
+                    filteredUsers.length === 0 ? (
+                      <div className="py-8 text-center text-sm text-slate-500">Loading users...</div>
+                    ) : (
+                      filteredUsers.map((row) => (
+                        <div
+                          key={row.id}
+                          ref={(node) => {
+                            userNodeRefs.current[row.id] = node
+                          }}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-left"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-semibold">{row.userId}</p>
+                              <p className="text-xs opacity-80">
+                                {row.name || '-'} • {row.role || 'company_user'}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )
                   ) : (
                     filteredUsers.map((row) => (
                       <div
@@ -827,10 +870,12 @@ export default function SuperAdminOverviewClient({ initialOverview }: SuperAdmin
                 </div>
               )}
             </CardContent>
+            </div>
           </Card>
         </div>
 
-        <Card className="transition-all duration-300">
+        <Card className="relative transition-all duration-300">
+          <RefreshOverlay refreshing={loadingPermissions} label="Refreshing privileges" />
           <CardHeader>
             <CardTitle>Selected User Privilege Snapshot</CardTitle>
           </CardHeader>

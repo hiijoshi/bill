@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import { buildDateRangeWhere } from '@/lib/financial-years'
 import {
   getPaymentTypeLabel,
   isCashBankPaymentType,
@@ -26,6 +27,8 @@ type PaymentQueryParams = {
   includeDeleted?: boolean
   pagination?: PaginationInput
   view?: PaymentListView
+  dateFrom?: Date | null
+  dateTo?: Date | null
 }
 
 const clampNonNegative = (value: unknown): number => {
@@ -100,6 +103,7 @@ export async function loadPaymentsListData(params: PaymentQueryParams): Promise<
     companyId: { in: companyIds },
     ...(params.billType && isPaymentEntryType(params.billType) ? { billType: params.billType } : {}),
     ...(params.includeDeleted ? {} : { deletedAt: null }),
+    ...buildDateRangeWhere('payDate', params.dateFrom || null, params.dateTo || null),
     ...(pagination?.search
       ? {
           OR: [
@@ -306,6 +310,8 @@ export async function loadPaymentWorkspaceData(
     purchaseAllowed?: boolean
     salesAllowed?: boolean
     paymentsAllowed?: boolean
+    dateFrom?: Date | null
+    dateTo?: Date | null
   } = {}
 ) {
   const [purchaseBills, salesBills, paymentsResult, paymentModes] = await Promise.all([
@@ -314,7 +320,8 @@ export async function loadPaymentWorkspaceData(
       : prisma.purchaseBill.findMany({
           where: {
             companyId,
-            status: { not: 'cancelled' }
+            status: { not: 'cancelled' },
+            ...buildDateRangeWhere('billDate', options.dateFrom || null, options.dateTo || null)
           },
           select: {
             id: true,
@@ -337,7 +344,8 @@ export async function loadPaymentWorkspaceData(
       : prisma.salesBill.findMany({
           where: {
             companyId,
-            status: { not: 'cancelled' }
+            status: { not: 'cancelled' },
+            ...buildDateRangeWhere('billDate', options.dateFrom || null, options.dateTo || null)
           },
           select: {
             id: true,
@@ -358,7 +366,9 @@ export async function loadPaymentWorkspaceData(
     options.paymentsAllowed === false
       ? Promise.resolve({ rows: [], total: 0 })
       : loadPaymentsListData({
-          companyIds: [companyId]
+          companyIds: [companyId],
+          dateFrom: options.dateFrom || null,
+          dateTo: options.dateTo || null
         }),
     options.includePaymentModes
       ? prisma.paymentMode.findMany({

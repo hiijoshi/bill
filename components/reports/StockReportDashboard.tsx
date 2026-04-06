@@ -16,6 +16,8 @@ import {
   SHELL_COMPANIES_CACHE_AGE_MS as COMPANIES_CACHE_AGE_MS,
   SHELL_COMPANIES_CACHE_KEY as COMPANIES_CACHE_KEY
 } from '@/lib/client-shell-data'
+import { getFinancialYearDateRangeInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 type EntryType = 'all' | 'purchase' | 'sales' | 'adjustment'
 
@@ -110,13 +112,10 @@ export default function StockReportDashboard({
   embedded = false,
   onBackToDashboard
 }: StockReportDashboardProps) {
-  const today = useMemo(() => new Date(), [])
-  const firstDay = useMemo(() => new Date(today.getFullYear(), today.getMonth(), 1), [today])
-
   const [companies, setCompanies] = useState<CompanyRecord[]>([])
   const [selectedCompanyId, setSelectedCompanyId] = useState(initialCompanyId || '')
-  const [dateFrom, setDateFrom] = useState(toDateInputValue(firstDay))
-  const [dateTo, setDateTo] = useState(toDateInputValue(today))
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [entryTypeFilter, setEntryTypeFilter] = useState<EntryType>('all')
   const [searchTerm, setSearchTerm] = useState('')
 
@@ -125,11 +124,18 @@ export default function StockReportDashboard({
   const [errorMessage, setErrorMessage] = useState('')
   const [lastGeneratedAt, setLastGeneratedAt] = useState('')
   const [generatedRows, setGeneratedRows] = useState<StockRow[]>([])
+  const { financialYear } = useClientFinancialYear()
 
   useEffect(() => {
     if (!initialCompanyId) return
     setSelectedCompanyId(initialCompanyId)
   }, [initialCompanyId])
+
+  useEffect(() => {
+    const range = getFinancialYearDateRangeInput(financialYear)
+    setDateFrom(range.dateFrom)
+    setDateTo(range.dateTo)
+  }, [financialYear?.id])
 
   useEffect(() => {
     let cancelled = false

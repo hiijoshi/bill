@@ -32,6 +32,11 @@ import {
 } from '@/lib/payment-entry-types'
 import { isCashPaymentMode } from '@/lib/payment-mode-utils'
 import { loadPaymentsListData, normalizePaymentListView } from '@/lib/server-payment-workspace'
+import {
+  assertFinancialYearOpenForDate,
+  FinancialYearValidationError,
+  getFinancialYearDateFilter
+} from '@/lib/financial-years'
 
 const paymentCreateSchema = z
   .object({
@@ -241,6 +246,13 @@ export async function POST(request: NextRequest) {
     const paymentModeRecord = await findCompanyPaymentMode(data.companyId, data.mode)
     const isCashMode = isCashPaymentMode(data.mode, paymentModeRecord?.name || '')
 
+    await assertFinancialYearOpenForDate({
+      auth: authResult.auth,
+      companyId: data.companyId,
+      date: payDateValue,
+      actionLabel: 'Payment'
+    })
+
     const result = await prisma.$transaction(async (tx) => {
       const payment = await tx.payment.create({
         data: {
@@ -322,7 +334,10 @@ export async function POST(request: NextRequest) {
     })
 
     return NextResponse.json({ success: true, payment: result }, { status: 201 })
-  } catch {
+  } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -339,6 +354,12 @@ export async function GET(request: NextRequest) {
     const pagination = parsePaginationParams(searchParams, { defaultPageSize: 50, maxPageSize: 200 })
     const includeDeleted =
       authResult.auth.role === 'super_admin' && parseBooleanParam(searchParams.get('includeDeleted'))
+
+    const financialYearFilter = await getFinancialYearDateFilter({
+      request,
+      auth: authResult.auth,
+      companyId: requestedCompanyId
+    })
 
     if (requestedCompanyId) {
       const denied = await ensureCompanyAccess(request, requestedCompanyId)
@@ -373,7 +394,9 @@ export async function GET(request: NextRequest) {
       billType,
       includeDeleted,
       pagination,
-      view
+      view,
+      dateFrom: financialYearFilter.dateFrom,
+      dateTo: financialYearFilter.dateTo
     })
 
     if (pagination.enabled) {
@@ -384,7 +407,10 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json(enhancedPayments)
-  } catch {
+  } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

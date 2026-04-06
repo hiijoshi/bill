@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -19,6 +19,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
+import { ActionButton } from '@/components/performance/action-button'
+import { PaymentDashboardSkeleton } from '@/components/performance/page-placeholders'
+import { RefreshOverlay } from '@/components/performance/refresh-overlay'
 import { Edit, Eye, Plus, Upload } from 'lucide-react'
 import { invalidateAppDataCaches, matchesAppDataChange, notifyAppDataChanged, subscribeAppDataChanged } from '@/lib/app-live-data'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
@@ -32,6 +35,8 @@ import {
 } from '@/lib/payment-entry-types'
 import { DEFAULT_PAYMENT_MODES, type PaymentModeOption } from '@/lib/payment-mode-utils'
 import { loadClientPaymentWorkspace } from '@/lib/client-payment-workspace'
+import { getFinancialYearDateRangeInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 interface PurchaseBill {
   id: string
@@ -211,7 +216,11 @@ export default function PaymentDashboardPage() {
   const [payments, setPayments] = useState<Payment[]>([])
   const [paymentModes, setPaymentModes] = useState<PaymentModeRecord[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [companyId, setCompanyId] = useState('')
+  const { financialYear } = useClientFinancialYear()
+  const hasVisibleDataRef = useRef(false)
   const [partyFilter, setPartyFilter] = useState('all')
   const [paymentTypeFilter, setPaymentTypeFilter] = useState<'all' | string>('all')
   const [modeFilter, setModeFilter] = useState<'all' | 'cash' | 'online' | 'bank' | 'transfer'>('all')
@@ -229,6 +238,17 @@ export default function PaymentDashboardPage() {
     note: ''
   })
   const [savingPayment, setSavingPayment] = useState(false)
+
+  useEffect(() => {
+    hasVisibleDataRef.current =
+      purchaseBills.length > 0 || salesBills.length > 0 || payments.length > 0 || paymentModes.length > 0
+  }, [paymentModes.length, payments.length, purchaseBills.length, salesBills.length])
+
+  useEffect(() => {
+    const range = getFinancialYearDateRangeInput(financialYear)
+    setDateFrom(range.dateFrom)
+    setDateTo(range.dateTo)
+  }, [financialYear?.id])
 
   const paymentModeOptions = useMemo<PaymentModeRecord[]>(
     () => (paymentModes.length > 0 ? paymentModes : DEFAULT_PAYMENT_MODES),
@@ -263,7 +283,9 @@ export default function PaymentDashboardPage() {
   }, [paymentDraft.mode, paymentModeOptions])
 
   const fetchData = useCallback(async (force = false) => {
+    let hydratedFromCache = false
     try {
+      setErrorMessage(null)
       const companyIdParam = await resolveCompanyId(window.location.search)
 
       if (!companyIdParam) {
@@ -282,10 +304,17 @@ export default function PaymentDashboardPage() {
         payments: Payment[]
       }>(cacheKey, 10_000)
       if (cached) {
+        hydratedFromCache = true
         setPurchaseBills(cached.purchaseBills)
         setSalesBills(cached.salesBills)
         setPayments(cached.payments)
         setLoading(false)
+      }
+
+      if (!hasVisibleDataRef.current && !hydratedFromCache) {
+        setLoading(true)
+      } else {
+        setRefreshing(true)
       }
 
       const workspace = await loadClientPaymentWorkspace(companyIdParam, {
@@ -352,20 +381,20 @@ export default function PaymentDashboardPage() {
       })
 
       setLoading(false)
+      setRefreshing(false)
     } catch (error) {
       if (isAbortError(error)) return
       const status = typeof error === 'object' && error && 'status' in error ? Number((error as { status?: number }).status || 0) : 0
       if (status === 401) {
         setLoading(false)
+        setRefreshing(false)
         router.push('/login')
         return
       }
       console.error('Error fetching data:', error)
-      setPurchaseBills([])
-      setSalesBills([])
-      setPayments([])
-      setPaymentModes([])
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to refresh payment workspace.')
       setLoading(false)
+      setRefreshing(false)
     }
   }, [router])
 
@@ -546,7 +575,10 @@ export default function PaymentDashboardPage() {
       })
   }, [payments, paymentTypeFilter, partyFilter, modeFilter, dateFrom, dateTo])
 
-  if (loading) {
+  const hasPaymentDashboardData =
+    purchaseBills.length > 0 || salesBills.length > 0 || payments.length > 0 || paymentModes.length > 0
+
+  if (loading && !companyId && !hasPaymentDashboardData) {
     return (
       <AppLoaderShell
         kind="payment"
@@ -561,6 +593,16 @@ export default function PaymentDashboardPage() {
     <DashboardLayout companyId={companyId}>
       <div className="p-6">
         <div className="max-w-7xl mx-auto">
+          {errorMessage ? (
+            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {errorMessage}
+            </div>
+          ) : null}
+
+          {loading && !hasPaymentDashboardData ? (
+            <PaymentDashboardSkeleton />
+          ) : (
+            <>
           <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <h1 className="text-3xl font-bold">Payment Management</h1>
             <div className="flex flex-wrap gap-2">
@@ -587,7 +629,9 @@ export default function PaymentDashboardPage() {
           </div>
 
           {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+          <div className="relative mb-6">
+            <RefreshOverlay refreshing={refreshing} label="Refreshing payment summary" />
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
             <Card>
               <CardContent className="pt-6">
                 <div className="text-center">
@@ -618,6 +662,7 @@ export default function PaymentDashboardPage() {
                 </div>
               </CardContent>
             </Card>
+            </div>
           </div>
 
           {/* Tab Navigation */}
@@ -645,7 +690,8 @@ export default function PaymentDashboardPage() {
           </div>
 
           {/* Bills Table */}
-          <Card className="mb-6">
+          <Card className="relative mb-6">
+            <RefreshOverlay refreshing={refreshing} label="Refreshing pending bills" />
             <CardHeader>
               <CardTitle>
                 {activeTab === 'purchase' ? 'Purchase Bills' : 'Sales Bills'} - Pending Payments
@@ -729,7 +775,8 @@ export default function PaymentDashboardPage() {
           </Card>
 
           {/* Payment History */}
-          <Card>
+          <Card className="relative">
+            <RefreshOverlay refreshing={refreshing} label="Refreshing payment entries" />
             <CardHeader>
               <CardTitle>Payment History</CardTitle>
             </CardHeader>
@@ -983,12 +1030,17 @@ export default function PaymentDashboardPage() {
                 >
                   Cancel
                 </Button>
-                <Button onClick={handleUpdatePayment} disabled={savingPayment}>
-                  {savingPayment ? 'Updating...' : 'Update Entry'}
-                </Button>
+                <ActionButton
+                  onClick={handleUpdatePayment}
+                  state={savingPayment ? 'loading' : 'idle'}
+                  idleLabel="Update Entry"
+                  loadingLabel="Updating..."
+                />
               </DialogFooter>
             </DialogContent>
           </Dialog>
+            </>
+          )}
         </div>
       </div>
     </DashboardLayout>

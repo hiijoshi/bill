@@ -21,6 +21,8 @@ import {
   normalizeSalesAdditionalCharges,
   summarizeSalesAdditionalCharges,
 } from '@/lib/sales-additional-charges'
+import { getDefaultTransactionDateInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 import { openWhatsappChat } from '@/lib/whatsapp'
 
 interface Party {
@@ -223,6 +225,7 @@ export default function SalesEntryPage() {
   const [accountingHeads, setAccountingHeads] = useState<AccountingHeadCharge[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const { financialYear } = useClientFinancialYear()
 
   const [transports, setTransports] = useState<TransportOption[]>([])
   const [selectedTransportId, setSelectedTransportId] = useState('')
@@ -234,7 +237,7 @@ export default function SalesEntryPage() {
 
   // Invoice Tab 1 - Basic Info
   const [invoiceNo, setInvoiceNo] = useState('')
-  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0])
+  const [invoiceDate, setInvoiceDate] = useState('')
   const [selectedParty, setSelectedParty] = useState('')
   const [partyName, setPartyName] = useState('') // For display only
   const [partyAddress, setPartyAddress] = useState('')
@@ -248,6 +251,9 @@ export default function SalesEntryPage() {
   const [advance, setAdvance] = useState('')
   const [toPay, setToPay] = useState('')
   const [advanceError, setAdvanceError] = useState('')
+  useEffect(() => {
+    setInvoiceDate(getDefaultTransactionDateInput(financialYear))
+  }, [financialYear?.id])
 
   // Invoice Tab 3 - Items
   const [currentItem, setCurrentItem] = useState(createEmptyCurrentItem)

@@ -20,6 +20,8 @@ import {
   clearDefaultPurchaseProductId,
   getDefaultPurchaseProductId
 } from '@/lib/default-product'
+import { getDefaultTransactionDateInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 const PURCHASE_ENTRY_CACHE_AGE_MS = 20_000
 
@@ -89,9 +91,10 @@ export default function PurchaseEntryPage() {
   const [accountingHeads, setAccountingHeads] = useState<AccountingHeadCharge[]>([])
   const [markas, setMarkas] = useState<MarkaOption[]>([])
   const [loading, setLoading] = useState(true)
+  const { financialYear } = useClientFinancialYear()
 
   // Form state
-  const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0])
+  const [billDate, setBillDate] = useState('')
   const [farmerName, setFarmerName] = useState('')
   const [selectedMandiType, setSelectedMandiType] = useState('')
   const [farmerAddress, setFarmerAddress] = useState('')
@@ -113,6 +116,11 @@ export default function PurchaseEntryPage() {
   const [submitting, setSubmitting] = useState(false)
   const [billNumber, setBillNumber] = useState('')
   const [lastBillNumber, setLastBillNumber] = useState(0)
+
+  useEffect(() => {
+    setBillDate(getDefaultTransactionDateInput(financialYear))
+  }, [financialYear?.id])
+
   const toNonNegative = (value: string) => {
     if (value === '') return ''
     const parsed = Number(value)

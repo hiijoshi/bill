@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { canAccessCompanyRoute, requireRoles } from '@/lib/api-security'
+import { getFinancialYearDateFilter } from '@/lib/financial-years'
 import { loadStockWorkspaceData } from '@/lib/server-stock-workspace'
 
 export async function GET(request: NextRequest) {
@@ -19,7 +20,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
     }
 
-    const payload = await loadStockWorkspaceData(companyId)
+    const financialYearFilter = await getFinancialYearDateFilter({
+      request,
+      auth: authResult.auth,
+      companyId
+    })
+
+    const payload = await loadStockWorkspaceData(companyId, 60, {
+      dateFrom: financialYearFilter.dateFrom,
+      dateTo: financialYearFilter.dateTo
+    })
     return NextResponse.json(payload)
   } catch (error) {
     return NextResponse.json(

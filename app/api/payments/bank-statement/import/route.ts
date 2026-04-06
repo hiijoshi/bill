@@ -23,6 +23,7 @@ import {
   parseBankStatementFile,
   type ParsedStatementEntry
 } from '@/lib/server-bank-statement'
+import { assertFinancialYearOpenForDate, FinancialYearValidationError } from '@/lib/financial-years'
 
 export const runtime = 'nodejs'
 
@@ -625,6 +626,13 @@ export async function POST(request: NextRequest) {
           const payDate = new Date(`${entry.postedAt}T00:00:00.000Z`)
           const paymentMode = inferStatementPaymentMode(entry)
 
+          await assertFinancialYearOpenForDate({
+            auth: authResult.auth,
+            companyId,
+            date: payDate,
+            actionLabel: 'Bank statement import'
+          })
+
           await tx.payment.create({
             data: {
               companyId,
@@ -696,6 +704,12 @@ export async function POST(request: NextRequest) {
       entries: responseRows
     })
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.statusCode }
+      )
+    }
     const message = error instanceof Error ? error.message : 'Internal server error'
     return NextResponse.json(
       { error: message },

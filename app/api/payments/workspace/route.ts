@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { canAccessCompanyRoute, requireRoles } from '@/lib/api-security'
+import { getFinancialYearDateFilter } from '@/lib/financial-years'
 import { loadPaymentWorkspaceData } from '@/lib/server-payment-workspace'
 
 export async function GET(request: NextRequest) {
@@ -30,11 +31,19 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    const financialYearFilter = await getFinancialYearDateFilter({
+      request,
+      auth: authResult.auth,
+      companyId
+    })
+
     const payload = await loadPaymentWorkspaceData(companyId, {
       includePaymentModes,
       purchaseAllowed,
       salesAllowed,
-      paymentsAllowed
+      paymentsAllowed,
+      dateFrom: financialYearFilter.dateFrom,
+      dateTo: financialYearFilter.dateTo
     })
 
     return NextResponse.json(payload)

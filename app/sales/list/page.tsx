@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,11 +11,15 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
+import { TransactionListSkeleton } from '@/components/performance/page-placeholders'
+import { RefreshOverlay } from '@/components/performance/refresh-overlay'
 import { Eye, Edit, Ban, Printer, FileText, Download, MessageCircle } from 'lucide-react'
 import { invalidateAppDataCaches, matchesAppDataChange, notifyAppDataChanged, subscribeAppDataChanged } from '@/lib/app-live-data'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
+import { getFinancialYearDateRangeInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 import { openWhatsappChat } from '@/lib/whatsapp'
 
 interface SalesBill {
@@ -237,9 +241,13 @@ function openWhatsappReminder(bill: SalesBill) {
 
 export default function SalesListPage() {
   const router = useRouter()
+  const { financialYear } = useClientFinancialYear()
   const [salesBills, setSalesBills] = useState<SalesBill[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [companyId, setCompanyId] = useState('')
+  const hasVisibleDataRef = useRef(false)
   const [billView, setBillView] = useState<BillViewTab>('active')
   const [selectedBillIds, setSelectedBillIds] = useState<string[]>([])
 
@@ -255,8 +263,20 @@ export default function SalesListPage() {
   const [payable, setPayable] = useState('')
   const [filterZeroRateBills, setFilterZeroRateBills] = useState(false)
 
+  useEffect(() => {
+    const range = getFinancialYearDateRangeInput(financialYear)
+    setDateFrom(range.dateFrom)
+    setDateTo(range.dateTo)
+  }, [financialYear?.id])
+
+  useEffect(() => {
+    hasVisibleDataRef.current = salesBills.length > 0
+  }, [salesBills.length])
+
   const fetchSalesBills = useCallback(async () => {
+    let hydratedFromCache = false
     try {
+      setErrorMessage(null)
       const companyIdParam = await resolveCompanyId(window.location.search)
 
       if (!companyIdParam) {
@@ -271,8 +291,15 @@ export default function SalesListPage() {
       const cacheKey = `sales-bills:${companyIdParam}`
       const cached = getClientCache<SalesBill[]>(cacheKey, 15_000)
       if (cached) {
+        hydratedFromCache = true
         setSalesBills(cached)
         setLoading(false)
+      }
+
+      if (!hasVisibleDataRef.current && !hydratedFromCache) {
+        setLoading(true)
+      } else {
+        setRefreshing(true)
       }
 
       const response = await fetch(`/api/sales-bills?companyId=${companyIdParam}&includeCancelled=true&view=list`)
@@ -282,8 +309,8 @@ export default function SalesListPage() {
         return
       }
       if (response.status === 403) {
-        setSalesBills([])
         setLoading(false)
+        setRefreshing(false)
         return
       }
       const raw = await response.json().catch(() => [])
@@ -291,11 +318,13 @@ export default function SalesListPage() {
       setSalesBills(data)
       setClientCache(cacheKey, data)
       setLoading(false)
+      setRefreshing(false)
     } catch (error) {
       if (isAbortError(error)) return
       console.error('Error fetching sales bills:', error)
-      setSalesBills([])
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to refresh sales list.')
       setLoading(false)
+      setRefreshing(false)
     }
   }, [router])
 
@@ -688,7 +717,9 @@ export default function SalesListPage() {
     [visibleBills]
   )
 
-  if (loading) {
+  const hasSalesData = salesBills.length > 0
+
+  if (loading && !companyId && !hasSalesData) {
     return (
       <AppLoaderShell
         kind="sales"
@@ -702,12 +733,23 @@ export default function SalesListPage() {
   return (
     <DashboardLayout companyId={companyId}>
       <div className="space-y-6">
+        {errorMessage ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {errorMessage}
+          </div>
+        ) : null}
+
+        {loading && !hasSalesData ? (
+          <TransactionListSkeleton />
+        ) : (
+          <>
         <div className="flex justify-between items-center">
           <h1 className="text-3xl font-bold">Sales List</h1>
         </div>
 
         {/* Filters */}
-        <Card>
+        <Card className="relative">
+          <RefreshOverlay refreshing={refreshing} label="Refreshing sales filters" />
           <CardHeader>
             <CardTitle>Filters</CardTitle>
           </CardHeader>
@@ -829,7 +871,8 @@ export default function SalesListPage() {
         </Card>
 
         {/* Sales Bills Table */}
-        <Card>
+        <Card className="relative">
+          <RefreshOverlay refreshing={refreshing} label="Refreshing sales bills" />
           <CardHeader>
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <CardTitle>Sales Bills</CardTitle>
@@ -1015,6 +1058,8 @@ export default function SalesListPage() {
             </div>
           </CardContent>
         </Card>
+          </>
+        )}
       </div>
     </DashboardLayout>
   )

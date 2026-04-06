@@ -56,6 +56,7 @@ const menuItems: MenuItem[] = [
       { title: 'Mandi Type', href: '/master/mandi-type', permissionModule: 'MASTER_ACCOUNTING_HEAD' },
       { title: 'Accounting Head', href: '/master/accounting-head', permissionModule: 'MASTER_ACCOUNTING_HEAD' },
       { title: 'Bank', href: '/master/bank', permissionModule: 'MASTER_BANK' },
+      { title: 'Financial Year', href: '/master/financial-year', permissionModule: 'MASTER_ACCOUNTING_HEAD' },
     ],
   },
   {

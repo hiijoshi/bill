@@ -18,6 +18,8 @@ import {
 import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
 import { loadClientCachedValue } from '@/lib/client-cached-value'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { getDefaultTransactionDateInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 type BankRecord = {
   id: string
@@ -59,14 +61,19 @@ function SelfTransferEntryPageContent() {
   const [companyId, setCompanyId] = useState('')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const { financialYear } = useClientFinancialYear()
 
-  const [transferDate, setTransferDate] = useState(new Date().toISOString().split('T')[0])
+  const [transferDate, setTransferDate] = useState('')
   const [fromAccount, setFromAccount] = useState('cash')
   const [toAccount, setToAccount] = useState('')
   const [amount, setAmount] = useState('')
   const [remark, setRemark] = useState('')
 
   const [banks, setBanks] = useState<BankRecord[]>([])
+
+  useEffect(() => {
+    setTransferDate(getDefaultTransactionDateInput(financialYear))
+  }, [financialYear?.id])
 
   useEffect(() => {
     let cancelled = false

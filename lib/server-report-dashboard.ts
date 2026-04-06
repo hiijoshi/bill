@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import { buildDateRangeWhere } from '@/lib/financial-years'
 import { loadPaymentsListData } from '@/lib/server-payment-workspace'
 
 export type ReportDashboardType = 'main' | 'purchase' | 'sales'
@@ -11,6 +12,8 @@ export async function loadReportDashboardData(
     loadSales?: boolean
     loadPayments?: boolean
     loadBanks?: boolean
+    dateFrom?: Date | null
+    dateTo?: Date | null
   }
 ) {
   const purchaseEnabled = (options?.loadPurchase ?? true) && reportType !== 'sales'
@@ -23,7 +26,8 @@ export async function loadReportDashboardData(
       ? prisma.purchaseBill.findMany({
           where: {
             companyId,
-            status: { not: 'cancelled' }
+            status: { not: 'cancelled' },
+            ...buildDateRangeWhere('billDate', options?.dateFrom || null, options?.dateTo || null)
           },
           select: {
             id: true,
@@ -65,7 +69,8 @@ export async function loadReportDashboardData(
       ? prisma.specialPurchaseBill.findMany({
           where: {
             companyId,
-            status: { not: 'cancelled' }
+            status: { not: 'cancelled' },
+            ...buildDateRangeWhere('billDate', options?.dateFrom || null, options?.dateTo || null)
           },
           select: {
             id: true,
@@ -103,7 +108,8 @@ export async function loadReportDashboardData(
       ? prisma.salesBill.findMany({
           where: {
             companyId,
-            status: { not: 'cancelled' }
+            status: { not: 'cancelled' },
+            ...buildDateRangeWhere('billDate', options?.dateFrom || null, options?.dateTo || null)
           },
           select: {
             id: true,
@@ -135,7 +141,9 @@ export async function loadReportDashboardData(
     paymentsEnabled
       ? loadPaymentsListData({
           companyIds: [companyId],
-          view: 'report'
+          view: 'report',
+          dateFrom: options?.dateFrom || null,
+          dateTo: options?.dateTo || null
         })
       : Promise.resolve({ rows: [], total: 0 }),
     banksEnabled

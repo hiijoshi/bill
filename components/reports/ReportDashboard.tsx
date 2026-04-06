@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BarChart3, Download, FileText, Filter, RefreshCw, Search, Table2 } from 'lucide-react'
+import { ActionButton } from '@/components/performance/action-button'
+import { ReportWorkspaceSkeleton } from '@/components/performance/page-placeholders'
+import { RefreshOverlay } from '@/components/performance/refresh-overlay'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -11,6 +14,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { printSimpleTableReport } from '@/lib/report-print'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { loadShellCompanies } from '@/lib/client-shell-data'
+import { getFinancialYearDateRangeInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 const BASE_HEADERS = [
   'Party_Type',
@@ -444,13 +449,10 @@ export default function ReportDashboard({
   reportType = 'main',
   companyOptions
 }: ReportDashboardProps) {
-  const today = useMemo(() => new Date(), [])
-  const firstDay = useMemo(() => new Date(today.getFullYear(), today.getMonth(), 1), [today])
-
   const [companies, setCompanies] = useState<CompanyRecord[]>([])
   const [selectedCompanyId, setSelectedCompanyId] = useState(initialCompanyId || '')
-  const [dateFrom, setDateFrom] = useState(toDateInputValue(firstDay))
-  const [dateTo, setDateTo] = useState(toDateInputValue(today))
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [paymentModeFilter, setPaymentModeFilter] = useState<ModeFilter>('all')
   const [bankFilter, setBankFilter] = useState('all')
@@ -466,6 +468,7 @@ export default function ReportDashboard({
   const [errorMessage, setErrorMessage] = useState('')
   const [noticeMessage, setNoticeMessage] = useState('')
   const [lastGeneratedAt, setLastGeneratedAt] = useState('')
+  const { financialYear } = useClientFinancialYear()
   const selectedCompanyName = useMemo(
     () => companies.find((company) => company.id === selectedCompanyId)?.name || selectedCompanyId || 'Selected company',
     [companies, selectedCompanyId]
@@ -482,6 +485,12 @@ export default function ReportDashboard({
   useEffect(() => {
     setSelectedHeaders([...availableHeaders])
   }, [availableHeaders])
+
+  useEffect(() => {
+    const range = getFinancialYearDateRangeInput(financialYear)
+    setDateFrom(range.dateFrom)
+    setDateTo(range.dateTo)
+  }, [financialYear?.id])
 
   useEffect(() => {
     let cancelled = false
@@ -1019,9 +1028,6 @@ export default function ReportDashboard({
       const message = error instanceof Error ? error.message : 'Report generation failed.'
       setNoticeMessage('')
       setErrorMessage(message)
-      setGeneratedRows([])
-      setAnalysisSnapshot(EMPTY_ANALYSIS_SNAPSHOT)
-      setAvailableBanks([])
     } finally {
       setLoading(false)
     }
@@ -1348,10 +1354,14 @@ export default function ReportDashboard({
               <Filter className="mr-2 h-4 w-4" />
               Clear
             </Button>
-            <Button onClick={generateReport} disabled={loading || loadingCompanies} className="rounded-2xl bg-slate-950 text-white hover:bg-slate-800">
-              {loading ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <BarChart3 className="mr-2 h-4 w-4" />}
-              {loading ? 'Generating...' : 'Refresh'}
-            </Button>
+            <ActionButton
+              onClick={generateReport}
+              disabled={loadingCompanies}
+              state={loading ? 'loading' : 'idle'}
+              idleLabel="Refresh"
+              loadingLabel="Generating..."
+              className="rounded-2xl bg-slate-950 text-white hover:bg-slate-800"
+            />
             <Button
               variant="outline"
               onClick={downloadCsv}
@@ -1502,6 +1512,10 @@ export default function ReportDashboard({
         </CardContent>
       </Card>
 
+      {loading && generatedRows.length === 0 ? (
+        <ReportWorkspaceSkeleton />
+      ) : (
+        <>
       {reportType === 'main' ? (
         <Card className={surfaceCardClass}>
         <CardHeader className="border-b border-slate-100 pb-5">
@@ -1544,7 +1558,8 @@ export default function ReportDashboard({
         </Card>
       ) : null}
 
-      <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${reportType === 'main' ? 'xl:grid-cols-6' : 'xl:grid-cols-4'}`}>
+      <div className={`relative grid grid-cols-1 gap-4 sm:grid-cols-2 ${reportType === 'main' ? 'xl:grid-cols-6' : 'xl:grid-cols-4'}`}>
+        <RefreshOverlay refreshing={loading && generatedRows.length > 0} label="Refreshing report totals" />
         {summaryCards.map((card) => (
           <Card key={card.label} className={surfaceCardClass}>
             <CardContent className="pt-6">
@@ -1617,7 +1632,8 @@ export default function ReportDashboard({
         </CardContent>
       </Card>
 
-      <Card className={surfaceCardClass}>
+      <Card className={`relative ${surfaceCardClass}`}>
+        <RefreshOverlay refreshing={loading && generatedRows.length > 0} label="Refreshing report table" />
         <CardHeader className="border-b border-slate-100 pb-5">
           <CardTitle className="text-2xl tracking-tight text-slate-950">
             {reportType === 'purchase'
@@ -1670,6 +1686,8 @@ export default function ReportDashboard({
           </div>
         </CardContent>
       </Card>
+        </>
+      )}
     </div>
   )
 }

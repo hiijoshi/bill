@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, Suspense } from 'react'
+import { useState, useEffect, useCallback, Suspense, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -11,12 +11,16 @@ import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
+import { PaymentWorkspaceSkeleton } from '@/components/performance/page-placeholders'
+import { RefreshOverlay } from '@/components/performance/refresh-overlay'
 import { Plus, Eye } from 'lucide-react'
 import { matchesAppDataChange, subscribeAppDataChanged } from '@/lib/app-live-data'
 import { isAbortError } from '@/lib/http'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { loadClientPaymentWorkspace } from '@/lib/client-payment-workspace'
+import { getFinancialYearDateRangeInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 interface PurchaseBill {
   id: string
@@ -85,6 +89,10 @@ function PaymentPageContent() {
   const router = useRouter()
   const [companyId, setCompanyId] = useState('')
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const { financialYear } = useClientFinancialYear()
+  const hasVisibleDataRef = useRef(false)
 
   const [activeTab, setActiveTab] = useState<'purchase' | 'sales'>('purchase')
   const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>([])
@@ -97,15 +105,24 @@ function PaymentPageContent() {
   const [dateTo, setDateTo] = useState('')
   const cacheKey = companyId ? `payment-page:${companyId}` : ''
 
+  useEffect(() => {
+    hasVisibleDataRef.current = purchaseBills.length > 0 || salesBills.length > 0 || payments.length > 0
+  }, [payments.length, purchaseBills.length, salesBills.length])
+
+  useEffect(() => {
+    const range = getFinancialYearDateRangeInput(financialYear)
+    setDateFrom(range.dateFrom)
+    setDateTo(range.dateTo)
+  }, [financialYear?.id])
+
   const fetchPaymentData = useCallback(async (
     isCancelled: () => boolean = () => false,
     options: { background?: boolean } = {}
   ) => {
+    let hydratedFromCache = false
     try {
       if (isCancelled()) return
-      if (!options.background) {
-        setLoading(true)
-      }
+      setErrorMessage(null)
 
       if (cacheKey) {
         const cached = getClientCache<{
@@ -114,11 +131,19 @@ function PaymentPageContent() {
           payments: Payment[]
         }>(cacheKey, 15_000)
         if (cached) {
+          hydratedFromCache = true
           setPurchaseBills(cached.purchaseBills)
           setSalesBills(cached.salesBills)
           setPayments(cached.payments)
           setLoading(false)
         }
+      }
+
+      const shouldUseBlockingLoader = !options.background && !hasVisibleDataRef.current && !hydratedFromCache
+      if (shouldUseBlockingLoader) {
+        setLoading(true)
+      } else {
+        setRefreshing(true)
       }
 
       if (isCancelled()) return
@@ -160,7 +185,7 @@ function PaymentPageContent() {
             amount: clampNonNegative(payment.amount)
           }))
         : []
-
+      
       setPurchaseBills(safePurchaseBills)
       setSalesBills(safeSalesBills)
       setPayments(safePayments)
@@ -171,15 +196,15 @@ function PaymentPageContent() {
           payments: safePayments
         })
       }
-      
+
       setLoading(false)
+      setRefreshing(false)
     } catch (error) {
       if (isCancelled() || isAbortError(error)) return
       console.error('Error fetching payment data:', error)
-      setPurchaseBills([])
-      setSalesBills([])
-      setPayments([])
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to refresh payment workspace.')
       setLoading(false)
+      setRefreshing(false)
     }
   }, [cacheKey, companyId])
 
@@ -271,7 +296,9 @@ function PaymentPageContent() {
     router.push(`/${billType}/view?billId=${billId}`)
   }
 
-  if (loading) {
+  const hasPaymentData = purchaseBills.length > 0 || salesBills.length > 0 || payments.length > 0
+
+  if (loading && !companyId && !hasPaymentData) {
     return <AppLoaderShell kind="payment" companyId={companyId} />
   }
 
@@ -279,6 +306,16 @@ function PaymentPageContent() {
     <DashboardLayout companyId={companyId}>
       <div className="p-6">
         <div className="max-w-7xl mx-auto">
+          {errorMessage ? (
+            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {errorMessage}
+            </div>
+          ) : null}
+
+          {loading && !hasPaymentData ? (
+            <PaymentWorkspaceSkeleton />
+          ) : (
+            <>
           {/* Header */}
           <div className="flex justify-between items-center mb-6">
             <h1 className="text-3xl font-bold">Payment Management</h1>
@@ -298,7 +335,9 @@ function PaymentPageContent() {
           </div>
 
           {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+          <div className="relative mb-6">
+            <RefreshOverlay refreshing={refreshing} label="Refreshing payment totals" />
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-4">
             <Card>
               <CardContent className="pt-6">
                 <div className="text-center">
@@ -331,6 +370,7 @@ function PaymentPageContent() {
                 </div>
               </CardContent>
             </Card>
+            </div>
           </div>
 
           {/* Tab Navigation */}
@@ -358,7 +398,8 @@ function PaymentPageContent() {
           </div>
 
           {/* Bills Section */}
-          <Card className="mb-6">
+          <Card className="relative mb-6">
+            <RefreshOverlay refreshing={refreshing} label="Refreshing pending bills" />
             <CardHeader>
               <CardTitle>
                 {activeTab === 'purchase' ? 'Purchase Bills' : 'Sales Bills'} - Pending Payments
@@ -436,7 +477,8 @@ function PaymentPageContent() {
           </Card>
 
           {/* Payment History */}
-          <Card>
+          <Card className="relative">
+            <RefreshOverlay refreshing={refreshing} label="Refreshing payment history" />
             <CardHeader>
               <CardTitle>Payment History</CardTitle>
             </CardHeader>
@@ -514,6 +556,8 @@ function PaymentPageContent() {
               </div>
             </CardContent>
           </Card>
+            </>
+          )}
         </div>
       </div>
     </DashboardLayout>

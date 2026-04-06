@@ -14,6 +14,11 @@ import {
   listSalesAdditionalChargesByBillIds,
   replaceSalesAdditionalChargesForBill,
 } from '@/lib/sales-additional-charge-store'
+import {
+  assertFinancialYearOpenForDate,
+  FinancialYearValidationError,
+  getFinancialYearDateFilter
+} from '@/lib/financial-years'
 
 const salesItemSchema = z.object({
   productId: z.string().min(1),
@@ -448,6 +453,12 @@ export async function POST(request: NextRequest) {
     const billDateValue = safeToDate(body.invoiceDate || body.billDate)
     const billNo = normalizeBillNo(body.invoiceNo, body.billNo)
 
+    await assertFinancialYearOpenForDate({
+      companyId,
+      date: billDateValue,
+      actionLabel: 'Sales bill'
+    })
+
     const riskDenied = await assertPartyCreditRisk({
       companyId,
       partyId: party.id,
@@ -560,6 +571,9 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     )
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     const message = error instanceof Error ? error.message : 'Internal server error'
     const status = message.includes('not found') || message.includes('required') ? 400 : 500
     return NextResponse.json({ error: message }, { status })
@@ -572,8 +586,6 @@ export async function GET(request: NextRequest) {
     const companyId = normalizeId(searchParams.get('companyId'))
     const billId = normalizeId(searchParams.get('billId'))
     const last = searchParams.get('last')
-    const dateFrom = searchParams.get('dateFrom')
-    const dateTo = searchParams.get('dateTo')
     const includeCancelled = parseBooleanParam(searchParams.get('includeCancelled'))
     const view = normalizeSalesBillListView(searchParams.get('view'))
 
@@ -583,6 +595,11 @@ export async function GET(request: NextRequest) {
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
+
+    const financialYearFilter = await getFinancialYearDateFilter({
+      request,
+      companyId
+    })
 
     if (last === 'true') {
       const bills = await prisma.salesBill.findMany({
@@ -637,10 +654,10 @@ export async function GET(request: NextRequest) {
       ...(includeCancelled ? {} : { status: { not: 'cancelled' } })
     }
 
-    if (dateFrom || dateTo) {
+    if (financialYearFilter.dateFrom || financialYearFilter.dateTo) {
       whereClause.billDate = {}
-      if (dateFrom) whereClause.billDate.gte = safeToDate(dateFrom)
-      if (dateTo) whereClause.billDate.lte = safeToDate(`${dateTo}T23:59:59.999`)
+      if (financialYearFilter.dateFrom) whereClause.billDate.gte = financialYearFilter.dateFrom
+      if (financialYearFilter.dateTo) whereClause.billDate.lte = financialYearFilter.dateTo
     }
 
     if (pagination.search) {
@@ -786,7 +803,10 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json(safeSalesBills)
-  } catch {
+  } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -895,6 +915,12 @@ export async function PUT(request: NextRequest) {
     const nextBillDate = body.invoiceDate || body.billDate ? safeToDate(body.invoiceDate || body.billDate) : existing.billDate
     const hasBillNoInput = String(body.invoiceNo || '').trim() || String(body.billNo || '').trim()
     const nextBillNo = hasBillNoInput ? normalizeBillNo(body.invoiceNo, body.billNo) : existing.billNo
+
+    await assertFinancialYearOpenForDate({
+      companyId,
+      date: nextBillDate,
+      actionLabel: 'Sales bill update'
+    })
 
     const riskDenied = await assertPartyCreditRisk({
       companyId,
@@ -1052,6 +1078,9 @@ export async function PUT(request: NextRequest) {
         : null,
     })
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     const message = error instanceof Error ? error.message : 'Internal server error'
     const status = message.includes('not found') || message.includes('required') ? 400 : 500
     return NextResponse.json({ error: message }, { status })

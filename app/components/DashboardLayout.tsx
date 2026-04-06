@@ -13,6 +13,8 @@ import {
   loadShellBootstrap,
   SHELL_ACTIVE_COMPANY_CACHE_KEY
 } from '@/lib/client-shell-data'
+import { switchClientFinancialYear } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 interface DashboardLayoutProps {
   children: React.ReactNode
@@ -72,7 +74,14 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
   const [currentCompanyName, setCurrentCompanyName] = useState<string | null>(null)
   const [isSwitchingCompany, setIsSwitchingCompany] = useState(false)
   const [companySwitchError, setCompanySwitchError] = useState<string | null>(null)
+  const [isSwitchingFinancialYear, setIsSwitchingFinancialYear] = useState(false)
+  const [financialYearSwitchError, setFinancialYearSwitchError] = useState<string | null>(null)
   const [subscriptionBanner, setSubscriptionBanner] = useState<SubscriptionBannerPayload | null>(null)
+  const {
+    payload: financialYearPayload,
+    financialYear,
+    reload: reloadFinancialYears
+  } = useClientFinancialYear()
   const router = useRouter()
 
   const loadShellContext = useCallback(async (force = false) => {
@@ -261,6 +270,10 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
   }
 
   const showCompanySwitcher = availableCompanies.length > 1
+  const showFinancialYearSwitcher = financialYearPayload.financialYears.length > 0
+  const isUsingExplicitFinancialYear =
+    Boolean(financialYearPayload.selectedFinancialYear?.id) &&
+    financialYearPayload.selectedFinancialYear?.id !== financialYearPayload.activeFinancialYear?.id
   const bannerState = String(
     subscriptionBanner?.dataLifecycle?.state || subscriptionBanner?.entitlement?.lifecycleState || ''
   )
@@ -271,6 +284,44 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
     (bannerState !== 'active' && bannerState !== 'trial'
       ? true
       : Number(subscriptionBanner?.entitlement?.daysLeft || 0) <= 7)
+
+  const handleFinancialYearSwitch = async (nextFinancialYearId: string | null) => {
+    const normalizedId = String(nextFinancialYearId || '').trim() || null
+    const currentFinancialYearId = String(financialYear?.id || '').trim() || null
+
+    if (
+      isSwitchingFinancialYear ||
+      (normalizedId && normalizedId === currentFinancialYearId) ||
+      (!normalizedId && !isUsingExplicitFinancialYear)
+    ) {
+      return
+    }
+
+    setFinancialYearSwitchError(null)
+    setIsSwitchingFinancialYear(true)
+
+    try {
+      await switchClientFinancialYear(normalizedId)
+      clearClientCache()
+      if (resolvedCompanyId) {
+        setClientCache(SHELL_ACTIVE_COMPANY_CACHE_KEY, resolvedCompanyId, { persist: true })
+      }
+      await Promise.all([
+        loadShellContext(true),
+        reloadFinancialYears(true)
+      ])
+      if (resolvedCompanyId) {
+        notifyAppCompanyChanged(resolvedCompanyId)
+      } else {
+        window.dispatchEvent(new Event('sessionRefreshed'))
+      }
+      router.refresh()
+    } catch (error) {
+      setFinancialYearSwitchError(error instanceof Error ? error.message : 'Failed to switch financial year')
+    } finally {
+      setIsSwitchingFinancialYear(false)
+    }
+  }
 
   return (
     <div className={lockViewport ? 'flex h-dvh overflow-hidden bg-gray-50' : 'flex h-dvh overflow-hidden bg-gray-50'}>
@@ -300,6 +351,45 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
               <h1 className="text-xl font-semibold text-gray-900">Dashboard</h1>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2 self-start md:self-auto">
+              {showFinancialYearSwitcher ? (
+                <div className="flex min-w-[220px] max-w-[320px] items-center gap-2">
+                  <Select
+                    value={financialYear?.id || undefined}
+                    onValueChange={(value) => {
+                      void handleFinancialYearSwitch(value)
+                    }}
+                    disabled={isSwitchingFinancialYear}
+                  >
+                    <SelectTrigger
+                      className="h-10 w-full rounded-2xl border-slate-200 bg-white text-sm text-slate-700"
+                      aria-label="Change financial year"
+                    >
+                      <SelectValue placeholder="Financial Year" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {financialYearPayload.financialYears.map((row) => (
+                        <SelectItem key={row.id} value={row.id}>
+                          {row.label}{row.status !== 'open' ? ` (${row.status})` : row.isActive ? ' (Active)' : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {isUsingExplicitFinancialYear ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-2xl"
+                      onClick={() => {
+                        void handleFinancialYearSwitch(null)
+                      }}
+                      disabled={isSwitchingFinancialYear}
+                    >
+                      Active FY
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
               {showCompanySwitcher ? (
                 <div className="min-w-[180px] max-w-[240px]">
                   <Select
@@ -343,6 +433,20 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
           {companySwitchError ? (
             <div className="mx-auto mt-3 max-w-7xl rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               {companySwitchError}
+            </div>
+          ) : null}
+          {financialYearSwitchError ? (
+            <div className="mx-auto mt-3 max-w-7xl rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {financialYearSwitchError}
+            </div>
+          ) : null}
+          {financialYear ? (
+            <div className="mx-auto mt-3 max-w-7xl rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              Financial Year: <span className="font-semibold text-slate-950">{financialYear.label}</span>
+              {financialYear.status !== 'open' ? ` • ${financialYear.status.toUpperCase()}` : ''}
+              {isUsingExplicitFinancialYear && financialYearPayload.activeFinancialYear?.label
+                ? ` • Active FY is ${financialYearPayload.activeFinancialYear.label}`
+                : ''}
             </div>
           ) : null}
           {shouldShowSubscriptionBanner ? (

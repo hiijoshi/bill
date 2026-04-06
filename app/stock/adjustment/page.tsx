@@ -6,6 +6,9 @@ import { Activity, ArrowLeft, BarChart3, Package, Scale } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
+import { ActionButton } from '@/components/performance/action-button'
+import { StockWorkspaceSkeleton } from '@/components/performance/page-placeholders'
+import { RefreshOverlay } from '@/components/performance/refresh-overlay'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -17,6 +20,8 @@ import { deleteClientCacheByPrefix, getClientCache, setClientCache } from '@/lib
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
 import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
+import { getDefaultTransactionDateInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 interface Product {
   id: string
@@ -170,16 +175,23 @@ export default function StockAdjustmentPage() {
 
   const [companyId, setCompanyId] = useState('')
   const [pageLoading, setPageLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [products, setProducts] = useState<Product[]>([])
   const [stockSummary, setStockSummary] = useState<ProductMetrics[]>([])
   const [stockLedger, setStockLedger] = useState<StockLedgerEntry[]>([])
+  const { financialYear } = useClientFinancialYear()
 
   const [selectedProduct, setSelectedProduct] = useState('')
-  const [adjustmentDate, setAdjustmentDate] = useState(new Date().toISOString().split('T')[0])
+  const [adjustmentDate, setAdjustmentDate] = useState('')
   const [adjustmentType, setAdjustmentType] = useState<AdjustmentType>('in')
   const [quantity, setQuantity] = useState('')
   const [remark, setRemark] = useState('')
+
+  useEffect(() => {
+    setAdjustmentDate(getDefaultTransactionDateInput(financialYear))
+  }, [financialYear?.id])
 
   const fetchRecentLedger = useCallback(async (targetCompanyId: string, isCancelled: () => boolean = () => false) => {
     try {
@@ -198,9 +210,6 @@ export default function StockAdjustmentPage() {
 
       if (!response.ok) {
         if (response.status === 499 || response.status === 504 || payload.timedOut || payload.aborted) {
-          if (!isCancelled()) {
-            setStockLedger([])
-          }
           return
         }
         throw new Error(typeof payload.error === 'string' ? payload.error : 'Failed to load stock movements')
@@ -211,7 +220,7 @@ export default function StockAdjustmentPage() {
     } catch (error) {
       if (isCancelled() || isAbortError(error)) return
       console.error('Error fetching stock movements:', error)
-      setStockLedger([])
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to refresh stock movements.')
     }
   }, [])
 
@@ -234,6 +243,7 @@ export default function StockAdjustmentPage() {
 
   const fetchStockContext = useCallback(async (targetCompanyId: string, isCancelled: () => boolean = () => false) => {
     try {
+      setErrorMessage(null)
       const cacheKey = `stock-overview:${targetCompanyId}`
       const cached = getClientCache<StockOverviewPayload>(cacheKey, 30_000)
       if (cached) {
@@ -245,8 +255,15 @@ export default function StockAdjustmentPage() {
 
         applyProductsAndSummary(nextProducts, nextSummary)
         setStockLedger(nextLedger)
+        setRefreshing(true)
         void fetchRecentLedger(targetCompanyId, isCancelled)
         return
+      }
+
+      if (products.length > 0 || stockSummary.length > 0 || stockLedger.length > 0) {
+        setRefreshing(true)
+      } else {
+        setPageLoading(true)
       }
 
       const params = new URLSearchParams({
@@ -264,9 +281,6 @@ export default function StockAdjustmentPage() {
 
       if (!response.ok) {
         if (response.status === 499 || response.status === 504 || payload.timedOut || payload.aborted) {
-          setProducts([])
-          setStockSummary([])
-          setStockLedger([])
           return
         }
         throw new Error(typeof payload.error === 'string' ? payload.error : 'Failed to load stock data')
@@ -288,15 +302,14 @@ export default function StockAdjustmentPage() {
     } catch (error) {
       if (isCancelled() || isAbortError(error)) return
       console.error('Error fetching stock data:', error)
-      setProducts([])
-      setStockSummary([])
-      setStockLedger([])
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to refresh stock context.')
     } finally {
       if (!isCancelled()) {
         setPageLoading(false)
+        setRefreshing(false)
       }
     }
-  }, [applyProductsAndSummary, fetchRecentLedger])
+  }, [applyProductsAndSummary, fetchRecentLedger, products.length, stockLedger.length, stockSummary.length])
 
   useEffect(() => {
     let cancelled = false
@@ -458,7 +471,9 @@ export default function StockAdjustmentPage() {
     }
   }
 
-  if (pageLoading) {
+  const hasStockData = products.length > 0 || stockSummary.length > 0 || stockLedger.length > 0
+
+  if (pageLoading && !companyId && !hasStockData) {
     return (
       <AppLoaderShell
         kind="stock"
@@ -473,6 +488,16 @@ export default function StockAdjustmentPage() {
     <DashboardLayout companyId={companyId}>
       <div className="p-6">
         <div className="mx-auto max-w-7xl space-y-6">
+          {errorMessage ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {errorMessage}
+            </div>
+          ) : null}
+
+          {pageLoading && !hasStockData ? (
+            <StockWorkspaceSkeleton />
+          ) : (
+            <>
           <div className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm lg:flex-row lg:items-center lg:justify-between">
             <div className="space-y-2">
               <div className="flex items-center gap-3">
@@ -511,7 +536,8 @@ export default function StockAdjustmentPage() {
             </div>
           </div>
 
-          <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+          <div className="relative grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+            <RefreshOverlay refreshing={refreshing} label="Refreshing stock context" />
             <Card className="rounded-3xl border-slate-200 shadow-sm">
               <CardHeader className="space-y-2">
                 <CardTitle className="flex items-center gap-2 text-2xl tracking-tight">
@@ -645,9 +671,13 @@ export default function StockAdjustmentPage() {
                     <Button type="button" variant="outline" onClick={resetForm}>
                       Reset
                     </Button>
-                    <Button type="submit" disabled={submitting || !selectedProduct || (adjustmentType === 'out' && !canRecordOut)}>
-                      {submitting ? 'Saving...' : adjustmentType === 'in' ? 'Record Stock In' : 'Record Stock Out'}
-                    </Button>
+                    <ActionButton
+                      type="submit"
+                      disabled={!selectedProduct || (adjustmentType === 'out' && !canRecordOut)}
+                      state={submitting ? 'loading' : 'idle'}
+                      idleLabel={adjustmentType === 'in' ? 'Record Stock In' : 'Record Stock Out'}
+                      loadingLabel="Saving..."
+                    />
                   </div>
                 </form>
               </CardContent>
@@ -732,7 +762,8 @@ export default function StockAdjustmentPage() {
             </Card>
           </div>
 
-          <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="relative grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+            <RefreshOverlay refreshing={refreshing} label="Refreshing recent adjustments" />
             <Card className="rounded-3xl border-slate-200 shadow-sm">
               <CardHeader className="space-y-2">
                 <CardTitle className="flex items-center gap-2 text-2xl tracking-tight">
@@ -825,6 +856,8 @@ export default function StockAdjustmentPage() {
               </CardContent>
             </Card>
           </div>
+            </>
+          )}
         </div>
       </div>
     </DashboardLayout>
