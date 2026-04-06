@@ -118,6 +118,23 @@ const createEmptyAdditionalChargeBucket = (): SalesAdditionalChargeBucket => ({
   remark: ''
 })
 
+const PERMANENT_ADDITIONAL_CHARGE_TYPES = [
+  'Mandi tax %',
+  'Labour',
+  'Loading labour',
+  'Bardan',
+  'Commission',
+  'Miscellaneous'
+] as const
+
+const createPermanentAdditionalChargeBuckets = (): SalesAdditionalChargeBucket[] =>
+  PERMANENT_ADDITIONAL_CHARGE_TYPES.map((chargeType) => ({
+    id: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+    chargeType,
+    amount: '',
+    remark: '',
+  }))
+
 interface ExistingSalesBill {
   id: string
   billNo: string
@@ -264,9 +281,9 @@ export default function SalesEntryPage() {
   const [totalNoOfBags, setTotalNoOfBags] = useState(0)
   const [totalWeight, setTotalWeight] = useState(0)
   const [totalAmount, setTotalAmount] = useState(0)
-  const [additionalChargeBuckets, setAdditionalChargeBuckets] = useState<SalesAdditionalChargeBucket[]>([
-    createEmptyAdditionalChargeBucket()
-  ])
+  const [additionalChargeBuckets, setAdditionalChargeBuckets] = useState<SalesAdditionalChargeBucket[]>(
+    createPermanentAdditionalChargeBuckets()
+  )
   const [manualGrandTotal, setManualGrandTotal] = useState('')
   const [manualGrandTotalTouched, setManualGrandTotalTouched] = useState(false)
   const [partyRisk, setPartyRisk] = useState<PartyRiskResponse | null>(null)
@@ -733,7 +750,7 @@ export default function SalesEntryPage() {
                 }]
               : [])
           ]
-    setAdditionalChargeBuckets(nextAdditionalCharges.length > 0 ? nextAdditionalCharges : [createEmptyAdditionalChargeBucket()])
+    setAdditionalChargeBuckets(nextAdditionalCharges.length > 0 ? nextAdditionalCharges : createPermanentAdditionalChargeBuckets())
 
     const mappedItems: SalesItem[] = Array.isArray(bill.salesItems)
       ? bill.salesItems.map((item, index) => {
@@ -1752,17 +1769,9 @@ export default function SalesEntryPage() {
                 {/* Section 4 - Additional Charges */}
                 <div className="mt-2">
                   <h3 className="text-lg font-semibold mb-2 pb-2 border-b">4. Additional Charges</h3>
-                  <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_2.1fr_0.9fr]">
-                    <div className="rounded-lg border bg-slate-50 p-4">
-                      
-                      
-                      
-                    </div>
+                  <div className="grid grid-cols-1 gap-4">
                     <div className="rounded-lg border p-4">
                       <div className="flex items-center justify-between gap-3">
-                        <div>
-                          
-                        </div>
                         <Button type="button" variant="outline" onClick={handleAddAdditionalChargeRow}>
                           Add Charge
                         </Button>
