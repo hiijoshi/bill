@@ -10,7 +10,12 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { printSimpleTableReport } from '@/lib/report-print'
-import { getClientCache, getOrLoadClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import {
+  loadShellCompanies,
+  SHELL_COMPANIES_CACHE_AGE_MS as COMPANIES_CACHE_AGE_MS,
+  SHELL_COMPANIES_CACHE_KEY as COMPANIES_CACHE_KEY
+} from '@/lib/client-shell-data'
 
 type EntryType = 'all' | 'purchase' | 'sales' | 'adjustment'
 
@@ -58,8 +63,6 @@ interface StockReportDashboardProps {
   onBackToDashboard?: () => void
 }
 
-const COMPANIES_CACHE_KEY = 'shell:companies'
-const COMPANIES_CACHE_AGE_MS = 60_000
 const STOCK_REPORT_CACHE_AGE_MS = 20_000
 
 const numberFormatter = new Intl.NumberFormat('en-IN', {
@@ -147,23 +150,7 @@ export default function StockReportDashboard({
           return
         }
 
-        const rows = await getOrLoadClientCache<CompanyRecord[]>(
-          COMPANIES_CACHE_KEY,
-          COMPANIES_CACHE_AGE_MS,
-          async () => {
-            const response = await fetch('/api/companies', { cache: 'no-store' })
-            if (!response.ok) {
-              throw new Error('Unable to load companies')
-            }
-
-            const payload = await response.json().catch(() => [])
-            return normalizeCollection<CompanyRecord>(payload)
-          },
-          {
-            persist: true,
-            shouldCache: (data) => Array.isArray(data)
-          }
-        )
+        const rows = normalizeCollection<CompanyRecord>(await loadShellCompanies())
 
         if (cancelled) return
 

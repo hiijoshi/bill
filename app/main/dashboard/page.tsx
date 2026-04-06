@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
+import { TaskLoader } from '@/components/loaders/task-loader'
 import {
   ShoppingCart,
   Receipt,
@@ -39,15 +40,20 @@ import { APP_COMPANY_CHANGED_EVENT, notifyAppCompanyChanged, stripCompanyParamsF
 import { getReadablePermissionModules, resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
 import { loadClientPermissions } from '@/lib/client-permissions'
 import { matchesAppDataChange, subscribeAppDataChanged } from '@/lib/app-live-data'
+import {
+  loadShellBootstrap,
+  loadShellCompanies,
+  SHELL_ACTIVE_COMPANY_CACHE_AGE_MS as ACTIVE_COMPANY_CACHE_AGE_MS,
+  SHELL_ACTIVE_COMPANY_CACHE_KEY as ACTIVE_COMPANY_CACHE_KEY,
+  SHELL_AUTH_CACHE_AGE_MS as AUTH_CACHE_AGE_MS,
+  SHELL_AUTH_CACHE_KEY as AUTH_CACHE_KEY,
+  SHELL_COMPANIES_CACHE_AGE_MS as COMPANIES_CACHE_AGE_MS,
+  SHELL_COMPANIES_CACHE_KEY as COMPANIES_CACHE_KEY
+} from '@/lib/client-shell-data'
+import { loadClientPaymentWorkspace } from '@/lib/client-payment-workspace'
 
 type ActiveTab = 'purchase' | 'sales' | 'stock' | 'payment' | 'report'
 const DASHBOARD_CACHE_AGE_MS = 15_000
-const COMPANIES_CACHE_AGE_MS = 5 * 60_000
-const AUTH_CACHE_AGE_MS = 5 * 60_000
-const ACTIVE_COMPANY_CACHE_AGE_MS = 5 * 60_000
-const COMPANIES_CACHE_KEY = 'shell:companies'
-const AUTH_CACHE_KEY = 'shell:auth-me'
-const ACTIVE_COMPANY_CACHE_KEY = 'shell:active-company-id'
 const DASHBOARD_CACHE_PREFIX = 'main-dashboard:'
 const currencyFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 })
 const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
@@ -79,14 +85,21 @@ type SalesBill = {
 type Payment = {
   id: string
   companyId?: string
-  billType: 'purchase' | 'sales'
+  billType: 'purchase' | 'sales' | string
+  billTypeLabel?: string
   billId?: string
+  billNo?: string
+  partyName?: string
   amount: number
   payDate?: string
   billDate?: string
   mode?: 'cash' | 'online' | 'bank' | string
+  modeCategory?: 'cash' | 'online' | 'bank' | 'transfer'
+  modeLabel?: string
+  status?: 'pending' | 'paid'
   txnRef?: string | null
   note?: string | null
+  createdAt?: string
   party?: {
     name?: string
   } | null
@@ -116,6 +129,51 @@ type StockLedgerItem = {
     name: string
     unit: string
   }
+}
+
+type StockWorkspaceProduct = {
+  id: string
+  name: string
+  unit: string
+  currentStock?: number
+}
+
+type StockWorkspaceSummary = {
+  productId: string
+  productName: string
+  productUnit: string
+  totalIn: number
+  totalOut: number
+  closingStock: number
+  movementCount?: number
+  adjustmentEntries?: number
+  lastMovementDate?: string | null
+}
+
+type PaymentWorkspacePayload = {
+  purchaseBills: PurchaseBill[]
+  salesBills: SalesBill[]
+  payments: Payment[]
+}
+
+type StockWorkspacePayload = {
+  products: StockWorkspaceProduct[]
+  stockSummary: StockWorkspaceSummary[]
+  totalTransactions: number
+  stockLedger: Array<{
+    id: string
+    entryDate: string
+    type: 'purchase' | 'sales' | 'adjustment'
+    qtyIn: number
+    qtyOut: number
+    refTable: string
+    refId: string
+    product: {
+      id: string
+      name: string
+      unit: string
+    }
+  }>
 }
 
 type CompanyOption = {
@@ -261,6 +319,10 @@ export default function MainDashboardPage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('purchase')
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<DashboardPayload>(emptyDashboardPayload)
+  const [paymentWorkspace, setPaymentWorkspace] = useState<PaymentWorkspacePayload | null>(null)
+  const [paymentWorkspaceLoading, setPaymentWorkspaceLoading] = useState(false)
+  const [stockWorkspace, setStockWorkspace] = useState<StockWorkspacePayload | null>(null)
+  const [stockWorkspaceLoading, setStockWorkspaceLoading] = useState(false)
   const [companies, setCompanies] = useState<CompanyOption[]>([])
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([])
   const [primaryCompanyId, setPrimaryCompanyId] = useState<string>('')
@@ -417,47 +479,12 @@ export default function MainDashboardPage() {
   }, [])
 
   const loadCompanies = useCallback(async (force = false) => {
-    try {
-      return await getOrLoadClientCache<CompanyOption[]>(
-        COMPANIES_CACHE_KEY,
-        COMPANIES_CACHE_AGE_MS,
-        async () => {
-          const res = await fetch('/api/companies', { cache: 'no-store' })
-          if (!res.ok) {
-            if (res.status === 401) {
-              router.push('/login')
-            }
-            const raw = await res.text().catch(() => '')
-            if (res.status >= 500) {
-              console.error('Failed to load companies API', {
-                status: res.status,
-                preview: raw.slice(0, 120)
-              })
-            }
-            throw new Error('Failed to load companies')
-          }
-          const contentType = res.headers.get('content-type') || ''
-          if (!contentType.includes('application/json')) {
-            return []
-          }
-          const rows = await parseApiJson<Array<Record<string, unknown>>>(res, [])
-          return Array.isArray(rows)
-            ? rows.map((row) => ({
-                id: String(row.id),
-                name: String(row.name || row.id),
-                locked: Boolean(row.locked)
-              }))
-            : []
-        },
-        {
-          persist: true,
-          force,
-          shouldCache: (data) => Array.isArray(data)
-        }
-      )
-    } catch {
-      return getClientCache<CompanyOption[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS) || []
-    }
+    return loadShellCompanies({
+      force,
+      onUnauthorized: () => {
+        router.push('/login')
+      }
+    })
   }, [router])
 
   const loadCurrentCompanyOption = useCallback(async (force = false): Promise<CompanyOption | null> => {
@@ -468,63 +495,13 @@ export default function MainDashboardPage() {
     }
 
     try {
-      const companyId = await getOrLoadClientCache<string>(
-        ACTIVE_COMPANY_CACHE_KEY,
-        ACTIVE_COMPANY_CACHE_AGE_MS,
-        async () => {
-          try {
-            const activeResponse = await fetch('/api/auth/company', { cache: 'no-store' })
-            if (activeResponse.ok) {
-              const activePayload = await parseApiJson<AuthCompanyPayload>(activeResponse, {})
-              const activeCompanyId = String(activePayload.company?.id || '').trim()
-              if (activeCompanyId) {
-                return activeCompanyId
-              }
-            }
-          } catch {
-            // fall through to /api/auth/me
-          }
-
-          const authPayload = await getOrLoadClientCache<AuthCompanyPayload | null>(
-            AUTH_CACHE_KEY,
-            AUTH_CACHE_AGE_MS,
-            async () => {
-              const authResponse = await fetch('/api/auth/me', { cache: 'no-store' })
-              if (authResponse.status === 401) {
-                router.push('/login')
-                return null
-              }
-              if (!authResponse.ok) {
-                throw new Error('Failed to load auth session')
-              }
-              return await parseApiJson<AuthCompanyPayload>(authResponse, {})
-            },
-            {
-              persist: true,
-              force,
-              shouldCache: (data) => Boolean(data && (data.user || data.company))
-            }
-          )
-
-          const fallbackCompanyId = String(
-            authPayload?.company?.id ||
-            authPayload?.user?.companyId ||
-            authPayload?.user?.assignedCompanyId ||
-            ''
-          ).trim()
-
-          if (!fallbackCompanyId) {
-            throw new Error('No active company')
-          }
-
-          return fallbackCompanyId
-        },
-        {
-          persist: true,
-          force,
-          shouldCache: (value) => Boolean(String(value || '').trim())
+      const shellBootstrap = await loadShellBootstrap({
+        force,
+        onUnauthorized: () => {
+          router.push('/login')
         }
-      )
+      })
+      const companyId = shellBootstrap.activeCompanyId
 
       if (!companyId) {
         return null
@@ -537,6 +514,7 @@ export default function MainDashboardPage() {
           (String(authPayload?.company?.id || '').trim() === companyId
             ? String(authPayload?.company?.name || '').trim()
             : '') ||
+          shellBootstrap.companies.find((company) => company.id === companyId)?.name ||
           cachedCompanies.find((company) => company.id === companyId)?.name ||
           companyId
       }
@@ -874,6 +852,109 @@ export default function MainDashboardPage() {
       cancelled = true
     }
   }, [dashboardAccessResolved, fetchDashboardData, hasDashboardAccess, primaryCompanyId, selectedCompanyIds])
+
+  useEffect(() => {
+    setPaymentWorkspace(null)
+    setPaymentWorkspaceLoading(false)
+    setStockWorkspace(null)
+    setStockWorkspaceLoading(false)
+  }, [primaryCompanyId])
+
+  useEffect(() => {
+    if (!primaryCompanyId) return
+    if (activeTab !== 'payment' || paymentWorkspace || paymentWorkspaceLoading) return
+
+    let cancelled = false
+    setPaymentWorkspaceLoading(true)
+
+    ;(async () => {
+      try {
+        const payload = await loadClientPaymentWorkspace(primaryCompanyId)
+        if (cancelled) return
+
+        setPaymentWorkspace({
+          purchaseBills: Array.isArray((payload as { purchaseBills?: PurchaseBill[] }).purchaseBills)
+            ? (payload as { purchaseBills: PurchaseBill[] }).purchaseBills
+            : [],
+          salesBills: Array.isArray((payload as { salesBills?: SalesBill[] }).salesBills)
+            ? (payload as { salesBills: SalesBill[] }).salesBills
+            : [],
+          payments: Array.isArray((payload as { payments?: Payment[] }).payments)
+            ? (payload as { payments: Payment[] }).payments
+            : []
+        })
+      } catch (error) {
+        console.error('Failed to load dashboard payment workspace:', error)
+        if (!cancelled) {
+          setPaymentWorkspace({
+            purchaseBills: [],
+            salesBills: [],
+            payments: []
+          })
+        }
+      } finally {
+        if (!cancelled) {
+          setPaymentWorkspaceLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, paymentWorkspace, paymentWorkspaceLoading, primaryCompanyId])
+
+  useEffect(() => {
+    if (!primaryCompanyId) return
+    if (activeTab !== 'stock' || stockWorkspace || stockWorkspaceLoading) return
+
+    let cancelled = false
+    setStockWorkspaceLoading(true)
+
+    ;(async () => {
+      try {
+        const response = await fetch(`/api/dashboard/stock-workspace?companyId=${encodeURIComponent(primaryCompanyId)}`, {
+          cache: 'no-store'
+        })
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          throw new Error(String((payload as { error?: string }).error || 'Failed to load stock workspace'))
+        }
+        if (cancelled) return
+
+        setStockWorkspace({
+          products: Array.isArray((payload as { products?: StockWorkspaceProduct[] }).products)
+            ? (payload as { products: StockWorkspaceProduct[] }).products
+            : [],
+          stockSummary: Array.isArray((payload as { stockSummary?: StockWorkspaceSummary[] }).stockSummary)
+            ? (payload as { stockSummary: StockWorkspaceSummary[] }).stockSummary
+            : [],
+          totalTransactions: Number((payload as { totalTransactions?: number }).totalTransactions || 0),
+          stockLedger: Array.isArray((payload as { stockLedger?: StockWorkspacePayload['stockLedger'] }).stockLedger)
+            ? (payload as { stockLedger: StockWorkspacePayload['stockLedger'] }).stockLedger
+            : []
+        })
+      } catch (error) {
+        console.error('Failed to load dashboard stock workspace:', error)
+        if (!cancelled) {
+          setStockWorkspace({
+            products: [],
+            stockSummary: [],
+            totalTransactions: 0,
+            stockLedger: []
+          })
+        }
+      } finally {
+        if (!cancelled) {
+          setStockWorkspaceLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, primaryCompanyId, stockWorkspace, stockWorkspaceLoading])
 
   useEffect(() => {
     if (!dashboardAccessResolved || !hasDashboardAccess) return
@@ -1992,12 +2073,44 @@ export default function MainDashboardPage() {
 
           {/* Stock Tab */}
           {activeTab === 'stock' && (
-            <StockManagementTab companyId={primaryCompanyId} />
+            !stockWorkspace ? (
+              <TaskLoader kind="stock" compact />
+            ) : (
+              <StockManagementTab
+                companyId={primaryCompanyId}
+                initialProducts={stockWorkspace?.products}
+                initialStockSummary={stockWorkspace?.stockSummary}
+                initialTotalTransactions={stockWorkspace?.totalTransactions}
+                initialStockLedger={stockWorkspace?.stockLedger}
+              />
+            )
           )}
 
           {/* Payment Tab */}
           {activeTab === 'payment' && (
-            <PaymentTab companyId={primaryCompanyId} />
+            !paymentWorkspace ? (
+              <TaskLoader kind="payment" compact />
+            ) : (
+              <PaymentTab
+                companyId={primaryCompanyId}
+                initialPurchaseBills={paymentWorkspace?.purchaseBills}
+                initialSalesBills={paymentWorkspace?.salesBills?.map((bill) => ({
+                  ...bill,
+                  party: bill.party || {}
+                }))}
+                initialPayments={paymentWorkspace?.payments?.map((payment) => ({
+                  ...payment,
+                  billId: payment.billId || '',
+                  billNo: payment.billNo || '',
+                  partyName: payment.partyName || '',
+                  payDate: payment.payDate || '',
+                  mode: String(payment.mode || ''),
+                  txnRef: payment.txnRef || undefined,
+                  note: payment.note || undefined,
+                  createdAt: payment.createdAt || payment.payDate || ''
+                }))}
+              />
+            )
           )}
 
           {/* Reports Tab */}

@@ -43,12 +43,17 @@ interface StockSummary {
   totalIn: number
   totalOut: number
   closingStock: number
+  movementCount?: number
+  adjustmentEntries?: number
+  lastMovementDate?: string | Date | null
 }
 
 interface StockManagementTabProps {
   companyId: string
   initialProducts?: Product[]
   initialStockLedger?: StockLedger[]
+  initialStockSummary?: StockSummary[]
+  initialTotalTransactions?: number
 }
 
 type StockCachePayload = {
@@ -63,22 +68,34 @@ type StockLedgerCachePayload = {
 
 const STOCK_CACHE_AGE_MS = 30_000
 
+function buildStockLedgerCacheKey(
+  companyId: string,
+  productId: string,
+  type: string,
+  dateFrom: string,
+  dateTo: string
+) {
+  return `dashboard-stock-ledger:${companyId}:${productId}:${type}:${dateFrom}:${dateTo}`
+}
+
 export default function StockManagementTab({
   companyId,
   initialProducts,
-  initialStockLedger
+  initialStockLedger,
+  initialStockSummary,
+  initialTotalTransactions
 }: StockManagementTabProps) {
   const router = useRouter()
   const hasInitialData = Array.isArray(initialProducts) && Array.isArray(initialStockLedger)
   const stockCacheKey = `dashboard-stock:${companyId}`
-  const cachedStockData = hasInitialData ? null : getClientCache<StockCachePayload>(stockCacheKey, STOCK_CACHE_AGE_MS)
+  const cachedStockData = getClientCache<StockCachePayload>(stockCacheKey, STOCK_CACHE_AGE_MS)
   const [loading, setLoading] = useState(!hasInitialData && !cachedStockData)
   const [ledgerLoading, setLedgerLoading] = useState(false)
 
-  const [products, setProducts] = useState<Product[]>(cachedStockData?.products || [])
-  const [stockSummary, setStockSummary] = useState<StockSummary[]>(cachedStockData?.stockSummary || [])
-  const [stockLedger, setStockLedger] = useState<StockLedger[]>([])
-  const [totalTransactions, setTotalTransactions] = useState(cachedStockData?.totalTransactions || 0)
+  const [products, setProducts] = useState<Product[]>(initialProducts || cachedStockData?.products || [])
+  const [stockSummary, setStockSummary] = useState<StockSummary[]>(initialStockSummary || cachedStockData?.stockSummary || [])
+  const [stockLedger, setStockLedger] = useState<StockLedger[]>(initialStockLedger || [])
+  const [totalTransactions, setTotalTransactions] = useState(initialTotalTransactions || cachedStockData?.totalTransactions || 0)
 
   // Filter states
   const [filterProduct, setFilterProduct] = useState('all')
@@ -99,32 +116,29 @@ export default function StockManagementTab({
         return
       }
 
-      const params = new URLSearchParams({
-        companyId,
-        mode: 'overview',
-        includeRecent: 'false',
-        recentLimit: '60'
+      const workspace = await fetch(`/api/dashboard/stock-workspace?companyId=${encodeURIComponent(companyId)}`, {
+        cache: 'no-store'
       })
-      const overviewRes = await fetch(`/api/stock-ledger?${params.toString()}`)
-      if (!overviewRes.ok) {
+      if (!workspace.ok) {
         throw new Error('Failed to load stock overview')
       }
-      const overviewData = await overviewRes.json().catch(() => ({} as StockCachePayload & { meta?: { totalEntries?: number } }))
+      const overviewData = await workspace.json().catch(() => ({} as {
+        products?: Product[]
+        stockSummary?: StockSummary[]
+        totalTransactions?: number
+      }))
 
       const safeProducts = Array.isArray(overviewData.products) ? overviewData.products : []
-      const safeSummary = Array.isArray(overviewData.stockSummary)
-        ? overviewData.stockSummary
-        : Array.isArray((overviewData as { summary?: StockSummary[] }).summary)
-          ? ((overviewData as { summary: StockSummary[] }).summary)
-          : []
+      const safeSummary = Array.isArray(overviewData.stockSummary) ? overviewData.stockSummary : []
+      const safeTotalTransactions = Number(overviewData.totalTransactions || 0)
 
       setProducts(safeProducts)
       setStockSummary(safeSummary)
-      setTotalTransactions(Number((overviewData as { meta?: { totalEntries?: number } }).meta?.totalEntries || 0))
+      setTotalTransactions(safeTotalTransactions)
       setClientCache(stockCacheKey, {
         products: safeProducts,
         stockSummary: safeSummary,
-        totalTransactions: Number((overviewData as { meta?: { totalEntries?: number } }).meta?.totalEntries || 0)
+        totalTransactions: safeTotalTransactions
       })
       setLoading(false)
     } catch (error) {
@@ -133,12 +147,39 @@ export default function StockManagementTab({
     }
   }, [companyId, stockCacheKey])
 
+  useEffect(() => {
+    if (!hasInitialData) return
+
+    setProducts(initialProducts || [])
+    setStockLedger(initialStockLedger || [])
+    setStockSummary(initialStockSummary || [])
+    setTotalTransactions(Number(initialTotalTransactions || 0))
+    setClientCache(stockCacheKey, {
+      products: initialProducts || [],
+      stockSummary: initialStockSummary || [],
+      totalTransactions: Number(initialTotalTransactions || 0)
+    })
+    setClientCache(
+      buildStockLedgerCacheKey(companyId, '', '', '', ''),
+      { stockLedger: initialStockLedger || [] }
+    )
+    setLoading(false)
+  }, [
+    companyId,
+    hasInitialData,
+    initialProducts,
+    initialStockLedger,
+    initialStockSummary,
+    initialTotalTransactions,
+    stockCacheKey
+  ])
+
   const fetchLedgerData = useCallback(async (force = false) => {
     if (!companyId) return
 
     const normalizedProductId = filterProduct !== 'all' ? filterProduct : ''
     const normalizedType = filterType !== 'all' ? filterType : ''
-    const ledgerCacheKey = `dashboard-stock-ledger:${companyId}:${normalizedProductId}:${normalizedType}:${dateFrom}:${dateTo}`
+    const ledgerCacheKey = buildStockLedgerCacheKey(companyId, normalizedProductId, normalizedType, dateFrom, dateTo)
     const cached = force ? null : getClientCache<StockLedgerCachePayload>(ledgerCacheKey, 15_000)
     if (cached) {
       setStockLedger(cached.stockLedger)
@@ -215,39 +256,9 @@ export default function StockManagementTab({
     return unsubscribe
   }, [companyId, fetchLedgerData, fetchStockData])
 
-  const productsData = useMemo(
-    () => (hasInitialData ? initialProducts || [] : products),
-    [hasInitialData, initialProducts, products]
-  )
-  const stockLedgerData = useMemo(
-    () => (hasInitialData ? initialStockLedger || [] : stockLedger),
-    [hasInitialData, initialStockLedger, stockLedger]
-  )
-  const stockSummaryData = useMemo(() => {
-    if (!hasInitialData) return stockSummary
-
-    const summary: { [key: string]: StockSummary } = {}
-    ;(initialProducts || []).forEach((product) => {
-      summary[product.id] = {
-        productId: product.id,
-        productName: product.name,
-        productUnit: product.unit,
-        totalIn: 0,
-        totalOut: 0,
-        closingStock: 0
-      }
-    })
-
-    ;(initialStockLedger || []).forEach((entry) => {
-      const row = summary[entry.product.id]
-      if (!row) return
-      row.totalIn += entry.qtyIn
-      row.totalOut += entry.qtyOut
-      row.closingStock = Math.max(0, row.totalIn - row.totalOut)
-    })
-
-    return Object.values(summary)
-  }, [hasInitialData, initialProducts, initialStockLedger, stockSummary])
+  const productsData = useMemo(() => products, [products])
+  const stockLedgerData = useMemo(() => stockLedger, [stockLedger])
+  const stockSummaryData = useMemo(() => stockSummary, [stockSummary])
   const filteredLedger = useMemo(() => {
     return [...stockLedgerData].sort((a, b) => new Date(b.entryDate).getTime() - new Date(a.entryDate).getTime())
   }, [stockLedgerData])
@@ -259,7 +270,7 @@ export default function StockManagementTab({
     () => stockSummaryData.filter((stock) => stock.closingStock <= 0).length,
     [stockSummaryData]
   )
-  const isLoading = hasInitialData ? false : loading
+  const isLoading = loading
 
   const buildStockAdjustmentPath = useCallback((productId?: string) => {
     const params = new URLSearchParams()

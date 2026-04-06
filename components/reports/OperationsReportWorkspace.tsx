@@ -10,7 +10,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { getClientCache, getOrLoadClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { loadShellCompanies } from '@/lib/client-shell-data'
 import { printHtmlDocument } from '@/lib/report-print'
 
 type ReportView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'bank-ledger' | 'cash-ledger'
@@ -580,29 +581,12 @@ export default function OperationsReportWorkspace({
   const loadCompanies = useCallback(async () => {
     setLoadingCompanies(true)
     try {
-      const normalized = await getOrLoadClientCache<CompanyRecord[]>(
-        SHELL_COMPANIES_CACHE_KEY,
-        SHELL_COMPANIES_CACHE_AGE_MS,
-        async () => {
-          const response = await fetch('/api/companies', { cache: 'no-store' })
-          if (!response.ok) {
-            throw new Error('Unable to load companies')
-          }
-
-          const payload = await response.json().catch(() => [])
-          const rows = Array.isArray(payload) ? payload : []
-          return rows
-            .map((row) => ({
-              id: String(row?.id || ''),
-              name: String(row?.name || '')
-            }))
-            .filter((row) => row.id && row.name)
-        },
-        {
-          persist: true,
-          shouldCache: (rows) => Array.isArray(rows)
-        }
-      )
+      const normalized = (await loadShellCompanies())
+        .map((row) => ({
+          id: String(row.id || ''),
+          name: String(row.name || '')
+        }))
+        .filter((row) => row.id && row.name)
 
       setCompanies(normalized)
       setSelectedCompanyIds((previous) => {

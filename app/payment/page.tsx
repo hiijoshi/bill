@@ -16,6 +16,7 @@ import { matchesAppDataChange, subscribeAppDataChanged } from '@/lib/app-live-da
 import { isAbortError } from '@/lib/http'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { loadClientPaymentWorkspace } from '@/lib/client-payment-workspace'
 
 interface PurchaseBill {
   id: string
@@ -54,7 +55,7 @@ interface SalesBill {
 
 interface Payment {
   id: string
-  billType: 'purchase' | 'sales'
+  billType: string
   billId: string
   billNo: string
   partyName: string
@@ -70,16 +71,6 @@ const clampNonNegative = (value: number): number => {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return 0
   return Math.max(0, parsed)
-}
-
-const parseApiJson = async <T,>(response: Response, fallback: T): Promise<T> => {
-  const raw = await response.text()
-  if (!raw) return fallback
-  try {
-    return JSON.parse(raw) as T
-  } catch {
-    return fallback
-  }
 }
 
 export default function PaymentPage() {
@@ -129,29 +120,23 @@ function PaymentPageContent() {
           setLoading(false)
         }
       }
-      
-      // Fetch all data
-      const [purchaseRes, salesRes, paymentsRes] = await Promise.all([
-        fetch(`/api/purchase-bills?companyId=${companyId}`),
-        fetch(`/api/sales-bills?companyId=${companyId}`),
-        fetch(`/api/payments?companyId=${companyId}`)
-      ])
+
       if (isCancelled()) return
 
-      if ([purchaseRes.status, salesRes.status, paymentsRes.status].includes(403)) {
-        setPurchaseBills([])
-        setSalesBills([])
-        setPayments([])
-        setLoading(false)
-        return
-      }
-
-      const [purchaseData, salesData, paymentsData] = await Promise.all([
-        parseApiJson<PurchaseBill[]>(purchaseRes, []),
-        parseApiJson<SalesBill[]>(salesRes, []),
-        parseApiJson<Payment[]>(paymentsRes, [])
-      ])
+      const workspace = await loadClientPaymentWorkspace(companyId, {
+        force: options.background ? true : false
+      })
       if (isCancelled()) return
+
+      const purchaseData = Array.isArray((workspace as { purchaseBills?: PurchaseBill[] }).purchaseBills)
+        ? (workspace as { purchaseBills: PurchaseBill[] }).purchaseBills
+        : []
+      const salesData = Array.isArray((workspace as { salesBills?: SalesBill[] }).salesBills)
+        ? (workspace as { salesBills: SalesBill[] }).salesBills
+        : []
+      const paymentsData = Array.isArray((workspace as { payments?: Payment[] }).payments)
+        ? (workspace as { payments: Payment[] }).payments
+        : []
       
       const safePurchaseBills = Array.isArray(purchaseData)
         ? purchaseData.map((bill: PurchaseBill) => ({

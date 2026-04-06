@@ -17,26 +17,21 @@ import {
   getSignedPartyOpeningBalance,
   isPartyOpeningBalanceReference
 } from '@/lib/party-opening-balance'
-import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-schema'
 import {
   findPurchasePaymentTarget,
   type PurchasePaymentTarget,
   updatePurchasePaymentTargetTotals
 } from '@/lib/purchase-payment-sync'
 import {
-  getPaymentTypeLabel,
   isBillLinkedPaymentType,
   isCashBankPaymentType,
-  isCashBankReceiptType,
-  isPaymentEntryType,
-  parseCashBankPaymentReference,
   isPurchasePaymentType,
   isSalesReceiptType,
-  isSelfTransferPaymentType,
   PAYMENT_ENTRY_TYPES,
   SALES_RECEIPT_TYPE
 } from '@/lib/payment-entry-types'
 import { isCashPaymentMode } from '@/lib/payment-mode-utils'
+import { loadPaymentsListData, normalizePaymentListView } from '@/lib/server-payment-workspace'
 
 const paymentCreateSchema = z
   .object({
@@ -76,13 +71,52 @@ const parseOptionalDate = (value: unknown): Date | null => {
   return parsed
 }
 
+async function findCompanyPaymentMode(companyId: string, mode: string) {
+  const normalizedMode = String(mode || '').trim()
+  if (!normalizedMode) {
+    return null
+  }
+
+  const exactMatch = await prisma.paymentMode.findFirst({
+    where: {
+      companyId,
+      isActive: true,
+      OR: [{ code: normalizedMode }, { name: normalizedMode }]
+    },
+    select: {
+      name: true,
+      code: true
+    }
+  })
+
+  if (exactMatch) {
+    return exactMatch
+  }
+
+  const lowerMode = normalizedMode.toLowerCase()
+  const candidates = await prisma.paymentMode.findMany({
+    where: {
+      companyId,
+      isActive: true
+    },
+    select: {
+      name: true,
+      code: true
+    }
+  })
+
+  return candidates.find((paymentMode) => {
+    const code = String(paymentMode.code || '').trim().toLowerCase()
+    const name = String(paymentMode.name || '').trim().toLowerCase()
+    return code === lowerMode || name === lowerMode
+  }) || null
+}
+
 export async function POST(request: NextRequest) {
   const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin', 'company_user'])
   if (!authResult.ok) return authResult.response
 
   try {
-    await ensurePartyOpeningBalanceSchema(prisma)
-
     const body = await request.json().catch(() => null)
     const parsed = paymentCreateSchema.safeParse(body)
     if (!parsed.success) {
@@ -98,17 +132,6 @@ export async function POST(request: NextRequest) {
     const data = parsed.data
     const denied = await ensureCompanyAccess(request, data.companyId)
     if (denied) return denied
-
-    const scopedCompanyIds = await getScopedCompanyIds(authResult.auth, data.companyId)
-    const permissionScopedIds = await filterCompanyIdsByRoutePermission(
-      authResult.auth,
-      scopedCompanyIds,
-      request.nextUrl.pathname,
-      request.method
-    )
-    if (!permissionScopedIds.includes(data.companyId)) {
-      return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
-    }
 
     const isOpeningBalancePayment = data.billType === SALES_RECEIPT_TYPE && isPartyOpeningBalanceReference(data.billId)
     const isBillLinkedPayment = isBillLinkedPaymentType(data.billType)
@@ -182,7 +205,12 @@ export async function POST(request: NextRequest) {
       } else {
         const bill = await prisma.salesBill.findFirst({
           where: { id: data.billId, companyId: data.companyId },
-          include: { party: true }
+          select: {
+            totalAmount: true,
+            receivedAmount: true,
+            billDate: true,
+            partyId: true
+          }
         })
 
         if (!bill) {
@@ -190,10 +218,10 @@ export async function POST(request: NextRequest) {
         }
 
         totalAmount = bill.totalAmount
-        paidAmount = 'receivedAmount' in bill ? bill.receivedAmount : 0
+        paidAmount = bill.receivedAmount
         outstanding = Math.max(0, totalAmount - paidAmount)
         billDateValue = bill.billDate
-        salesPartyId = 'partyId' in bill ? bill.partyId || null : null
+        salesPartyId = bill.partyId || null
       }
     } else {
       totalAmount = roundCurrency(data.amount)
@@ -210,21 +238,7 @@ export async function POST(request: NextRequest) {
     const paymentStatus = data.status || 'paid'
     const payDateValue = new Date(data.payDate)
     const normalizedIfscCode = normalizeOptionalString(data.ifscCode)?.toUpperCase() || null
-    const normalizedMode = String(data.mode || '').trim().toLowerCase()
-    const paymentModes = await prisma.paymentMode.findMany({
-      where: {
-        companyId: data.companyId
-      },
-      select: {
-        name: true,
-        code: true
-      }
-    })
-    const paymentModeRecord = paymentModes.find((paymentMode) => {
-      const code = String(paymentMode.code || '').trim().toLowerCase()
-      const name = String(paymentMode.name || '').trim().toLowerCase()
-      return code === normalizedMode || name === normalizedMode
-    })
+    const paymentModeRecord = await findCompanyPaymentMode(data.companyId, data.mode)
     const isCashMode = isCashPaymentMode(data.mode, paymentModeRecord?.name || '')
 
     const result = await prisma.$transaction(async (tx) => {
@@ -321,17 +335,24 @@ export async function GET(request: NextRequest) {
     const searchParams = new URL(request.url).searchParams
     const requestedCompanyId = searchParams.get('companyId')?.trim() || null
     const billType = searchParams.get('billType')?.trim() || null
+    const view = normalizePaymentListView(searchParams.get('view'))
     const pagination = parsePaginationParams(searchParams, { defaultPageSize: 50, maxPageSize: 200 })
     const includeDeleted =
       authResult.auth.role === 'super_admin' && parseBooleanParam(searchParams.get('includeDeleted'))
 
-    const scopedCompanyIds = await getScopedCompanyIds(authResult.auth, requestedCompanyId)
-    const permissionScopedIds = await filterCompanyIdsByRoutePermission(
-      authResult.auth,
-      scopedCompanyIds,
-      request.nextUrl.pathname,
-      request.method
-    )
+    if (requestedCompanyId) {
+      const denied = await ensureCompanyAccess(request, requestedCompanyId)
+      if (denied) return denied
+    }
+
+    const permissionScopedIds = requestedCompanyId
+      ? [requestedCompanyId]
+      : await filterCompanyIdsByRoutePermission(
+          authResult.auth,
+          await getScopedCompanyIds(authResult.auth, requestedCompanyId),
+          request.nextUrl.pathname,
+          request.method
+        )
 
     if (requestedCompanyId && permissionScopedIds.length === 0) {
       return NextResponse.json({ error: 'Missing privilege for requested company' }, { status: 403 })
@@ -347,207 +368,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json([])
     }
 
-    const where = {
-      companyId: { in: permissionScopedIds },
-      ...(billType && isPaymentEntryType(billType) ? { billType } : {}),
-      ...(includeDeleted ? {} : { deletedAt: null }),
-      ...(pagination.search
-        ? {
-            OR: [
-              { txnRef: { contains: pagination.search } },
-              { note: { contains: pagination.search } },
-              { mode: { contains: pagination.search } },
-              { status: { contains: pagination.search } },
-              { billType: { contains: pagination.search } },
-              { bankNameSnapshot: { contains: pagination.search } },
-              { bankBranchSnapshot: { contains: pagination.search } }
-            ]
-          }
-        : {})
-    }
-
-    const [payments, total] = await Promise.all([
-      prisma.payment.findMany({
-        where,
-        select: {
-          id: true,
-          companyId: true,
-          billType: true,
-          billId: true,
-          billDate: true,
-          payDate: true,
-          amount: true,
-          mode: true,
-          status: true,
-          txnRef: true,
-          note: true,
-          bankNameSnapshot: true,
-          bankBranchSnapshot: true,
-          createdAt: true,
-          party: {
-            select: {
-              name: true
-            }
-          },
-          farmer: {
-            select: {
-              name: true
-            }
-          }
-        },
-        orderBy: { createdAt: 'desc' },
-        ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
-      }),
-      pagination.enabled ? prisma.payment.count({ where }) : Promise.resolve(0)
-    ])
-
-    const purchaseBillIds = [...new Set(payments
-      .filter((payment) => payment.billType === 'purchase')
-      .map((payment) => payment.billId))]
-    const salesBillIds = [...new Set(payments
-      .filter((payment) => payment.billType === 'sales')
-      .map((payment) => payment.billId))]
-    const cashBankReferences = payments
-      .map((payment) => parseCashBankPaymentReference(payment.billId))
-      .filter((reference): reference is NonNullable<ReturnType<typeof parseCashBankPaymentReference>> => Boolean(reference))
-    const accountingHeadIds = [...new Set(cashBankReferences
-      .filter((reference) => reference.referenceType === 'accounting-head')
-      .map((reference) => reference.referenceId))]
-    const partyReferenceIds = [...new Set(cashBankReferences
-      .filter((reference) => reference.referenceType === 'party')
-      .map((reference) => reference.referenceId))]
-    const supplierReferenceIds = [...new Set(cashBankReferences
-      .filter((reference) => reference.referenceType === 'supplier')
-      .map((reference) => reference.referenceId))]
-
-    const [purchaseBills, specialPurchaseBills, salesBills, accountingHeads, parties, suppliers] = await Promise.all([
-      purchaseBillIds.length > 0
-        ? prisma.purchaseBill.findMany({
-            where: { id: { in: purchaseBillIds } },
-            select: {
-              id: true,
-              billNo: true,
-              farmer: {
-                select: {
-                  name: true
-                }
-              }
-            }
-          })
-        : Promise.resolve([]),
-      purchaseBillIds.length > 0
-        ? prisma.specialPurchaseBill.findMany({
-            where: { id: { in: purchaseBillIds } },
-            select: {
-              id: true,
-              supplierInvoiceNo: true,
-              supplier: {
-                select: {
-                  name: true
-                }
-              }
-            }
-          })
-        : Promise.resolve([]),
-      salesBillIds.length > 0
-        ? prisma.salesBill.findMany({
-            where: { id: { in: salesBillIds } },
-            select: { id: true, billNo: true }
-          })
-        : Promise.resolve([]),
-      accountingHeadIds.length > 0
-        ? prisma.accountingHead.findMany({
-            where: {
-              companyId: { in: permissionScopedIds },
-              id: { in: accountingHeadIds }
-            },
-            select: {
-              id: true,
-              name: true
-            }
-          })
-        : Promise.resolve([]),
-      partyReferenceIds.length > 0
-        ? prisma.party.findMany({
-            where: {
-              companyId: { in: permissionScopedIds },
-              id: { in: partyReferenceIds }
-            },
-            select: {
-              id: true,
-              name: true
-            }
-          })
-        : Promise.resolve([]),
-      supplierReferenceIds.length > 0
-        ? prisma.supplier.findMany({
-            where: {
-              companyId: { in: permissionScopedIds },
-              id: { in: supplierReferenceIds }
-            },
-            select: {
-              id: true,
-              name: true
-            }
-          })
-        : Promise.resolve([])
-    ])
-
-    const purchaseBillMap = new Map(
-      purchaseBills.map((bill) => [
-        bill.id,
-        {
-          billNo: bill.billNo,
-          partyName: bill.farmer?.name || ''
-        }
-      ])
-    )
-    const specialPurchaseBillMap = new Map(
-      specialPurchaseBills.map((bill) => [
-        bill.id,
-        {
-          billNo: bill.supplierInvoiceNo,
-          partyName: bill.supplier?.name || ''
-        }
-      ])
-    )
-    const salesBillMap = new Map(salesBills.map((bill) => [bill.id, bill.billNo]))
-    const cashBankReferenceLabelMap = new Map<string, string>([
-      ...accountingHeads.map((head) => [`accounting-head:${head.id}`, head.name || ''] as const),
-      ...parties.map((party) => [`party:${party.id}`, party.name || ''] as const),
-      ...suppliers.map((supplier) => [`supplier:${supplier.id}`, supplier.name || ''] as const)
-    ])
-
-    const enhancedPayments = payments.map((payment) => {
-      const cashBankReference = parseCashBankPaymentReference(payment.billId)
-      const cashBankTargetLabel = cashBankReference
-        ? cashBankReferenceLabelMap.get(`${cashBankReference.referenceType}:${cashBankReference.referenceId}`) || ''
-        : ''
-
-      return {
-        ...payment,
-        amount: clampNonNegative(payment.amount),
-        billTypeLabel: getPaymentTypeLabel(payment.billType),
-        billNo:
-          payment.billType === SALES_RECEIPT_TYPE && isPartyOpeningBalanceReference(payment.billId)
-            ? 'Opening Balance'
-            : isPurchasePaymentType(payment.billType)
-            ? purchaseBillMap.get(payment.billId)?.billNo || specialPurchaseBillMap.get(payment.billId)?.billNo || ''
-            : payment.billType === SALES_RECEIPT_TYPE
-            ? salesBillMap.get(payment.billId) || ''
-            : getPaymentTypeLabel(payment.billType),
-        partyName:
-          payment.party?.name ||
-          payment.farmer?.name ||
-          purchaseBillMap.get(payment.billId)?.partyName ||
-          specialPurchaseBillMap.get(payment.billId)?.partyName ||
-          cashBankTargetLabel ||
-          (isCashBankPaymentType(payment.billType) || isCashBankReceiptType(payment.billType)
-            ? String(payment.bankNameSnapshot || '').trim()
-            : isSelfTransferPaymentType(payment.billType)
-            ? [payment.bankNameSnapshot, payment.bankBranchSnapshot].map((value) => String(value || '').trim()).filter(Boolean).join(' -> ')
-            : '')
-      }
+    const { rows: enhancedPayments, total } = await loadPaymentsListData({
+      companyIds: permissionScopedIds,
+      billType,
+      includeDeleted,
+      pagination,
+      view
     })
 
     if (pagination.enabled) {

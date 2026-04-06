@@ -7,9 +7,12 @@ import Sidebar from './Sidebar'
 import HeaderAccountPanel from '@/components/account/HeaderAccountPanel'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { isAbortError } from '@/lib/http'
 import { clearClientCache, getOrLoadClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { APP_COMPANY_CHANGED_EVENT, notifyAppCompanyChanged, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import {
+  loadShellBootstrap,
+  SHELL_ACTIVE_COMPANY_CACHE_KEY
+} from '@/lib/client-shell-data'
 
 interface DashboardLayoutProps {
   children: React.ReactNode
@@ -54,12 +57,7 @@ type SubscriptionBannerPayload = {
   } | null
 }
 
-const AUTH_CACHE_KEY = 'shell:auth-me'
-const COMPANIES_CACHE_KEY = 'shell:companies'
 const SUBSCRIPTION_CACHE_KEY = 'shell:subscription-current'
-const ACTIVE_COMPANY_CACHE_KEY = 'shell:active-company-id'
-const AUTH_CACHE_AGE_MS = 5 * 60_000
-const COMPANIES_CACHE_AGE_MS = 5 * 60_000
 const SUBSCRIPTION_CACHE_AGE_MS = 60_000
 const APP_SHELL_AUTH_LOADED_EVENT = 'app-shell-auth-loaded'
 
@@ -79,50 +77,18 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
 
   const loadShellContext = useCallback(async (force = false) => {
     try {
-      const [authPayload, companiesPayload, subscriptionPayload] = await Promise.all([
-        getOrLoadClientCache<AuthMePayload | null>(
-          AUTH_CACHE_KEY,
-          AUTH_CACHE_AGE_MS,
-          async () => {
-            const response = await fetch('/api/auth/me', { cache: 'no-store' })
-            if (response.status === 401) {
-              router.push('/login')
-              return null
-            }
-            if (!response.ok) {
-              throw new Error('Failed to load auth session')
-            }
-            return (await response.json().catch(() => null)) as AuthMePayload | null
-          },
-          {
-            persist: true,
-            force,
-            shouldCache: (data) => Boolean(data && (data.user || data.company))
+      const [shellBootstrap, subscriptionPayload] = await Promise.all([
+        loadShellBootstrap({
+          force,
+          onUnauthorized: () => {
+            router.push('/login')
           }
-        ).catch((error) => {
-          if (isAbortError(error)) {
-            return null
-          }
-          return null
-        }),
-        getOrLoadClientCache<CompanySummary[]>(
-          COMPANIES_CACHE_KEY,
-          COMPANIES_CACHE_AGE_MS,
-          async () => {
-            const response = await fetch('/api/companies', { cache: 'no-store' })
-            if (!response.ok) {
-              throw new Error('Failed to load companies')
-            }
-            const data = (await response.json().catch(() => [])) as CompanySummary[]
-            return Array.isArray(data) ? data : []
-          },
-          {
-            persist: true,
-            force,
-            shouldCache: (data) => Array.isArray(data)
-          }
-        ).catch(() => [])
-        ,
+        }).catch(() => ({
+          auth: null,
+          companies: [],
+          activeCompanyId: '',
+          permissions: null
+        })),
         getOrLoadClientCache<SubscriptionBannerPayload | null>(
           SUBSCRIPTION_CACHE_KEY,
           SUBSCRIPTION_CACHE_AGE_MS,
@@ -144,15 +110,8 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
         ).catch(() => null)
       ])
 
-      const normalizedCompanies = Array.isArray(companiesPayload)
-        ? companiesPayload
-            .map((row) => ({
-              id: String(row.id || '').trim(),
-              name: String(row.name || row.id || '').trim() || String(row.id || '').trim(),
-              locked: Boolean(row.locked)
-            }))
-            .filter((row) => row.id.length > 0)
-        : []
+      const authPayload = shellBootstrap.auth as AuthMePayload | null
+      const normalizedCompanies = shellBootstrap.companies
       setAvailableCompanies(normalizedCompanies)
 
       if (!authPayload) {
@@ -175,7 +134,12 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
         window.dispatchEvent(new Event(APP_SHELL_AUTH_LOADED_EVENT))
       }
 
-      const fallbackCompanyId = String(authPayload.company?.id || authPayload.user?.companyId || '').trim()
+      const fallbackCompanyId = String(
+        shellBootstrap.activeCompanyId ||
+        authPayload.company?.id ||
+        authPayload.user?.companyId ||
+        ''
+      ).trim()
       const targetCompanyId = companyId?.trim() || fallbackCompanyId
       if (!targetCompanyId) {
         setResolvedCompanyId('')
@@ -194,47 +158,26 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
 
       setResolvedCompanyId(targetCompanyId)
       setCurrentCompanyName(companyName)
-      setClientCache(ACTIVE_COMPANY_CACHE_KEY, targetCompanyId, { persist: true })
+      setClientCache(SHELL_ACTIVE_COMPANY_CACHE_KEY, targetCompanyId, { persist: true })
     } catch (error) {
-      if (isAbortError(error)) return
       void error
     }
   }, [companyId, router])
 
   useEffect(() => {
-    let cancelled = false
-    let lastRunAt = 0
-
     const run = (force = false) => {
-      if (cancelled) return
-      const now = Date.now()
-      if (!force && now - lastRunAt < 1_000) {
-        return
-      }
-      lastRunAt = now
       void loadShellContext(force)
     }
 
     run(false)
 
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        run(false)
-      }
-    }
-    const onFocus = () => run(false)
     const onSessionRefresh = () => run(true)
     const onCompanyChanged = () => run(true)
 
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    window.addEventListener('focus', onFocus)
     window.addEventListener('sessionRefreshed', onSessionRefresh)
     window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
 
     return () => {
-      cancelled = true
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-      window.removeEventListener('focus', onFocus)
       window.removeEventListener('sessionRefreshed', onSessionRefresh)
       window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
@@ -300,7 +243,7 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
 
       setResolvedCompanyId(nextCompanyId)
       setCurrentCompanyName(availableCompanies.find((company) => company.id === nextCompanyId)?.name || 'Selected company')
-      setClientCache(ACTIVE_COMPANY_CACHE_KEY, nextCompanyId, { persist: true })
+      setClientCache(SHELL_ACTIVE_COMPANY_CACHE_KEY, nextCompanyId, { persist: true })
       notifyAppCompanyChanged(nextCompanyId)
       const currentUrl = new URL(window.location.href)
       currentUrl.searchParams.set('companyId', nextCompanyId)

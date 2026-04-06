@@ -11,10 +11,16 @@ import { Building2, Lock, RefreshCw, Shield, Store, Unlock, Users } from 'lucide
 import { subscribeSuperAdminDataChanged } from '@/lib/super-admin-live-data'
 
 type SuperAdminOverviewClientProps = {
-  initialStats: {
-    traders: number
-    companies: number
-    users: number
+  initialOverview: {
+    stats: {
+      traders: number
+      companies: number
+      users: number
+    }
+    traders: TraderRow[]
+    companies: CompanyRow[]
+    users: UserRow[]
+    permissionPreview: PermissionPreview | null
   }
 }
 
@@ -50,8 +56,12 @@ type PermissionRow = {
 }
 
 type PermissionPreview = {
+  companyId?: string
+  companyOptions?: Array<{ id: string; name: string; locked: boolean; isPrimary: boolean }>
   permissions: PermissionRow[]
 }
+
+type OverviewSection = 'stats' | 'traders' | 'companies' | 'users' | 'permissionPreview'
 
 type Point = {
   x: number
@@ -65,11 +75,12 @@ function buildConnectorPath(from: Point, to: Point): string {
   return `M ${from.x} ${from.y} C ${controlX1} ${from.y}, ${controlX2} ${to.y}, ${to.x} ${to.y}`
 }
 
-export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOverviewClientProps) {
-  const [traders, setTraders] = useState<TraderRow[]>([])
-  const [companies, setCompanies] = useState<CompanyRow[]>([])
-  const [users, setUsers] = useState<UserRow[]>([])
-  const [permissionPreview, setPermissionPreview] = useState<PermissionPreview | null>(null)
+export default function SuperAdminOverviewClient({ initialOverview }: SuperAdminOverviewClientProps) {
+  const [summaryStats, setSummaryStats] = useState(initialOverview.stats)
+  const [traders, setTraders] = useState<TraderRow[]>(initialOverview.traders || [])
+  const [companies, setCompanies] = useState<CompanyRow[]>(initialOverview.companies || [])
+  const [users, setUsers] = useState<UserRow[]>(initialOverview.users || [])
+  const [permissionPreview, setPermissionPreview] = useState<PermissionPreview | null>(initialOverview.permissionPreview || null)
 
   const [selectedTraderId, setSelectedTraderId] = useState<string | null>(null)
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
@@ -86,10 +97,8 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const companiesRequestRef = useRef(0)
-  const usersRequestRef = useRef(0)
-  const permissionsRequestRef = useRef(0)
   const graphContainerRef = useRef<HTMLDivElement | null>(null)
+  const scopedRefreshTimerRef = useRef<number | null>(null)
   const traderListRef = useRef<HTMLDivElement | null>(null)
   const companyListRef = useRef<HTMLDivElement | null>(null)
   const userListRef = useRef<HTMLDivElement | null>(null)
@@ -113,9 +122,9 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     () => users.find((row) => row.id === selectedUserId) || null,
     [users, selectedUserId]
   )
-  const traderSummaryCount = traders.length > 0 ? traders.length : initialStats.traders
-  const companySummaryCount = selectedTrader ? companies.length : initialStats.companies
-  const userSummaryCount = selectedCompany ? users.length : initialStats.users
+  const traderSummaryCount = traders.length > 0 ? traders.length : summaryStats.traders
+  const companySummaryCount = selectedTrader ? companies.length : summaryStats.companies
+  const userSummaryCount = selectedCompany ? users.length : summaryStats.users
 
   const filteredTraders = useMemo(() => {
     const query = traderQuery.trim().toLowerCase()
@@ -210,105 +219,134 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     setGraphPoints(nextPoints)
   }, [selectedTraderId, selectedCompanyId, selectedUserId])
 
-  const fetchTraders = useCallback(async () => {
-    setLoadingTraders(true)
+  const fetchOverview = useCallback(async (
+    selection?: {
+      traderId?: string | null
+      companyId?: string | null
+      userId?: string | null
+    },
+    options?: { silent?: boolean; sections?: OverviewSection[] }
+  ) => {
+    const nextTraderId = selection?.traderId?.trim() || ''
+    const nextCompanyId = selection?.companyId?.trim() || ''
+    const nextUserId = selection?.userId?.trim() || ''
+    const requestedSections = options?.sections?.length
+      ? options.sections
+      : (['stats', 'traders', 'companies', 'users', 'permissionPreview'] as OverviewSection[])
+
     setError(null)
+    setLoadingTraders(!options?.silent && requestedSections.includes('traders'))
+    setLoadingCompanies(requestedSections.includes('companies') && Boolean(nextTraderId))
+    setLoadingUsers(requestedSections.includes('users') && Boolean(nextCompanyId))
+    setLoadingPermissions(requestedSections.includes('permissionPreview') && Boolean(nextUserId))
+
     try {
-      const response = await fetch('/api/super-admin/traders', { cache: 'no-store' })
+      const params = new URLSearchParams()
+      if (nextTraderId) params.set('traderId', nextTraderId)
+      if (nextCompanyId) params.set('companyId', nextCompanyId)
+      if (nextUserId) params.set('userId', nextUserId)
+      if (requestedSections.length > 0) {
+        params.set('sections', requestedSections.join(','))
+      }
+
+      const response = await fetch(
+        `/api/super-admin/overview${params.toString() ? `?${params.toString()}` : ''}`,
+        { cache: 'no-store' }
+      )
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) {
-        throw new Error(payload.error || 'Failed to load traders')
+        throw new Error(String(payload?.error || 'Failed to load super admin overview'))
       }
-      setTraders(Array.isArray(payload) ? payload : [])
+
+      if ('stats' in payload) {
+        setSummaryStats((previous) =>
+          payload.stats && typeof payload.stats === 'object'
+          ? {
+              traders: Number(payload.stats.traders || 0),
+              companies: Number(payload.stats.companies || 0),
+              users: Number(payload.stats.users || 0)
+            }
+          : previous
+        )
+      }
+      if ('traders' in payload) {
+        setTraders(Array.isArray(payload.traders) ? payload.traders : [])
+      }
+      if ('companies' in payload) {
+        setCompanies(Array.isArray(payload.companies) ? payload.companies : [])
+      }
+      if ('users' in payload) {
+        setUsers(Array.isArray(payload.users) ? payload.users : [])
+      }
+      if ('permissionPreview' in payload) {
+        setPermissionPreview(
+          payload.permissionPreview && Array.isArray(payload.permissionPreview.permissions)
+          ? {
+              companyId: payload.permissionPreview.companyId,
+              companyOptions: Array.isArray(payload.permissionPreview.companyOptions)
+                ? payload.permissionPreview.companyOptions
+                : [],
+              permissions: payload.permissionPreview.permissions
+            }
+          : null
+        )
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load traders')
+      setError(err instanceof Error ? err.message : 'Failed to load super admin overview')
     } finally {
       setLoadingTraders(false)
+      setLoadingCompanies(false)
+      setLoadingUsers(false)
+      setLoadingPermissions(false)
     }
   }, [])
 
-  const fetchCompanies = useCallback(async (traderId: string) => {
-    const requestId = ++companiesRequestRef.current
-    setLoadingCompanies(true)
-    try {
-      const response = await fetch(`/api/super-admin/companies?traderId=${encodeURIComponent(traderId)}`, {
-        cache: 'no-store'
-      })
-      const payload = await response.json().catch(() => ({}))
-      if (requestId !== companiesRequestRef.current) return
-      if (!response.ok) {
-        throw new Error(payload.error || 'Failed to load companies')
-      }
-      setCompanies(Array.isArray(payload) ? payload : [])
-    } catch (err) {
-      if (requestId !== companiesRequestRef.current) return
-      setError(err instanceof Error ? err.message : 'Failed to load companies')
-    } finally {
-      if (requestId === companiesRequestRef.current) {
-        setLoadingCompanies(false)
-      }
-    }
+  const setTraderLockState = useCallback((traderId: string, locked: boolean) => {
+    setTraders((previous) =>
+      previous.map((row) => (row.id === traderId ? { ...row, locked } : row))
+    )
   }, [])
 
-  const fetchUsers = useCallback(async (companyId: string, traderId?: string | null) => {
-    const requestId = ++usersRequestRef.current
-    setLoadingUsers(true)
-    try {
-      const searchParams = new URLSearchParams({
-        companyId
-      })
-      if (traderId?.trim()) {
-        searchParams.set('traderId', traderId)
-      }
-      const response = await fetch(`/api/super-admin/users?${searchParams.toString()}`, {
-        cache: 'no-store'
-      })
-      const payload = await response.json().catch(() => ({}))
-      if (requestId !== usersRequestRef.current) return
-      if (!response.ok) {
-        throw new Error(payload.error || 'Failed to load users')
-      }
-      setUsers(Array.isArray(payload) ? payload : [])
-    } catch (err) {
-      if (requestId !== usersRequestRef.current) return
-      setError(err instanceof Error ? err.message : 'Failed to load users')
-    } finally {
-      if (requestId === usersRequestRef.current) {
-        setLoadingUsers(false)
-      }
-    }
+  const setCompanyLockState = useCallback((companyId: string, locked: boolean) => {
+    setCompanies((previous) =>
+      previous.map((row) => (row.id === companyId ? { ...row, locked } : row))
+    )
+    setPermissionPreview((previous) =>
+      previous
+        ? {
+            ...previous,
+            companyOptions: Array.isArray(previous.companyOptions)
+              ? previous.companyOptions.map((row) => (row.id === companyId ? { ...row, locked } : row))
+              : previous.companyOptions
+          }
+        : previous
+    )
   }, [])
 
-  const fetchPermissionPreview = useCallback(async (userId: string, companyId?: string | null) => {
-    const requestId = ++permissionsRequestRef.current
-    setLoadingPermissions(true)
-    try {
-      const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''
-      const response = await fetch(`/api/super-admin/users/${userId}/permissions${qs}`, {
-        cache: 'no-store'
-      })
-      const payload = await response.json().catch(() => ({}))
-      if (requestId !== permissionsRequestRef.current) return
-      if (!response.ok) {
-        throw new Error(payload.error || 'Failed to load permission preview')
-      }
-      setPermissionPreview({
-        permissions: Array.isArray(payload.permissions) ? payload.permissions : []
-      })
-    } catch (err) {
-      if (requestId !== permissionsRequestRef.current) return
-      setError(err instanceof Error ? err.message : 'Failed to load permission preview')
-    } finally {
-      if (requestId === permissionsRequestRef.current) {
-        setLoadingPermissions(false)
-      }
-    }
+  const setUserLockState = useCallback((userId: string, locked: boolean) => {
+    setUsers((previous) =>
+      previous.map((row) => (row.id === userId ? { ...row, locked } : row))
+    )
   }, [])
 
-  useEffect(() => {
-    void fetchTraders()
-    return () => undefined
-  }, [fetchTraders])
+  const buildRefreshSections = useCallback((mode: 'full' | 'scoped' = 'full'): OverviewSection[] => {
+    if (mode === 'full') {
+      return [
+        'stats',
+        'traders',
+        ...(selectedTraderId ? (['companies'] as OverviewSection[]) : []),
+        ...(selectedCompanyId ? (['users'] as OverviewSection[]) : []),
+        ...(selectedUserId ? (['permissionPreview'] as OverviewSection[]) : [])
+      ]
+    }
+
+    return [
+      'stats',
+      ...(selectedTraderId ? (['companies'] as OverviewSection[]) : (['traders'] as OverviewSection[])),
+      ...(selectedCompanyId ? (['users'] as OverviewSection[]) : []),
+      ...(selectedUserId ? (['permissionPreview'] as OverviewSection[]) : [])
+    ]
+  }, [selectedCompanyId, selectedTraderId, selectedUserId])
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => recalculateGraphPoints())
@@ -379,7 +417,7 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     setCompanies([])
     setUsers([])
     setPermissionPreview(null)
-    await fetchCompanies(traderId)
+    await fetchOverview({ traderId }, { sections: ['companies'] })
   }
 
   const handleSelectCompany = async (companyId: string) => {
@@ -387,13 +425,16 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     setSelectedUserId(null)
     setUsers([])
     setPermissionPreview(null)
-    await fetchUsers(companyId, selectedTraderId)
+    await fetchOverview({ traderId: selectedTraderId, companyId }, { sections: ['users'] })
   }
 
   const handleSelectUser = async (userId: string) => {
     setSelectedUserId(userId)
     setPermissionPreview(null)
-    await fetchPermissionPreview(userId, selectedCompanyId)
+    await fetchOverview(
+      { traderId: selectedTraderId, companyId: selectedCompanyId, userId },
+      { sections: ['permissionPreview'] }
+    )
   }
 
   const toggleTraderLock = async (row: TraderRow) => {
@@ -407,10 +448,7 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
       setError(payload.error || 'Failed to update trader lock')
       return
     }
-    await fetchTraders()
-    if (selectedTraderId === row.id) {
-      await fetchCompanies(row.id)
-    }
+    setTraderLockState(row.id, !row.locked)
   }
 
   const toggleCompanyLock = async (row: CompanyRow) => {
@@ -424,12 +462,7 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
       setError(payload.error || 'Failed to update company lock')
       return
     }
-    if (selectedTraderId) {
-      await fetchCompanies(selectedTraderId)
-    }
-    if (selectedCompanyId === row.id) {
-      await fetchUsers(row.id, selectedTraderId)
-    }
+    setCompanyLockState(row.id, !row.locked)
   }
 
   const toggleUserLock = async (row: UserRow) => {
@@ -443,52 +476,60 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
       setError(payload.error || 'Failed to update user lock')
       return
     }
-    if (selectedCompanyId) {
-      await fetchUsers(selectedCompanyId, selectedTraderId)
-    }
-    if (selectedUserId === row.id) {
-      await fetchPermissionPreview(row.id, selectedCompanyId)
-    }
+    setUserLockState(row.id, !row.locked)
   }
 
-  const refreshAll = useCallback(async (options?: { silent?: boolean }) => {
+  const refreshAll = useCallback(async (options?: { silent?: boolean; mode?: 'full' | 'scoped' }) => {
     if (!options?.silent) {
       setRefreshing(true)
     }
 
     try {
-      await fetchTraders()
-      if (selectedTraderId) {
-        await fetchCompanies(selectedTraderId)
-      }
-      if (selectedCompanyId) {
-        await fetchUsers(selectedCompanyId, selectedTraderId)
-      }
-      if (selectedUserId && selectedCompanyId) {
-        await fetchPermissionPreview(selectedUserId, selectedCompanyId)
-      }
+      await fetchOverview(
+        {
+          traderId: selectedTraderId,
+          companyId: selectedCompanyId,
+          userId: selectedUserId
+        },
+        {
+          ...options,
+          sections: buildRefreshSections(options?.mode || 'full')
+        }
+      )
     } finally {
       if (!options?.silent) {
         setRefreshing(false)
       }
     }
-  }, [fetchCompanies, fetchPermissionPreview, fetchTraders, fetchUsers, selectedCompanyId, selectedTraderId, selectedUserId])
+  }, [buildRefreshSections, fetchOverview, selectedCompanyId, selectedTraderId, selectedUserId])
+
+  useEffect(() => {
+    return () => {
+      if (scopedRefreshTimerRef.current !== null) {
+        window.clearTimeout(scopedRefreshTimerRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const unsubscribe = subscribeSuperAdminDataChanged(() => {
-      void refreshAll({ silent: true })
+      if (scopedRefreshTimerRef.current !== null) {
+        window.clearTimeout(scopedRefreshTimerRef.current)
+      }
+
+      scopedRefreshTimerRef.current = window.setTimeout(() => {
+        scopedRefreshTimerRef.current = null
+        void refreshAll({ silent: true, mode: 'scoped' })
+      }, 180)
     })
 
-    return unsubscribe
-  }, [refreshAll])
-
-  useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return
-      void refreshAll({ silent: true })
-    }, 30000)
-
-    return () => window.clearInterval(intervalId)
+    return () => {
+      if (scopedRefreshTimerRef.current !== null) {
+        window.clearTimeout(scopedRefreshTimerRef.current)
+        scopedRefreshTimerRef.current = null
+      }
+      unsubscribe()
+    }
   }, [refreshAll])
 
   return (
@@ -511,7 +552,7 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
                   </p>
                 </div>
               </div>
-              <Button variant="outline" onClick={() => refreshAll()} disabled={refreshing}>
+              <Button variant="outline" onClick={() => refreshAll({ mode: 'full' })} disabled={refreshing}>
                 {refreshing ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                 Refresh
               </Button>

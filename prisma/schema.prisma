@@ -225,6 +225,8 @@ model User {
   @@unique([traderId, userId])
   @@index([companyId], map: "idx_users_company_id")
   @@index([deletedAt], map: "idx_users_deleted_at")
+  @@index([traderId, deletedAt], map: "idx_users_trader_deleted")
+  @@index([traderId, companyId, deletedAt], map: "idx_users_trader_company_deleted")
 }
 
 model Company {
@@ -256,6 +258,7 @@ model Company {
   ledgerEntries        LedgerEntry[]
   markas               Marka[]
   paymentModes         PaymentMode[]
+  salesAdditionalCharges SalesAdditionalCharge[]
   userPermissions      UserPermission[]
   locked               Boolean               @default(false)
   deletedAt            DateTime?
@@ -265,6 +268,7 @@ model Company {
   @@index([traderId], map: "idx_companies_trader_id")
   @@index([name], map: "idx_companies_name")
   @@index([deletedAt], map: "idx_companies_deleted_at")
+  @@index([traderId, deletedAt, createdAt], map: "idx_companies_trader_deleted_created")
 }
 
 model UserPermission {
@@ -282,6 +286,7 @@ model UserPermission {
   @@unique([userId, companyId, module], map: "uniq_user_company_module_permission")
   @@index([companyId, module], map: "idx_permissions_company_module")
   @@index([userId], map: "idx_permissions_user_id")
+  @@index([userId, companyId], map: "idx_permissions_user_company")
 }
 
 model Party {
@@ -308,6 +313,9 @@ model Party {
   ledgerEntries      LedgerEntry[]
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
+
+  @@index([companyId, name], map: "idx_parties_company_name")
+  @@index([companyId, openingBalance], map: "idx_parties_company_opening_balance")
 }
 
 model Farmer {
@@ -329,6 +337,8 @@ model Farmer {
   ledgerEntries         LedgerEntry[]
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
+
+  @@index([companyId, name], map: "idx_farmers_company_name")
 }
 
 model Supplier {
@@ -347,6 +357,8 @@ model Supplier {
   specialPurchaseBills SpecialPurchaseBill[]
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
+
+  @@index([companyId, name], map: "idx_suppliers_company_name")
 }
 
 model Unit {
@@ -417,6 +429,7 @@ model PurchaseBill {
   purchaseItems              PurchaseItem[]
 
   @@index([companyId, billDate], map: "idx_purchase_bills_company_date")
+  @@index([companyId, status, billDate, createdAt], map: "idx_purchase_bills_company_status_date_created")
 }
 
 model PurchaseItem {
@@ -441,6 +454,8 @@ model PurchaseItem {
   totalWeightQt       Float?
   createdAt           DateTime     @default(now())
   updatedAt           DateTime     @updatedAt
+
+  @@index([purchaseBillId], map: "idx_purchase_items_bill_id")
 }
 
 model SpecialPurchaseBill {
@@ -462,6 +477,9 @@ model SpecialPurchaseBill {
   updatedAt            DateTime              @updatedAt
   // relations
   specialPurchaseItems SpecialPurchaseItem[]
+
+  @@index([companyId, billDate], map: "idx_special_purchase_bills_company_date")
+  @@index([companyId, status, billDate, createdAt], map: "idx_special_purchase_bills_company_status_date_created")
 }
 
 model SpecialPurchaseItem {
@@ -503,8 +521,11 @@ model SalesBill {
   // relations
   salesItems     SalesItem[]
   transportBills TransportBill[]
+  additionalCharges SalesAdditionalCharge[]
 
   @@index([companyId, billDate], map: "idx_sales_bills_company_date")
+  @@index([companyId, status, billDate, createdAt], map: "idx_sales_bills_company_status_date_created")
+  @@index([companyId, partyId, billDate], map: "idx_sales_bills_company_party_date")
 }
 
 model SalesItem {
@@ -523,6 +544,8 @@ model SalesItem {
   amount          Float
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+
+  @@index([salesBillId], map: "idx_sales_items_bill_id")
 }
 
 model SalesItemMaster {
@@ -561,6 +584,7 @@ model StockLedger {
   @@index([companyId, entryDate], map: "idx_stock_ledger_company_date")
   @@index([companyId, productId, entryDate], map: "idx_stock_ledger_company_product_date")
   @@index([productId, entryDate], map: "idx_stock_ledger_product_date")
+  @@index([companyId, type, entryDate], map: "idx_stock_ledger_company_type_date")
 }
 
 model Payment {
@@ -596,6 +620,10 @@ model Payment {
   @@index([billType, billId], map: "idx_payments_bill_type")
   @@index([companyId, payDate], map: "idx_payments_company_date")
   @@index([deletedAt], map: "idx_payments_deleted_at")
+  @@index([companyId, deletedAt, payDate, createdAt], map: "idx_payments_company_deleted_date_created")
+  @@index([companyId, billType, billId, deletedAt], map: "idx_payments_company_bill_deleted")
+  @@index([companyId, partyId, billType, deletedAt, payDate], map: "idx_payments_company_party_type_date")
+  @@index([companyId, farmerId, billType, deletedAt, payDate], map: "idx_payments_company_farmer_type_date")
 }
 
 model AuditLog {
@@ -827,6 +855,29 @@ model TransportBill {
   toPay           Float?    @default(0)
   otherAmount     Float?    @default(0)
   insuranceAmount Float?    @default(0)
+  additionalCharges SalesAdditionalCharge[]
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+
+  @@index([salesBillId], map: "idx_transport_bills_sales_bill")
+}
+
+model SalesAdditionalCharge {
+  id              String         @id
+  companyId       String
+  company         Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  salesBillId     String
+  salesBill       SalesBill      @relation(fields: [salesBillId], references: [id], onDelete: Cascade)
+  transportBillId String?
+  transportBill   TransportBill? @relation(fields: [transportBillId], references: [id], onDelete: SetNull)
+  chargeType      String
+  amount          Float          @default(0)
+  remark          String?
+  sortOrder       Int            @default(0)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([companyId, salesBillId], map: "idx_sales_additional_charges_company_bill")
+  @@index([transportBillId], map: "idx_sales_additional_charges_transport")
+  @@index([salesBillId, sortOrder], map: "idx_sales_additional_charges_sort")
 }

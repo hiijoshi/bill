@@ -31,6 +31,7 @@ import {
   SELF_TRANSFER_PAYMENT_TYPE
 } from '@/lib/payment-entry-types'
 import { DEFAULT_PAYMENT_MODES, type PaymentModeOption } from '@/lib/payment-mode-utils'
+import { loadClientPaymentWorkspace } from '@/lib/client-payment-workspace'
 
 interface PurchaseBill {
   id: string
@@ -261,7 +262,7 @@ export default function PaymentDashboardPage() {
     ]
   }, [paymentDraft.mode, paymentModeOptions])
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (force = false) => {
     try {
       const companyIdParam = await resolveCompanyId(window.location.search)
 
@@ -287,41 +288,18 @@ export default function PaymentDashboardPage() {
         setLoading(false)
       }
 
-      const [purchaseBillsResponse, salesBillsResponse, paymentsResponse, paymentModesResponse] = await Promise.all([
-        fetch(`/api/purchase-bills?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' }),
-        fetch(`/api/sales-bills?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' }),
-        fetch(`/api/payments?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' }),
-        fetch(`/api/payment-modes?companyId=${encodeURIComponent(companyIdParam)}`, { cache: 'no-store' })
-      ])
-
-      if (
-        purchaseBillsResponse.status === 401 ||
-        salesBillsResponse.status === 401 ||
-        paymentsResponse.status === 401 ||
-        paymentModesResponse.status === 401
-      ) {
-        setLoading(false)
-        router.push('/login')
-        return
-      }
-      if (paymentsResponse.status === 403) {
-        setPayments([])
-        setLoading(false)
-        return
-      }
-
-      const [purchaseBillsPayload, salesBillsPayload, paymentsPayload, paymentModesPayload] = await Promise.all([
-        purchaseBillsResponse.ok
-          ? purchaseBillsResponse.json().catch(() => ([] as BillApiPayload<PurchaseBill>))
-          : Promise.resolve([] as BillApiPayload<PurchaseBill>),
-        salesBillsResponse.ok
-          ? salesBillsResponse.json().catch(() => ([] as BillApiPayload<SalesBill>))
-          : Promise.resolve([] as BillApiPayload<SalesBill>),
-        paymentsResponse.json().catch(() => ([] as PaymentsApiPayload)),
-        paymentModesResponse.ok
-          ? paymentModesResponse.json().catch(() => ([] as PaymentModeRecord[]))
-          : Promise.resolve([] as PaymentModeRecord[])
-      ])
+      const workspace = await loadClientPaymentWorkspace(companyIdParam, {
+        includePaymentModes: true,
+        force
+      })
+      const purchaseBillsPayload =
+        ((workspace as { purchaseBills?: BillApiPayload<PurchaseBill> }).purchaseBills || []) as BillApiPayload<PurchaseBill>
+      const salesBillsPayload =
+        ((workspace as { salesBills?: BillApiPayload<SalesBill> }).salesBills || []) as BillApiPayload<SalesBill>
+      const paymentsPayload =
+        ((workspace as { payments?: PaymentsApiPayload }).payments || []) as PaymentsApiPayload
+      const paymentModesPayload =
+        ((workspace as { paymentModes?: PaymentModeRecord[] }).paymentModes || []) as PaymentModeRecord[]
       const nextPurchaseBills: PurchaseBill[] = normalizeBillCollection<PurchaseBill>(purchaseBillsPayload)
         .map((bill) => ({
             ...bill,
@@ -376,6 +354,12 @@ export default function PaymentDashboardPage() {
       setLoading(false)
     } catch (error) {
       if (isAbortError(error)) return
+      const status = typeof error === 'object' && error && 'status' in error ? Number((error as { status?: number }).status || 0) : 0
+      if (status === 401) {
+        setLoading(false)
+        router.push('/login')
+        return
+      }
       console.error('Error fetching data:', error)
       setPurchaseBills([])
       setSalesBills([])
@@ -389,7 +373,7 @@ export default function PaymentDashboardPage() {
     let cancelled = false
     ;(async () => {
       if (cancelled) return
-      await fetchData()
+      await fetchData(true)
     })()
     return () => {
       cancelled = true
@@ -399,12 +383,12 @@ export default function PaymentDashboardPage() {
   useEffect(() => {
     const unsubscribe = subscribeAppDataChanged((detail) => {
       if (matchesAppDataChange(detail, companyId, ['purchase-bills', 'sales-bills', 'payments', 'payment-modes'])) {
-        void fetchData()
+        void fetchData(true)
       }
     })
 
     const onCompanyChanged = () => {
-      void fetchData()
+      void fetchData(true)
     }
 
     window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)

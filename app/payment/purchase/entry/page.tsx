@@ -349,7 +349,7 @@ function PurchasePaymentEntryPageContent() {
         const rows = await loadClientCachedValue<PurchaseBill[]>(
           `payment-purchase-bills:${targetCompanyId}:${filterKey}`,
           async () => {
-            let url = `/api/purchase-bills?companyId=${targetCompanyId}`
+            let url = `/api/purchase-bills?companyId=${targetCompanyId}&view=payment`
 
             const params = new URLSearchParams()
             if (dateFrom) params.append('dateFrom', dateFrom)

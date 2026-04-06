@@ -423,7 +423,7 @@ function SalesPaymentEntryPageContent() {
         `payment-sales-bills:${targetCompanyId}`,
         async () => {
           const [salesResponse, partiesResponse] = await Promise.all([
-            fetch(`/api/sales-bills?companyId=${targetCompanyId}`),
+            fetch(`/api/sales-bills?companyId=${targetCompanyId}&view=payment`),
             fetch(`/api/parties?companyId=${targetCompanyId}`)
           ])
 

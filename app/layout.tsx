@@ -6,10 +6,6 @@ import { SessionProvider } from "@/components/SessionProvider";
 import { useEffect, useState } from "react";
 import { isAbortError } from "@/lib/http";
 import { getSessionCookieNameCandidates } from "@/lib/session-cookies";
-import { getClientCache } from "@/lib/client-fetch-cache";
-import { broadcastAppDataChanged, invalidateAppDataCaches } from "@/lib/app-live-data";
-import { notifyAppCompanyChanged } from "@/lib/company-context";
-import { dispatchSuperAdminDataChanged } from "@/lib/super-admin-live-data";
 
 function NetworkStatusBanner() {
   const [isOnline, setIsOnline] = useState(true)
@@ -36,15 +32,6 @@ function NetworkStatusBanner() {
       Offline mode detected. Cloud data cannot sync until your internet connection returns.
     </div>
   )
-}
-
-const ACTIVE_COMPANY_CACHE_KEY = 'shell:active-company-id'
-const ACTIVE_COMPANY_CACHE_AGE_MS = 5 * 60_000
-const LIVE_UPDATE_POLL_MS = 3_000
-const businessAppPathPrefixes = ['/main', '/master', '/purchase', '/sales', '/stock', '/payment', '/reports', '/company']
-
-function isBusinessAppPath(pathname: string): boolean {
-  return businessAppPathPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
 }
 
 export default function RootLayout({
@@ -323,175 +310,6 @@ export default function RootLayout({
       window.removeEventListener('error', abortErrorHandler)
     };
   }, []);
-
-  useEffect(() => {
-    let cancelled = false
-    let lastSessionUpdatedAt = 0
-    let sessionStampInitialized = false
-    let lastSuperAdminUpdatedAt = 0
-    let superAdminStampInitialized = false
-    const lastCompanyUpdatedAt = new Map<string, number>()
-
-    const refreshSession = async (namespace: 'app' | 'super_admin', companyId?: string) => {
-      const response = await window.fetch(namespace === 'super_admin' ? '/api/super-admin/refresh' : '/api/auth/refresh', {
-        method: 'POST',
-        cache: 'no-store'
-      }).catch(() => null)
-
-      if (cancelled || !response) {
-        return false
-      }
-
-      if (response.status === 401 || response.status === 403) {
-        window.location.href = namespace === 'super_admin' ? '/super-admin/login' : '/login'
-        return false
-      }
-
-      if (!response.ok) {
-        return false
-      }
-
-      window.dispatchEvent(new Event('sessionRefreshed'))
-      if (namespace === 'app' && companyId) {
-        notifyAppCompanyChanged(companyId)
-      }
-
-      return true
-    }
-
-    const pollLiveUpdates = async () => {
-      if (cancelled) return
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
-      if (typeof navigator !== 'undefined' && navigator.onLine === false) return
-
-      const pathname = window.location.pathname
-      if (pathname === '/login' || pathname === '/super-admin/login') {
-        return
-      }
-
-      if (pathname.startsWith('/super-admin')) {
-        const response = await window.fetch('/api/super-admin/live-updates', { cache: 'no-store' }).catch(() => null)
-        if (cancelled || !response) return
-
-        if (response.status === 401 || response.status === 403) {
-          window.location.href = '/super-admin/login'
-          return
-        }
-
-        if (!response.ok) return
-
-        const payload = await response.json().catch(() => ({} as { sessionUpdatedAt?: number; superAdminUpdatedAt?: number }))
-        const sessionUpdatedAt = Number(payload.sessionUpdatedAt || 0)
-        if (!sessionStampInitialized) {
-          lastSessionUpdatedAt = sessionUpdatedAt
-          sessionStampInitialized = true
-        } else if (sessionUpdatedAt > lastSessionUpdatedAt) {
-          lastSessionUpdatedAt = sessionUpdatedAt
-          await refreshSession('super_admin')
-        }
-
-        const superAdminUpdatedAt = Number(payload.superAdminUpdatedAt || 0)
-        if (!superAdminStampInitialized) {
-          lastSuperAdminUpdatedAt = superAdminUpdatedAt
-          superAdminStampInitialized = true
-        } else if (superAdminUpdatedAt > lastSuperAdminUpdatedAt) {
-          lastSuperAdminUpdatedAt = superAdminUpdatedAt
-          dispatchSuperAdminDataChanged({ updatedAt: superAdminUpdatedAt })
-        }
-
-        return
-      }
-
-      if (!isBusinessAppPath(pathname)) {
-        return
-      }
-
-      const activeCompanyId = getClientCache<string>(ACTIVE_COMPANY_CACHE_KEY, ACTIVE_COMPANY_CACHE_AGE_MS) || ''
-      if (!activeCompanyId) {
-        return
-      }
-
-      const response = await window.fetch(`/api/live-updates?companyIds=${encodeURIComponent(activeCompanyId)}`, {
-        cache: 'no-store'
-      }).catch(() => null)
-      if (cancelled || !response) return
-
-      if (response.status === 401 || response.status === 403) {
-        window.location.href = '/login'
-        return
-      }
-
-      if (!response.ok) return
-
-      const payload = await response.json().catch(
-        () =>
-          ({} as {
-            allowedCompanyIds?: string[]
-            companyUpdates?: Record<string, number>
-            sessionUpdatedAt?: number
-          })
-      )
-
-      const allowedCompanyIds = Array.isArray(payload.allowedCompanyIds)
-        ? payload.allowedCompanyIds.map((companyId: string) => String(companyId || '').trim()).filter(Boolean)
-        : []
-      const sessionUpdatedAt = Number(payload.sessionUpdatedAt || 0)
-      if (!sessionStampInitialized) {
-        lastSessionUpdatedAt = sessionUpdatedAt
-        sessionStampInitialized = true
-      } else if (sessionUpdatedAt > lastSessionUpdatedAt) {
-        lastSessionUpdatedAt = sessionUpdatedAt
-        await refreshSession('app', allowedCompanyIds.includes(activeCompanyId) ? activeCompanyId : undefined)
-      }
-      if (!allowedCompanyIds.includes(activeCompanyId)) {
-        await refreshSession('app')
-        return
-      }
-
-      const companyUpdatedAt = Number(payload.companyUpdates?.[activeCompanyId] || 0)
-      const previousCompanyUpdatedAt = lastCompanyUpdatedAt.get(activeCompanyId)
-      if (previousCompanyUpdatedAt === undefined) {
-        lastCompanyUpdatedAt.set(activeCompanyId, companyUpdatedAt)
-        return
-      }
-
-      if (companyUpdatedAt > previousCompanyUpdatedAt) {
-        lastCompanyUpdatedAt.set(activeCompanyId, companyUpdatedAt)
-        invalidateAppDataCaches(activeCompanyId, ['all'])
-        broadcastAppDataChanged({
-          companyId: activeCompanyId,
-          scopes: ['all'],
-          updatedAt: companyUpdatedAt
-        })
-        notifyAppCompanyChanged(activeCompanyId)
-      }
-    }
-
-    void pollLiveUpdates()
-
-    const intervalId = window.setInterval(() => {
-      void pollLiveUpdates()
-    }, LIVE_UPDATE_POLL_MS)
-
-    const onFocus = () => {
-      void pollLiveUpdates()
-    }
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        void pollLiveUpdates()
-      }
-    }
-
-    window.addEventListener('focus', onFocus)
-    document.addEventListener('visibilitychange', onVisibilityChange)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(intervalId)
-      window.removeEventListener('focus', onFocus)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-    }
-  }, [])
 
   return (
     <html lang="en">

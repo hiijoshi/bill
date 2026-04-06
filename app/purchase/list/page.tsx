@@ -261,7 +261,7 @@ export default function PurchaseListPage() {
 
       // Fetch both regular and special purchase bills
       const [regularResponse, specialResponse] = await Promise.all([
-        fetch(`/api/purchase-bills?companyId=${companyIdParam}&includeCancelled=true`),
+        fetch(`/api/purchase-bills?companyId=${companyIdParam}&includeCancelled=true&view=list`),
         fetch(`/api/special-purchase-bills?companyId=${companyIdParam}&includeCancelled=true`)
       ])
       if (isCancelled()) return

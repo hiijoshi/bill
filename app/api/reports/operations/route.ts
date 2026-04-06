@@ -11,12 +11,10 @@ import { getCompanySubscriptionAccess, getSubscriptionAccessMessage, isModuleEna
 import { createBankEntryProvider, SUPPORTED_BANK_SYNC_PROVIDERS } from '@/lib/bank-integration'
 import { normalizeNonNegative, roundCurrency } from '@/lib/billing-calculations'
 import {
-  getPartyOpeningBalanceReference,
   getSignedPartyOpeningBalance,
   isPartyOpeningBalanceReference,
   normalizePartyOpeningBalanceType
 } from '@/lib/party-opening-balance'
-import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-schema'
 import { JOURNAL_VOUCHER_BILL_TYPE } from '@/lib/journal-vouchers'
 import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
 import {
@@ -124,6 +122,24 @@ function normalizeReportView(value: string | null): OperationsReportView {
 }
 
 const OPERATIONS_REPORT_CACHE_TTL_MS = 20_000
+
+async function loadBankSyncProviderStatuses(companyId: string) {
+  const normalizedCompanyId = String(companyId || '').trim()
+  if (!normalizedCompanyId) {
+    return []
+  }
+
+  return getOrSetServerCache(
+    makeServerCacheKey('operations-report:bank-sync-providers', [normalizedCompanyId]),
+    OPERATIONS_REPORT_CACHE_TTL_MS,
+    () =>
+      Promise.all(
+        SUPPORTED_BANK_SYNC_PROVIDERS.map((provider) =>
+          createBankEntryProvider(provider).getStatus({ companyId: normalizedCompanyId })
+        )
+      )
+  )
+}
 
 function parseDateAtBoundary(value: string | null, endOfDay = false): Date | null {
   if (!value) return null
@@ -433,8 +449,6 @@ export async function GET(request: NextRequest) {
   if (!authResult.ok) return authResult.response
 
   try {
-    await ensurePartyOpeningBalanceSchema(prisma)
-
     const { searchParams } = new URL(request.url)
     const requestedCompanyIds = Array.from(
       new Set(
@@ -467,55 +481,18 @@ export async function GET(request: NextRequest) {
       request.method
     )
 
-    const companyDetails = await prisma.company.findMany({
-      where: {
-        id: { in: permittedCompanyIds },
-        deletedAt: null
-      },
-      select: {
-        id: true,
-        name: true,
-        address: true,
-        phone: true
-      }
-    })
-
-    const companyDetailMap = new Map(companyDetails.map((company) => [company.id, company]))
-
     const permittedCompanies: CompanyOption[] = accessibleCompanies
       .filter((company) => permittedCompanyIds.includes(company.id))
-      .map((company) => {
-        const detail = companyDetailMap.get(company.id)
-        return {
-          id: company.id,
-          name: company.name,
-          address: detail?.address || null,
-          phone: detail?.phone || null
-        }
-      })
+      .map((company) => ({
+        id: company.id,
+        name: company.name,
+        address: null,
+        phone: null
+      }))
 
     if (permittedCompanies.length === 0) {
       return NextResponse.json({ error: 'No report access found for this user' }, { status: 403 })
     }
-
-    const aggregateEligibleCompanyIds =
-      authResult.auth.role === 'super_admin' || authResult.auth.role === 'trader_admin'
-        ? permittedCompanyIds
-        : authResult.auth.userDbId
-          ? (
-              await prisma.userPermission.findMany({
-                where: {
-                  userId: authResult.auth.userDbId,
-                  companyId: { in: permittedCompanyIds },
-                  module: 'REPORTS',
-                  canWrite: true
-                },
-                select: {
-                  companyId: true
-                }
-              })
-            ).map((row) => row.companyId)
-          : []
 
     const explicitRequestedCompanyIds =
       requestedCompanyIds.length > 0 ? requestedCompanyIds : requestedCompanyId ? [requestedCompanyId] : []
@@ -528,6 +505,41 @@ export async function GET(request: NextRequest) {
     if (targetCompanyIds.length === 0) {
       return NextResponse.json({ error: 'Requested company is outside your report access scope' }, { status: 403 })
     }
+
+    const aggregateEligibleCompanyIds =
+      targetCompanyIds.length <= 1
+        ? []
+        : authResult.auth.role === 'super_admin' || authResult.auth.role === 'trader_admin'
+          ? permittedCompanyIds
+          : authResult.auth.userDbId
+            ? (
+                await prisma.userPermission.findMany({
+                  where: {
+                    userId: authResult.auth.userDbId,
+                    companyId: { in: permittedCompanyIds },
+                    module: 'REPORTS',
+                    canWrite: true
+                  },
+                  select: {
+                    companyId: true
+                  }
+                })
+              ).map((row) => row.companyId)
+            : []
+
+    const selectedCompanyDetail =
+      targetCompanyIds.length === 1
+        ? await prisma.company.findFirst({
+            where: {
+              id: targetCompanyIds[0],
+              deletedAt: null
+            },
+            select: {
+              address: true,
+              phone: true
+            }
+          })
+        : null
 
     if (authResult.auth.role !== 'super_admin') {
       const subscriptionAccess = await getCompanySubscriptionAccess(prisma, targetCompanyIds[0])
@@ -564,10 +576,6 @@ export async function GET(request: NextRequest) {
 
     const payload = await getOrSetServerCache(cacheKey, OPERATIONS_REPORT_CACHE_TTL_MS, async () => {
       const companyNameMap = new Map(permittedCompanies.map((company) => [company.id, company.name]))
-      const selectedCompanyDetail =
-        targetCompanyIds.length === 1
-          ? permittedCompanies.find((company) => company.id === targetCompanyIds[0]) || null
-          : null
       const selectedCompanyName =
         targetCompanyIds.length === 1
           ? companyNameMap.get(targetCompanyIds[0]) || ''
@@ -682,7 +690,6 @@ export async function GET(request: NextRequest) {
       payments,
       journalVoucherEntries,
       stockAdjustments,
-      parties,
       masterBanks,
       bankSyncProviders,
       salesBillsAsOf,
@@ -927,45 +934,6 @@ export async function GET(request: NextRequest) {
         orderBy: [{ entryDate: 'desc' }, { createdAt: 'desc' }]
       })
         : Promise.resolve([]),
-      needsPartyBalances
-        ? prisma.party.findMany({
-        where: {
-          companyId: { in: targetCompanyIds },
-          OR: [
-            {
-              openingBalance: {
-                gt: 0
-              }
-            },
-            {
-              salesBills: {
-                some: dateTo ? { billDate: { lte: dateTo } } : {}
-              }
-            },
-            {
-              payments: {
-                some: {
-                  billType: 'sales',
-                  deletedAt: null,
-                  ...(dateTo ? { payDate: { lte: dateTo } } : {})
-                }
-              }
-            }
-          ]
-        },
-        select: {
-          id: true,
-          companyId: true,
-          name: true,
-          address: true,
-          phone1: true,
-          openingBalance: true,
-          openingBalanceType: true,
-          openingBalanceDate: true
-        },
-        orderBy: [{ name: 'asc' }]
-      })
-        : Promise.resolve([]),
       needsBankLedgerView
         ? prisma.bank.findMany({
             where: {
@@ -984,11 +952,7 @@ export async function GET(request: NextRequest) {
           })
         : Promise.resolve([]),
       needsBankLedgerView
-        ? Promise.all(
-            SUPPORTED_BANK_SYNC_PROVIDERS.map((provider) =>
-              createBankEntryProvider(provider).getStatus({ companyId: targetCompanyIds[0] || '' })
-            )
-          )
+        ? loadBankSyncProviderStatuses(targetCompanyIds[0] || '')
         : Promise.resolve([]),
       needsPartyBalances
         ? prisma.salesBill.findMany({
@@ -1033,7 +997,7 @@ export async function GET(request: NextRequest) {
         : Promise.resolve([]),
       needsPartyBalances
         ? prisma.payment.groupBy({
-            by: ['billType', 'billId'],
+            by: ['billType', 'billId', 'partyId'],
             where: paymentOutstandingWhere,
             _sum: {
               amount: true
@@ -1041,6 +1005,48 @@ export async function GET(request: NextRequest) {
           })
         : Promise.resolve([])
     ])
+
+      const partyBalanceIds = needsPartyBalances
+        ? Array.from(
+            new Set(
+              [
+                ...salesBillsAsOf.map((bill) => String(bill.partyId || '').trim()),
+                ...paymentsAsOf
+                  .filter(
+                    (payment) =>
+                      payment.billType === 'sales' &&
+                      isPartyOpeningBalanceReference(payment.billId) &&
+                      Boolean(String(payment.partyId || '').trim())
+                  )
+                  .map((payment) => String(payment.partyId || '').trim())
+              ].filter(Boolean)
+            )
+          )
+        : []
+
+      const parties =
+        needsPartyBalances && (partyBalanceIds.length > 0 || targetCompanyIds.length > 0)
+          ? await prisma.party.findMany({
+              where: {
+                companyId: { in: targetCompanyIds },
+                OR: [
+                  { openingBalance: { gt: 0 } },
+                  ...(partyBalanceIds.length > 0 ? [{ id: { in: partyBalanceIds } }] : [])
+                ]
+              },
+              select: {
+                id: true,
+                companyId: true,
+                name: true,
+                address: true,
+                phone1: true,
+                openingBalance: true,
+                openingBalanceType: true,
+                openingBalanceDate: true
+              },
+              orderBy: [{ name: 'asc' }]
+            })
+          : []
 
       const purchasePaymentBillIds = Array.from(
         new Set(
@@ -1507,42 +1513,28 @@ export async function GET(request: NextRequest) {
         ].reduce((sum, row) => sum + Number(row.amountIn || 0) - Number(row.amountOut || 0), 0)
       )
 
+      const openingReceiptsByPartyId = new Map<string, number>()
       for (const payment of paymentsAsOf) {
         if (!payment.billId) continue
+        const paymentAmount = roundCurrency(normalizeNonNegative(payment._sum.amount))
+
+        if (
+          payment.billType === 'sales' &&
+          payment.partyId &&
+          isPartyOpeningBalanceReference(payment.billId)
+        ) {
+          openingReceiptsByPartyId.set(
+            payment.partyId,
+            roundCurrency((openingReceiptsByPartyId.get(payment.partyId) || 0) + paymentAmount)
+          )
+        }
+
         if (!isSalesReceiptType(payment.billType) && payment.billType !== 'purchase') continue
 
         const targetMap = isSalesReceiptType(payment.billType) ? salesReceiptByBillId : purchasePaidByBillId
         targetMap.set(
           payment.billId,
-          roundCurrency((targetMap.get(payment.billId) || 0) + normalizeNonNegative(payment._sum.amount))
-        )
-      }
-
-      const openingPaymentRows =
-        needsPartyBalances && parties.length > 0
-          ? await prisma.payment.findMany({
-              where: {
-                companyId: { in: targetCompanyIds },
-                billType: 'sales',
-                deletedAt: null,
-                partyId: { in: parties.map((party) => party.id) },
-                billId: { startsWith: getPartyOpeningBalanceReference('') },
-                ...(dateTo ? { payDate: { lte: dateTo } } : {})
-              },
-              select: {
-                partyId: true,
-                amount: true
-              }
-            })
-          : []
-
-      const openingReceiptsByPartyId = new Map<string, number>()
-      for (const payment of openingPaymentRows) {
-        const partyId = String(payment.partyId || '').trim()
-        if (!partyId) continue
-        openingReceiptsByPartyId.set(
-          partyId,
-          roundCurrency((openingReceiptsByPartyId.get(partyId) || 0) + normalizeNonNegative(payment.amount))
+          roundCurrency((targetMap.get(payment.billId) || 0) + paymentAmount)
         )
       }
 

@@ -16,11 +16,11 @@ import { normalizeTenDigitPhone, parseNonNegativeNumber } from '@/lib/field-vali
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 import { calculateTaxBreakdown } from '@/lib/billing-calculations'
 import { calculateBillMandiCharges, syncBillChargesAndLedger } from '@/lib/mandi-billing'
-import { ensureMandiSchema } from '@/lib/mandi-schema'
 import { assertMandiTypeBelongsToCompany, normalizeOptionalMandiTypeId } from '@/lib/mandi-type-utils'
 import { buildPurchasePaymentSyncNote } from '@/lib/purchase-payment-sync'
 
 type PaymentStatus = 'unpaid' | 'partial' | 'paid'
+type PurchaseBillListView = 'default' | 'list' | 'payment' | 'report'
 
 const purchaseCreateSchema = z.object({
   companyId: z.string().min(1),
@@ -137,6 +137,11 @@ function parseBillNumber(value: unknown): string | NextResponse {
     return NextResponse.json({ error: 'Bill number is required' }, { status: 400 })
   }
   return String(value).trim()
+}
+
+function normalizePurchaseBillListView(value: string | null): PurchaseBillListView {
+  if (value === 'list' || value === 'payment' || value === 'report') return value
+  return 'default'
 }
 
 async function ensurePurchaseBillReadAccess(
@@ -450,6 +455,7 @@ export async function GET(request: NextRequest) {
     const dateFrom = searchParams.get('dateFrom')
     const dateTo = searchParams.get('dateTo')
     const includeCancelled = parseBooleanParam(searchParams.get('includeCancelled'))
+    const view = normalizePurchaseBillListView(searchParams.get('view'))
 
     if (billId) {
       let targetCompanyId = companyId
@@ -507,14 +513,12 @@ export async function GET(request: NextRequest) {
     if (denied) return denied
 
     if (last === 'true') {
-      const bills = await prisma.purchaseBill.findMany({
-        where: { companyId },
-        select: { billNo: true }
-      })
-      const lastBillNumber = bills.reduce((max, bill) => {
-        const value = Number.parseInt(bill.billNo, 10)
-        return Number.isFinite(value) ? Math.max(max, value) : max
-      }, 0)
+      const rows = await prisma.$queryRaw<Array<{ lastBillNumber: number | null }>>`
+        SELECT COALESCE(MAX(CAST("billNo" AS INTEGER)), 0) AS "lastBillNumber"
+        FROM "PurchaseBill"
+        WHERE "companyId" = ${companyId}
+      `
+      const lastBillNumber = Number(rows[0]?.lastBillNumber || 0)
       return NextResponse.json({ lastBillNumber })
     }
 
@@ -539,27 +543,130 @@ export async function GET(request: NextRequest) {
       whereClause.OR = [{ billNo: { contains: pagination.search } }, { status: { contains: pagination.search } }]
     }
 
-    const [purchaseBills, total] = await Promise.all([
-      prisma.purchaseBill.findMany({
-        where: whereClause,
-        include: {
-          company: {
+    const listQuery =
+      view === 'payment'
+        ? prisma.purchaseBill.findMany({
+            where: whereClause,
             select: {
               id: true,
-              name: true,
-              mandiAccountNumber: true
-            }
-          },
-          farmer: true,
-          purchaseItems: {
-            include: {
-              product: true
-            }
-          }
-        },
-        orderBy: { createdAt: 'desc' },
-        ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
-      }),
+              companyId: true,
+              billNo: true,
+              billDate: true,
+              totalAmount: true,
+              paidAmount: true,
+              balanceAmount: true,
+              status: true,
+              farmer: {
+                select: {
+                  id: true,
+                  name: true,
+                  address: true,
+                  phone1: true,
+                  krashakAnubandhNumber: true
+                }
+              }
+            },
+            orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }],
+            ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
+          })
+        : view === 'list'
+          ? prisma.purchaseBill.findMany({
+              where: whereClause,
+              select: {
+                id: true,
+                billNo: true,
+                billDate: true,
+                totalAmount: true,
+                paidAmount: true,
+                balanceAmount: true,
+                status: true,
+                farmerNameSnapshot: true,
+                farmerAddressSnapshot: true,
+                krashakAnubandhSnapshot: true,
+                farmer: {
+                  select: {
+                    id: true,
+                    name: true,
+                    address: true,
+                    krashakAnubandhNumber: true
+                  }
+                },
+                purchaseItems: {
+                  select: {
+                    qty: true,
+                    rate: true,
+                    hammali: true,
+                    amount: true,
+                    bags: true,
+                    markaNo: true
+                  }
+                }
+              },
+              orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }],
+              ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
+            })
+        : view === 'report'
+          ? prisma.purchaseBill.findMany({
+              where: whereClause,
+              select: {
+                id: true,
+                companyId: true,
+                billNo: true,
+                billDate: true,
+                totalAmount: true,
+                paidAmount: true,
+                balanceAmount: true,
+                status: true,
+                farmerNameSnapshot: true,
+                farmerAddressSnapshot: true,
+                farmerContactSnapshot: true,
+                krashakAnubandhSnapshot: true,
+                farmer: {
+                  select: {
+                    name: true,
+                    address: true,
+                    phone1: true,
+                    krashakAnubandhNumber: true,
+                    ifscCode: true,
+                    accountNo: true,
+                    bankName: true
+                  }
+                },
+                purchaseItems: {
+                  select: {
+                    qty: true,
+                    bags: true,
+                    rate: true,
+                    hammali: true
+                  }
+                }
+              },
+              orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }],
+              ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
+            })
+          : prisma.purchaseBill.findMany({
+              where: whereClause,
+              include: {
+                company: {
+                  select: {
+                    id: true,
+                    name: true,
+                    mandiAccountNumber: true
+                  }
+                },
+                farmer: true,
+                purchaseItems: {
+                  include: {
+                    product: true
+                  }
+                }
+              },
+              orderBy: { createdAt: 'desc' },
+              ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
+            })
+
+    const [purchaseBills, total] = await Promise.all([
+      listQuery,
       pagination.enabled ? prisma.purchaseBill.count({ where: whereClause }) : Promise.resolve(0)
     ])
 

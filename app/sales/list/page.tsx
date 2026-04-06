@@ -275,7 +275,7 @@ export default function SalesListPage() {
         setLoading(false)
       }
 
-      const response = await fetch(`/api/sales-bills?companyId=${companyIdParam}&includeCancelled=true`)
+      const response = await fetch(`/api/sales-bills?companyId=${companyIdParam}&includeCancelled=true&view=list`)
       if (response.status === 401) {
         setLoading(false)
         router.push('/login')

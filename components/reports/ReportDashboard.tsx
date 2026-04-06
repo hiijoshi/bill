@@ -9,7 +9,8 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { printSimpleTableReport } from '@/lib/report-print'
-import { getClientCache, getOrLoadClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { loadShellCompanies } from '@/lib/client-shell-data'
 
 const BASE_HEADERS = [
   'Party_Type',
@@ -513,23 +514,7 @@ export default function ReportDashboard({
           return
         }
 
-        const rows = await getOrLoadClientCache<CompanyRecord[]>(
-          COMPANIES_CACHE_KEY,
-          COMPANIES_CACHE_AGE_MS,
-          async () => {
-            const response = await fetch('/api/companies', { cache: 'no-store' })
-            if (!response.ok) {
-              throw new Error('Unable to load companies')
-            }
-
-            const payload = await response.json().catch(() => [])
-            return normalizeCollection<CompanyRecord>(payload)
-          },
-          {
-            persist: true,
-            shouldCache: (data) => Array.isArray(data)
-          }
-        )
+        const rows = normalizeCollection<CompanyRecord>(await loadShellCompanies())
 
         if (cancelled) return
 
@@ -598,55 +583,26 @@ export default function ReportDashboard({
 
       const datasets = await Promise.all(
         targetCompanyIds.map(async (companyId) => {
-          const purchaseRequest =
-            reportType === 'sales'
-              ? Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-              : fetch(`/api/purchase-bills?companyId=${encodeURIComponent(companyId)}`)
-
-          const specialPurchaseRequest =
-            reportType === 'sales'
-              ? Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-              : fetch(`/api/special-purchase-bills?companyId=${encodeURIComponent(companyId)}`)
-
-          const salesRequest =
-            reportType === 'purchase'
-              ? Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-              : fetch(`/api/sales-bills?companyId=${encodeURIComponent(companyId)}`)
-
-          const [purchaseRes, specialPurchaseRes, salesRes, paymentRes, banksRes] = await Promise.all([
-            purchaseRequest,
-            specialPurchaseRequest,
-            salesRequest,
-            fetch(`/api/payments?companyId=${encodeURIComponent(companyId)}`),
-            fetch(`/api/banks?companyId=${encodeURIComponent(companyId)}`)
-          ])
-
-          if (reportType === 'purchase' && (!purchaseRes.ok || !specialPurchaseRes.ok)) {
-            throw new Error(`Failed to load purchase bills for ${companyNameMap.get(companyId) || companyId}`)
+          const params = new URLSearchParams({
+            companyId,
+            reportType
+          })
+          const response = await fetch(`/api/reports/dashboard?${params.toString()}`, { cache: 'no-store' })
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}))
+            throw new Error(String(payload?.error || `Failed to load report dataset for ${companyNameMap.get(companyId) || companyId}`))
           }
 
-          if (reportType === 'sales' && !salesRes.ok) {
-            throw new Error(`Failed to load sales bills for ${companyNameMap.get(companyId) || companyId}`)
-          }
-
-          if (reportType === 'main' && !purchaseRes.ok && !specialPurchaseRes.ok && !salesRes.ok) {
-            throw new Error(`Failed to load bills for ${companyNameMap.get(companyId) || companyId}`)
-          }
-
-          const purchasePayload = purchaseRes.ok ? await purchaseRes.json().catch(() => []) : []
-          const specialPurchasePayload = specialPurchaseRes.ok ? await specialPurchaseRes.json().catch(() => []) : []
-          const salesPayload = salesRes.ok ? await salesRes.json().catch(() => []) : []
-          const paymentPayload = paymentRes.ok ? await paymentRes.json().catch(() => []) : []
-          const bankPayload = banksRes.ok ? await banksRes.json().catch(() => []) : []
+          const payload = await response.json().catch(() => ({}))
 
           return {
             companyId,
             companyName: companyNameMap.get(companyId) || companyId,
-            purchaseBills: normalizeCollection<PurchaseBillRecord>(purchasePayload),
-            specialPurchaseBills: normalizeCollection<SpecialPurchaseBillRecord>(specialPurchasePayload),
-            salesBills: normalizeCollection<SalesBillRecord>(salesPayload),
-            payments: normalizeCollection<PaymentRecord>(paymentPayload),
-            banks: normalizeCollection<BankRecord>(bankPayload)
+            purchaseBills: normalizeCollection<PurchaseBillRecord>((payload as { purchaseBills?: unknown }).purchaseBills),
+            specialPurchaseBills: normalizeCollection<SpecialPurchaseBillRecord>((payload as { specialPurchaseBills?: unknown }).specialPurchaseBills),
+            salesBills: normalizeCollection<SalesBillRecord>((payload as { salesBills?: unknown }).salesBills),
+            payments: normalizeCollection<PaymentRecord>((payload as { payments?: unknown }).payments),
+            banks: normalizeCollection<BankRecord>((payload as { banks?: unknown }).banks)
           } satisfies CompanyDataset
         })
       )
