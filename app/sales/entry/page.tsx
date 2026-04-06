@@ -1753,24 +1753,14 @@ export default function SalesEntryPage() {
                   <h3 className="text-lg font-semibold mb-2 pb-2 border-b">4. Additional Charges</h3>
                   <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_2.1fr_0.9fr]">
                     <div className="rounded-lg border bg-slate-50 p-4">
-                      <Label htmlFor="freightAmountTotal">Freight Advance</Label>
-                      <Input
-                        id="freightAmountTotal"
-                        value={freightAdvanceTotal.toFixed(2)}
-                        readOnly
-                        className="mt-2 bg-gray-100"
-                      />
-                      <p className="mt-2 text-xs text-slate-500">
-                        Transport section ka advance amount yahan summary ke liye dikh raha hai.
-                      </p>
+                      
+                      
+                      
                     </div>
                     <div className="rounded-lg border p-4">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-sm font-semibold text-slate-900">Charge Buckets</p>
-                          <p className="text-xs text-slate-500">
-                            Type, amount, and remark ke saath multiple extra charges add karein.
-                          </p>
+                          
                         </div>
                         <Button type="button" variant="outline" onClick={handleAddAdditionalChargeRow}>
                           Add Charge
@@ -1850,25 +1840,7 @@ export default function SalesEntryPage() {
                         </div>
                       ) : null}
                     </div>
-                    <div className="rounded-lg border bg-slate-50 p-4">
-                      <Label htmlFor="additionalTotal">Additional Total</Label>
-                      <Input
-                        id="additionalTotal"
-                        value={additionalTotal.toFixed(2)}
-                        readOnly
-                        className="mt-2 bg-gray-100"
-                      />
-                      <div className="mt-3 space-y-2 text-sm text-slate-600">
-                        <div className="flex items-center justify-between">
-                          <span>Freight Advance</span>
-                          <span>₹{freightAdvanceTotal.toFixed(2)}</span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span>Charge Buckets</span>
-                          <span>₹{extraChargesTotal.toFixed(2)}</span>
-                        </div>
-                      </div>
-                    </div>
+                    
                   </div>
                 </div>
 
