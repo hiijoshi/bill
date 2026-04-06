@@ -14,8 +14,16 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: process.cwd()
   },
+  // Performance optimizations
+  compress: true,
+  poweredByHeader: false,
+  reactStrictMode: true,
+  images: {
+    formats: ['image/webp', 'image/avif'],
+    minimumCacheTTL: 60,
+  },
   experimental: {
-    optimizePackageImports: ['lucide-react'],
+    optimizePackageImports: ['lucide-react', '@radix-ui/react-dialog', '@radix-ui/react-select'],
     serverActions: {
       allowedOrigins: [
         '127.0.0.1:51445',
@@ -80,5 +88,15 @@ const nextConfig: NextConfig = {
     ]
   }
 };
+
+// Bundle analyzer configuration
+if (process.env.ANALYZE === 'true') {
+  const withBundleAnalyzer = require('@next/bundle-analyzer')({
+    enabled: process.env.ANALYZE === 'true',
+  })
+  module.exports = withBundleAnalyzer(nextConfig)
+} else {
+  module.exports = nextConfig
+}
 
 export default nextConfig;

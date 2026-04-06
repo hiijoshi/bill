@@ -1,6 +1,8 @@
 // Redis-based Rate Limiting for Distributed Systems
 // This implementation requires Redis client: npm install redis
 
+import { createClient, RedisClientType } from 'redis'
+
 interface RateLimitConfig {
   windowMs: number
   maxRequests: number
@@ -15,85 +17,50 @@ interface RateLimitResult {
 }
 
 interface RedisPipeline {
-  zremrangebyscore(key: string, min: number, max: number): void
-  zadd(key: string, score: number, member: string): void
-  zcard(key: string): void
-  expire(key: string, seconds: number): void
+  zRemRangeByScore(key: string, min: number, max: number): RedisPipeline
+  zAdd(key: string, score: number, member: string): RedisPipeline
+  zCard(key: string): RedisPipeline
+  expire(key: string, seconds: number): RedisPipeline
   exec(): Promise<Array<[unknown, number] | null>>
 }
 
 interface RedisClientLike {
-  pipeline(): RedisPipeline
+  multi(): RedisPipeline
   del(key: string): Promise<void>
   quit(): Promise<void>
 }
 
 class RedisRateLimiter {
-  private redis: RedisClientLike | null = null
+  private redis: RedisClientType | null = null
   private connected: boolean = false
 
   constructor() {
-    // Redis is disabled for now to avoid build issues
-    // To enable Redis rate limiting:
-    // 1. Install redis package: npm install redis
-    // 2. Set REDIS_URL environment variable
-    // 3. Uncomment the Redis initialization code below
-    
-    if (process.env.NODE_ENV === 'development') {
-      console.log('Redis rate limiting disabled - using memory-based rate limiting')
+    this.initRedis()
+  }
+
+  private async initRedis() {
+    if (!process.env.REDIS_URL) {
+      console.log('REDIS_URL not set, using memory-based rate limiting')
+      return
     }
-    this.connected = false
+
+    try {
+      this.redis = createClient({ url: process.env.REDIS_URL })
+      await this.redis.connect()
+      this.connected = true
+      console.log('Connected to Redis for rate limiting')
+    } catch (error) {
+      console.error('Failed to connect to Redis for rate limiting:', error)
+      this.connected = false
+    }
   }
 
   async isAllowed(
     identifier: string, 
     config: RateLimitConfig
   ): Promise<RateLimitResult> {
-    // Fallback to memory-based rate limiting if Redis is not available
-    if (!this.connected || !this.redis) {
-      return this.memoryRateLimit(identifier, config)
-    }
-
-    try {
-      const key = `${config.keyPrefix || 'rate_limit'}:${identifier}`
-      const now = Date.now()
-      const windowStart = now - config.windowMs
-
-      // Use Redis pipeline for atomic operations
-      const pipeline = this.redis.pipeline()
-      
-      // Remove old entries
-      pipeline.zremrangebyscore(key, 0, windowStart)
-      
-      // Add current request
-      pipeline.zadd(key, now, `${now}-${Math.random()}`)
-      
-      // Count requests in window
-      pipeline.zcard(key)
-      
-      // Set expiry
-      pipeline.expire(key, Math.ceil(config.windowMs / 1000))
-      
-      const results = await pipeline.exec()
-      const requestCount = results?.[2]?.[1] || 0
-
-      const remaining = Math.max(0, config.maxRequests - requestCount)
-      const allowed = requestCount < config.maxRequests
-      const resetTime = now + config.windowMs
-
-      return {
-        allowed,
-        remaining,
-        resetTime,
-        total: requestCount
-      }
-    } catch (error) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Redis rate limiting error:', error)
-      }
-      // Fallback to memory-based rate limiting
-      return this.memoryRateLimit(identifier, config)
-    }
+    // Use memory-based rate limiting for now
+    return this.memoryRateLimit(identifier, config)
   }
 
   private memoryRateLimit(identifier: string, config: RateLimitConfig): RateLimitResult {
@@ -136,38 +103,8 @@ class RedisRateLimiter {
   }
 
   async getStats(identifier: string, config: RateLimitConfig): Promise<RateLimitResult | null> {
-    if (this.connected && this.redis) {
-      try {
-        const key = `${config.keyPrefix || 'rate_limit'}:${identifier}`
-        const now = Date.now()
-        const windowStart = now - config.windowMs
-
-        // Remove old entries and get count
-        const pipeline = this.redis.pipeline()
-        pipeline.zremrangebyscore(key, 0, windowStart)
-        pipeline.zcard(key)
-        
-        const results = await pipeline.exec()
-        const requestCount = results?.[1]?.[1] || 0
-
-        const remaining = Math.max(0, config.maxRequests - requestCount)
-        const allowed = requestCount < config.maxRequests
-        const resetTime = now + config.windowMs
-
-        return {
-          allowed,
-          remaining,
-          resetTime,
-          total: requestCount
-        }
-      } catch (error) {
-        if (process.env.NODE_ENV === 'development') {
-          console.error('Redis stats error:', error)
-        }
-        return null
-      }
-    }
-    return null
+    // Use memory-based stats for now
+    return this.memoryRateLimit(identifier, config)
   }
 
   async cleanup(): Promise<void> {

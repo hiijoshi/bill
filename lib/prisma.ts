@@ -10,7 +10,13 @@ function createPrismaClient() {
   const databaseUrl = String(process.env.DATABASE_URL || '').trim()
   const tursoUrl = String(process.env.TURSO_DATABASE_URL || '').trim()
   const tursoAuthToken = String(process.env.TURSO_AUTH_TOKEN || '').trim()
-  const libsqlUrl = tursoUrl || (databaseUrl.startsWith('libsql://') ? databaseUrl : '')
+  const useTurso = String(process.env.USE_TURSO || '').trim().toLowerCase() === 'true'
+  const isProduction = process.env.NODE_ENV === 'production'
+
+  // Prefer local SQLite in development unless Turso is explicitly enabled.
+  const libsqlUrl = (useTurso || (isProduction && (tursoUrl || databaseUrl.startsWith('libsql://'))))
+    ? tursoUrl || (databaseUrl.startsWith('libsql://') ? databaseUrl : '')
+    : ''
 
   const adapter = libsqlUrl
     ? new PrismaLibSQL(

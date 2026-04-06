@@ -7,7 +7,10 @@
     "dev:turbo": "NEXT_DEV_ENGINE=turbopack node scripts/dev-safe.mjs",
     "dev:clean": "node scripts/dev-clean.mjs",
     "dev:stable": "next dev --webpack",
+    "prebuild": "prisma generate",
     "build": "node scripts/build.mjs",
+    "build:analyze": "ANALYZE=true npm run build",
+    "postinstall": "prisma generate",
     "start": "next start",
     "lint": "eslint",
     "supabase:export-local": "tsx scripts/export-local-data-for-supabase.ts",
@@ -48,12 +51,14 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-hook-form": "^7.71.2",
+    "redis": "^5.11.0",
     "tailwind-merge": "^3.4.0",
     "tesseract.js": "^7.0.0",
     "xlsx": "^0.18.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@next/bundle-analyzer": "^16.2.2",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -63,7 +68,8 @@
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "tw-animate-css": "^1.4.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "webpack-bundle-analyzer": "^5.3.0"
   },
   "overrides": {
     "@typescript-eslint/typescript-estree": {

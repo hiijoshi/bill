@@ -5,6 +5,7 @@ import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { cleanString, normalizeTenDigitPhone } from '@/lib/field-validation'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 import { normalizeNonNegative, roundCurrency } from '@/lib/billing-calculations'
+import { getOrSetServerCache, makeServerCacheKey, clearServerCacheByPrefix } from '@/lib/server-cache'
 import {
   getPartyOpeningBalanceReference,
   getSignedPartyOpeningBalance,
@@ -19,6 +20,8 @@ import {
   FinancialYearValidationError,
   getFinancialYearDateFilter
 } from '@/lib/financial-years'
+
+const PARTIES_CACHE_TTL_MS = 30_000 // 30 seconds server-side cache
 
 function normalizeCompanyId(raw: string | null): string | null {
   if (!raw) return null
@@ -122,93 +125,150 @@ export async function GET(request: NextRequest) {
     const asOfDate = financialYearFilter.dateTo
 
     const pagination = parsePaginationParams(searchParams, { defaultPageSize: 50, maxPageSize: 200 })
-    const where = {
-      companyId,
-      ...(pagination.search
-        ? {
-            OR: [
-              { name: { contains: pagination.search } },
-              { type: { contains: pagination.search } },
-              { phone1: { contains: pagination.search } },
-              { phone2: { contains: pagination.search } },
-              { bankName: { contains: pagination.search } },
-              { address: { contains: pagination.search } }
-            ]
-          }
-        : {})
-    }
 
-    const [parties, total] = await Promise.all([
-      prisma.party.findMany({
-        where,
-        include: {
-          mandiProfile: {
-            include: {
-              mandiType: {
-                select: {
-                  id: true,
-                  name: true
+    // Create cache key that includes all parameters affecting the result
+    const cacheKey = makeServerCacheKey('parties', [
+      companyId,
+      openingCutoff?.toISOString(),
+      asOfDate?.toISOString(),
+      pagination.search,
+      pagination.page,
+      pagination.pageSize,
+      pagination.enabled
+    ])
+
+    return getOrSetServerCache(cacheKey, PARTIES_CACHE_TTL_MS, async () => {
+      const where = {
+        companyId,
+        ...(pagination.search
+          ? {
+              OR: [
+                { name: { contains: pagination.search } },
+                { type: { contains: pagination.search } },
+                { phone1: { contains: pagination.search } },
+                { phone2: { contains: pagination.search } },
+                { bankName: { contains: pagination.search } },
+                { address: { contains: pagination.search } }
+              ]
+            }
+          : {})
+      }
+
+      const [parties, total] = await Promise.all([
+        prisma.party.findMany({
+          where,
+          include: {
+            mandiProfile: {
+              include: {
+                mandiType: {
+                  select: {
+                    id: true,
+                    name: true
+                  }
                 }
               }
             }
-          }
-        },
-        orderBy: { name: 'asc' },
-        ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
-      }),
-      pagination.enabled ? prisma.party.count({ where }) : Promise.resolve(0)
-    ])
+          },
+          orderBy: { name: 'asc' },
+          ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
+        }),
+        pagination.enabled ? prisma.party.count({ where }) : Promise.resolve(0)
+      ])
 
-    const partyIds = parties.map((party) => party.id)
-    const [salesBillsAsOf, openingPaymentBalancesBeforeStart, openingPaymentBalancesAsOf] = partyIds.length > 0
-      ? await Promise.all([
-          prisma.salesBill.findMany({
-            where: {
-              companyId,
-              partyId: { in: partyIds },
-              status: { not: 'cancelled' },
-              ...(asOfDate
-                ? {
-                    billDate: {
-                      lte: asOfDate
+      const partyIds = parties.map((party) => party.id)
+      const [salesBillsAsOf, openingPaymentBalancesBeforeStart, openingPaymentBalancesAsOf] = partyIds.length > 0
+        ? await Promise.all([
+            prisma.salesBill.findMany({
+              where: {
+                companyId,
+                partyId: { in: partyIds },
+                status: { not: 'cancelled' },
+                ...(asOfDate
+                  ? {
+                      billDate: {
+                        lte: asOfDate
+                      }
                     }
-                  }
-                : {})
-            },
-            select: {
-              id: true,
-              partyId: true,
-              totalAmount: true
-            }
-          }),
-          prisma.payment.groupBy({
-            by: ['partyId'],
-            where: {
-              companyId,
-              billType: 'sales',
-              deletedAt: null,
-              partyId: { in: partyIds },
-              billId: { startsWith: getPartyOpeningBalanceReference('') },
-              ...(openingCutoff
-                ? {
-                    payDate: {
-                      lt: openingCutoff
+                  : {})
+              },
+              select: {
+                id: true,
+                partyId: true,
+                totalAmount: true
+              }
+            }),
+            prisma.payment.groupBy({
+              by: ['partyId'],
+              where: {
+                companyId,
+                billType: 'sales',
+                deletedAt: null,
+                partyId: { in: partyIds },
+                billId: { startsWith: getPartyOpeningBalanceReference('') },
+                ...(openingCutoff
+                  ? {
+                      payDate: {
+                        lt: openingCutoff
+                      }
                     }
-                  }
-                : {})
-            },
-            _sum: {
-              amount: true
-            }
-          }),
-          prisma.payment.groupBy({
-            by: ['partyId'],
+                  : {})
+              },
+              _sum: {
+                amount: true
+              }
+            }),
+            prisma.payment.groupBy({
+              by: ['partyId'],
+              where: {
+                companyId,
+                billType: 'sales',
+                deletedAt: null,
+                partyId: { in: partyIds },
+                billId: { startsWith: getPartyOpeningBalanceReference('') },
+                ...(asOfDate
+                  ? {
+                      payDate: {
+                        lte: asOfDate
+                      }
+                    }
+                  : {})
+              },
+              _sum: {
+                amount: true
+              }
+            })
+          ])
+        : [[], [], []]
+
+      const openingReceiptsBeforeStartByPartyId = new Map<string, number>()
+      for (const payment of openingPaymentBalancesBeforeStart) {
+        const partyId = String(payment.partyId || '').trim()
+        if (!partyId) continue
+        openingReceiptsBeforeStartByPartyId.set(
+          partyId,
+          roundCurrency(normalizeNonNegative(payment._sum.amount))
+        )
+      }
+
+      const openingReceiptsAsOfByPartyId = new Map<string, number>()
+      for (const payment of openingPaymentBalancesAsOf) {
+        const partyId = String(payment.partyId || '').trim()
+        if (!partyId) continue
+        openingReceiptsAsOfByPartyId.set(
+          partyId,
+          roundCurrency(normalizeNonNegative(payment._sum.amount))
+        )
+      }
+
+      const salesBillIds = salesBillsAsOf.map((bill) => bill.id)
+      const salesReceiptsAsOf = salesBillIds.length > 0
+        ? await prisma.payment.groupBy({
+            by: ['billId'],
             where: {
               companyId,
-              billType: 'sales',
               deletedAt: null,
-              partyId: { in: partyIds },
-              billId: { startsWith: getPartyOpeningBalanceReference('') },
+              billType: 'sales',
+              billId: { in: salesBillIds },
               ...(asOfDate
                 ? {
                     payDate: {
@@ -221,118 +281,75 @@ export async function GET(request: NextRequest) {
               amount: true
             }
           })
-        ])
-      : [[], [], []]
+        : []
 
-    const openingReceiptsBeforeStartByPartyId = new Map<string, number>()
-    for (const payment of openingPaymentBalancesBeforeStart) {
-      const partyId = String(payment.partyId || '').trim()
-      if (!partyId) continue
-      openingReceiptsBeforeStartByPartyId.set(
-        partyId,
-        roundCurrency(normalizeNonNegative(payment._sum.amount))
-      )
-    }
-
-    const openingReceiptsAsOfByPartyId = new Map<string, number>()
-    for (const payment of openingPaymentBalancesAsOf) {
-      const partyId = String(payment.partyId || '').trim()
-      if (!partyId) continue
-      openingReceiptsAsOfByPartyId.set(
-        partyId,
-        roundCurrency(normalizeNonNegative(payment._sum.amount))
-      )
-    }
-
-    const salesBillIds = salesBillsAsOf.map((bill) => bill.id)
-    const salesReceiptsAsOf = salesBillIds.length > 0
-      ? await prisma.payment.groupBy({
-          by: ['billId'],
-          where: {
-            companyId,
-            deletedAt: null,
-            billType: 'sales',
-            billId: { in: salesBillIds },
-            ...(asOfDate
-              ? {
-                  payDate: {
-                    lte: asOfDate
-                  }
-                }
-              : {})
-          },
-          _sum: {
-            amount: true
-          }
-        })
-      : []
-
-    const salesReceiptsByBillId = new Map<string, number>()
-    for (const payment of salesReceiptsAsOf) {
-      const billId = String(payment.billId || '').trim()
-      if (!billId) continue
-      salesReceiptsByBillId.set(
-        billId,
-        roundCurrency(normalizeNonNegative(payment._sum.amount))
-      )
-    }
-
-    const salesBalanceByPartyId = new Map<string, number>()
-    for (const bill of salesBillsAsOf) {
-      const partyId = String(bill.partyId || '').trim()
-      if (!partyId) continue
-      const outstanding = roundCurrency(
-        Math.max(0, normalizeNonNegative(bill.totalAmount) - normalizeNonNegative(salesReceiptsByBillId.get(bill.id)))
-      )
-      if (outstanding <= 0) continue
-      salesBalanceByPartyId.set(
-        partyId,
-        roundCurrency((salesBalanceByPartyId.get(partyId) || 0) + outstanding)
-      )
-    }
-
-    const enrichedParties = parties.map((party) => {
-      const openingReceivable = getSignedPartyOpeningBalance(party.openingBalance, party.openingBalanceType)
-      const openingDate = party.openingBalanceDate instanceof Date ? party.openingBalanceDate : null
-      const includeAtPeriodStart =
-        openingReceivable > 0 &&
-        (!openingDate || !openingCutoff || openingDate.getTime() <= openingCutoff.getTime())
-      const includeAsOfDate =
-        openingReceivable > 0 &&
-        (!openingDate || !asOfDate || openingDate.getTime() <= asOfDate.getTime())
-      const openingOutstandingAmount = includeAtPeriodStart
-        ? roundCurrency(
-            Math.max(0, openingReceivable - roundCurrency(openingReceiptsBeforeStartByPartyId.get(party.id) || 0))
-          )
-        : 0
-      const currentOpeningOutstanding = includeAsOfDate
-        ? roundCurrency(
-            Math.max(0, openingReceivable - roundCurrency(openingReceiptsAsOfByPartyId.get(party.id) || 0))
-          )
-        : 0
-      const currentBalanceAmount = roundCurrency(
-        currentOpeningOutstanding + (salesBalanceByPartyId.get(party.id) || 0)
-      )
-
-      return {
-        ...party,
-        openingBalance: normalizePartyOpeningBalanceAmount(party.openingBalance),
-        openingBalanceType: 'receivable' as const,
-        mandiTypeId: party.mandiProfile?.mandiTypeId || null,
-        mandiTypeName: party.mandiProfile?.mandiType?.name || null,
-        openingOutstandingAmount,
-        currentBalanceAmount
+      const salesReceiptsByBillId = new Map<string, number>()
+      for (const payment of salesReceiptsAsOf) {
+        const billId = String(payment.billId || '').trim()
+        if (!billId) continue
+        salesReceiptsByBillId.set(
+          billId,
+          roundCurrency(normalizeNonNegative(payment._sum.amount))
+        )
       }
-    })
 
-    if (pagination.enabled) {
-      return NextResponse.json({
-        data: enrichedParties,
-        meta: buildPaginationMeta(total, pagination)
+      const salesBalanceByPartyId = new Map<string, number>()
+      for (const bill of salesBillsAsOf) {
+        const partyId = String(bill.partyId || '').trim()
+        if (!partyId) continue
+        const outstanding = roundCurrency(
+          Math.max(0, normalizeNonNegative(bill.totalAmount) - normalizeNonNegative(salesReceiptsByBillId.get(bill.id)))
+        )
+        if (outstanding <= 0) continue
+        salesBalanceByPartyId.set(
+          partyId,
+          roundCurrency((salesBalanceByPartyId.get(partyId) || 0) + outstanding)
+        )
+      }
+
+      const enrichedParties = parties.map((party) => {
+        const openingReceivable = getSignedPartyOpeningBalance(party.openingBalance, party.openingBalanceType)
+        const openingDate = party.openingBalanceDate instanceof Date ? party.openingBalanceDate : null
+        const includeAtPeriodStart =
+          openingReceivable > 0 &&
+          (!openingDate || !openingCutoff || openingDate.getTime() <= openingCutoff.getTime())
+        const includeAsOfDate =
+          openingReceivable > 0 &&
+          (!openingDate || !asOfDate || openingDate.getTime() <= asOfDate.getTime())
+        const openingOutstandingAmount = includeAtPeriodStart
+          ? roundCurrency(
+              Math.max(0, openingReceivable - roundCurrency(openingReceiptsBeforeStartByPartyId.get(party.id) || 0))
+            )
+          : 0
+        const currentOpeningOutstanding = includeAsOfDate
+          ? roundCurrency(
+              Math.max(0, openingReceivable - roundCurrency(openingReceiptsAsOfByPartyId.get(party.id) || 0))
+            )
+          : 0
+        const currentBalanceAmount = roundCurrency(
+          currentOpeningOutstanding + (salesBalanceByPartyId.get(party.id) || 0)
+        )
+
+        return {
+          ...party,
+          openingBalance: normalizePartyOpeningBalanceAmount(party.openingBalance),
+          openingBalanceType: 'receivable' as const,
+          mandiTypeId: party.mandiProfile?.mandiTypeId || null,
+          mandiTypeName: party.mandiProfile?.mandiType?.name || null,
+          openingOutstandingAmount,
+          currentBalanceAmount
+        }
       })
-    }
 
-    return NextResponse.json(enrichedParties)
+      if (pagination.enabled) {
+        return NextResponse.json({
+          data: enrichedParties,
+          meta: buildPaginationMeta(total, pagination)
+        })
+      }
+
+      return NextResponse.json(enrichedParties)
+    })
   } catch (error) {
     if (error instanceof FinancialYearValidationError) {
       return NextResponse.json({ error: error.message }, { status: error.statusCode })
@@ -430,6 +447,9 @@ export async function POST(request: NextRequest) {
         }
       })
     })
+
+    // Clear parties cache for this company
+    clearServerCacheByPrefix(makeServerCacheKey('parties', [companyId]))
 
     return NextResponse.json({
       success: true,
@@ -560,6 +580,9 @@ export async function PUT(request: NextRequest) {
       })
     })
 
+    // Clear parties cache for this company
+    clearServerCacheByPrefix(makeServerCacheKey('parties', [companyId]))
+
     return NextResponse.json({
       success: true,
       message: 'Party updated successfully',
@@ -594,6 +617,9 @@ export async function DELETE(request: NextRequest) {
         where: { companyId }
       })
 
+      // Clear parties cache for this company
+      clearServerCacheByPrefix(makeServerCacheKey('parties', [companyId]))
+
       return NextResponse.json({
         success: true,
         message: `${result.count} parties deleted successfully`,
@@ -615,6 +641,9 @@ export async function DELETE(request: NextRequest) {
     }
 
     await prisma.party.delete({ where: { id } })
+
+    // Clear parties cache for this company
+    clearServerCacheByPrefix(makeServerCacheKey('parties', [companyId]))
 
     return NextResponse.json({ success: true, message: 'Party deleted successfully' })
   } catch (error) {

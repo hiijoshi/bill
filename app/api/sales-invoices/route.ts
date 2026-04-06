@@ -35,6 +35,23 @@ const salesInvoiceSchema = z.object({
   salesItems: z.array(salesItemSchema).min(1)
 })
 
+async function getSalesInvoices(firmId: string) {
+  const salesInvoices = await prisma.salesBill.findMany({
+    where: { companyId: firmId },
+    include: {
+      party: true,
+      salesItems: {
+        include: {
+          product: true
+        }
+      }
+    },
+    orderBy: { billDate: 'desc' }
+  })
+
+  return salesInvoices
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -46,19 +63,7 @@ export async function GET(request: NextRequest) {
     const denied = await ensureCompanyAccess(request, firmId)
     if (denied) return denied
 
-    const salesInvoices = await prisma.salesBill.findMany({
-      where: { companyId: firmId }, // Use companyId instead of firmId
-      include: {
-        party: true,
-        salesItems: {
-          include: {
-            product: true
-          }
-        }
-      },
-      orderBy: { billDate: 'desc' }
-    })
-
+    const salesInvoices = await getSalesInvoices(firmId)
     return NextResponse.json(salesInvoices)
   } catch (error) {
     console.error('Error fetching sales invoices:', error)

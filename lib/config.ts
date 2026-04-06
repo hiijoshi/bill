@@ -18,6 +18,7 @@ const envSchema = z.object({
   DATABASE_URL: z.string().optional(),
   TURSO_DATABASE_URL: z.string().optional(),
   TURSO_AUTH_TOKEN: z.string().optional(),
+  USE_TURSO: z.string().optional(),
   DIRECT_URL: z.string().optional(),
   JWT_SECRET: z.string().min(32, { message: 'JWT_SECRET must be at least 32 characters' }),
   REFRESH_SECRET: z.string().min(32).optional(),
@@ -38,11 +39,13 @@ const envSchema = z.object({
   AUDIT_LOGGING_ENABLED: z.string().optional(),
   LOG_SERVICE_URL: z.string().optional(),
   LOG_SERVICE_TOKEN: z.string().optional(),
-  SUPER_ADMIN_REMOTE_ACCESS: z.string().optional()
+  SUPER_ADMIN_REMOTE_ACCESS: z.string().optional(),
+  REDIS_URL: z.string().optional()
 }).superRefine((value, ctx) => {
   const databaseUrl = String(value.DATABASE_URL || '').trim()
   const tursoUrl = String(value.TURSO_DATABASE_URL || '').trim()
   const tursoAuthToken = String(value.TURSO_AUTH_TOKEN || '').trim()
+  const useTurso = String(value.USE_TURSO || '').trim().toLowerCase() === 'true'
 
   if (!databaseUrl && !tursoUrl) {
     ctx.addIssue({
@@ -52,11 +55,11 @@ const envSchema = z.object({
     })
   }
 
-  if (tursoUrl && !tursoAuthToken) {
+  if (tursoUrl && useTurso && !tursoAuthToken) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['TURSO_AUTH_TOKEN'],
-      message: 'TURSO_AUTH_TOKEN is required when TURSO_DATABASE_URL is set'
+      message: 'TURSO_AUTH_TOKEN is required when TURSO_DATABASE_URL is set and USE_TURSO is enabled'
     })
   }
 })
