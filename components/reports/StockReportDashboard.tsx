@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BarChart3, Download, FileText, RefreshCw, Search, Table2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -63,6 +63,11 @@ interface StockReportDashboardProps {
   initialCompanyId?: string
   embedded?: boolean
   onBackToDashboard?: () => void
+  companyOptions?: CompanyRecord[]
+  initialGeneratedRows?: StockRow[]
+  initialDateFrom?: string
+  initialDateTo?: string
+  initialLastGeneratedAt?: string
 }
 
 const STOCK_REPORT_CACHE_AGE_MS = 20_000
@@ -110,21 +115,30 @@ const csvEscape = (value: string | number): string => `"${String(value ?? '').re
 export default function StockReportDashboard({
   initialCompanyId,
   embedded = false,
-  onBackToDashboard
+  onBackToDashboard,
+  companyOptions,
+  initialGeneratedRows = [],
+  initialDateFrom = '',
+  initialDateTo = '',
+  initialLastGeneratedAt = ''
 }: StockReportDashboardProps) {
-  const [companies, setCompanies] = useState<CompanyRecord[]>([])
+  const [companies, setCompanies] = useState<CompanyRecord[]>(companyOptions || [])
   const [selectedCompanyId, setSelectedCompanyId] = useState(initialCompanyId || '')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [dateFrom, setDateFrom] = useState(initialDateFrom)
+  const [dateTo, setDateTo] = useState(initialDateTo)
   const [entryTypeFilter, setEntryTypeFilter] = useState<EntryType>('all')
   const [searchTerm, setSearchTerm] = useState('')
 
-  const [loadingCompanies, setLoadingCompanies] = useState(true)
+  const [loadingCompanies, setLoadingCompanies] = useState(!(Array.isArray(companyOptions) && companyOptions.length > 0))
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
-  const [lastGeneratedAt, setLastGeneratedAt] = useState('')
-  const [generatedRows, setGeneratedRows] = useState<StockRow[]>([])
+  const [lastGeneratedAt, setLastGeneratedAt] = useState(initialLastGeneratedAt)
+  const [generatedRows, setGeneratedRows] = useState<StockRow[]>(initialGeneratedRows)
   const { financialYear } = useClientFinancialYear()
+  const skipInitialFinancialYearSyncRef = useRef(Boolean(initialDateFrom || initialDateTo))
+  const skipPreparedGenerationRef = useRef(
+    Boolean(initialCompanyId && initialDateFrom && initialDateTo)
+  )
 
   useEffect(() => {
     if (!initialCompanyId) return
@@ -132,6 +146,10 @@ export default function StockReportDashboard({
   }, [initialCompanyId])
 
   useEffect(() => {
+    if (skipInitialFinancialYearSyncRef.current) {
+      skipInitialFinancialYearSyncRef.current = false
+      return
+    }
     const range = getFinancialYearDateRangeInput(financialYear)
     setDateFrom(range.dateFrom)
     setDateTo(range.dateTo)
@@ -143,6 +161,18 @@ export default function StockReportDashboard({
     const loadCompanies = async () => {
       setLoadingCompanies(true)
       try {
+        if (Array.isArray(companyOptions) && companyOptions.length > 0) {
+          if (cancelled) return
+          setCompanies(companyOptions)
+          const availableIds = new Set(companyOptions.map((row) => row.id))
+          setSelectedCompanyId((previous) => {
+            if (initialCompanyId && availableIds.has(initialCompanyId)) return initialCompanyId
+            if (previous && availableIds.has(previous)) return previous
+            return companyOptions[0]?.id || ''
+          })
+          return
+        }
+
         const cachedCompanies = getClientCache<CompanyRecord[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS)
         if (cachedCompanies && cachedCompanies.length > 0) {
           if (cancelled) return
@@ -183,7 +213,7 @@ export default function StockReportDashboard({
     return () => {
       cancelled = true
     }
-  }, [initialCompanyId])
+  }, [companyOptions, initialCompanyId])
 
   const generateReport = useCallback(async () => {
     if (!dateFrom || !dateTo) {
@@ -299,6 +329,10 @@ export default function StockReportDashboard({
 
   useEffect(() => {
     if (loadingCompanies) return
+    if (skipPreparedGenerationRef.current) {
+      skipPreparedGenerationRef.current = false
+      return
+    }
     if (!selectedCompanyId) return
     void generateReport()
   }, [loadingCompanies, selectedCompanyId, dateFrom, dateTo, entryTypeFilter, generateReport])

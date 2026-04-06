@@ -23,6 +23,13 @@ type SuperAdminOverviewClientProps = {
     users: UserRow[]
     permissionPreview: PermissionPreview | null
   }
+  initialProfile?: {
+    user?: {
+      userId?: string
+      name?: string
+      role?: string
+    }
+  } | null
 }
 
 type TraderRow = {
@@ -76,7 +83,7 @@ function buildConnectorPath(from: Point, to: Point): string {
   return `M ${from.x} ${from.y} C ${controlX1} ${from.y}, ${controlX2} ${to.y}, ${to.x} ${to.y}`
 }
 
-export default function SuperAdminOverviewClient({ initialOverview }: SuperAdminOverviewClientProps) {
+export default function SuperAdminOverviewClient({ initialOverview, initialProfile = null }: SuperAdminOverviewClientProps) {
   const [summaryStats, setSummaryStats] = useState(initialOverview.stats)
   const [traders, setTraders] = useState<TraderRow[]>(initialOverview.traders || [])
   const [companies, setCompanies] = useState<CompanyRow[]>(initialOverview.companies || [])
@@ -534,6 +541,7 @@ export default function SuperAdminOverviewClient({ initialOverview }: SuperAdmin
     <SuperAdminShell
       title="Super Admin Dashboard"
       subtitle="Tenant graph explorer: Trader -> Company -> User with strict scope visibility"
+      initialProfile={initialProfile}
     >
       <div className="space-y-6">
         {error ? <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}

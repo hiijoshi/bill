@@ -1,185 +1,137 @@
-'use client'
+import { redirect } from 'next/navigation'
 
-import { Suspense, useEffect, useMemo, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
-import { BarChart3, FileClock, Package, Receipt, ShoppingCart } from 'lucide-react'
+import ReportsMainClient from '@/app/reports/main/ReportsMainClient'
+import { loadServerAppShellBootstrap } from '@/lib/server-app-shell'
+import {
+  getServerFinancialYearRange,
+  loadServerOperationsReport,
+  loadServerReportDashboardWorkspace,
+  loadServerStockReportRows
+} from '@/lib/server-page-workspaces'
 
-import DashboardLayout from '@/app/components/DashboardLayout'
-import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
-import OperationsReportWorkspace from '@/components/reports/OperationsReportWorkspace'
-import ReportDashboard from '@/components/reports/ReportDashboard'
-import StockReportDashboard from '@/components/reports/StockReportDashboard'
-import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+type PageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}
 
 type ReportType = 'main' | 'purchase' | 'sales' | 'stock' | 'operations'
 type OperationsView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'cash-ledger' | 'bank-ledger'
 
-const normalizeReportType = (value: string | null): ReportType => {
-  if (value === 'purchase' || value === 'sales' || value === 'stock' || value === 'operations') return value
+function normalizeReportType(value: string | string[] | undefined): ReportType {
+  const normalized = Array.isArray(value) ? value[0] : value
+  if (normalized === 'purchase' || normalized === 'sales' || normalized === 'stock' || normalized === 'operations') {
+    return normalized
+  }
   return 'main'
 }
 
-const normalizeOperationsView = (value: string | null): OperationsView => {
+function normalizeOperationsView(value: string | string[] | undefined): OperationsView {
+  const normalized = Array.isArray(value) ? value[0] : value
   if (
-    value === 'outstanding' ||
-    value === 'ledger' ||
-    value === 'daily-transaction' ||
-    value === 'daily-consolidated' ||
-    value === 'cash-ledger' ||
-    value === 'bank-ledger'
+    normalized === 'ledger' ||
+    normalized === 'daily-transaction' ||
+    normalized === 'daily-consolidated' ||
+    normalized === 'cash-ledger' ||
+    normalized === 'bank-ledger'
   ) {
-    return value
+    return normalized
   }
   return 'outstanding'
 }
 
-export default function ReportsMainPage() {
-  return (
-    <Suspense fallback={<AppLoaderShell kind="reports" fullscreen />}>
-      <ReportsMainPageContent />
-    </Suspense>
-  )
-}
+export default async function ReportsMainPage({ searchParams }: PageProps) {
+  const params = await searchParams
+  const shellBootstrap = await loadServerAppShellBootstrap({ searchParams: params })
 
-function ReportsMainPageContent() {
-  const router = useRouter()
-  const searchParams = useSearchParams()
-
-  const [companyId, setCompanyId] = useState('')
-  const [companyResolving, setCompanyResolving] = useState(true)
-  const [companyWarning, setCompanyWarning] = useState('')
-
-  const activeReportType = useMemo<ReportType>(() => {
-    return normalizeReportType(searchParams.get('reportType'))
-  }, [searchParams])
-
-  const activeOperationsView = useMemo<OperationsView>(() => {
-    return normalizeOperationsView(searchParams.get('view'))
-  }, [searchParams])
-
-  useEffect(() => {
-    let cancelled = false
-
-    const loadReportScope = async () => {
-      setCompanyResolving(true)
-
-      let resolvedCompanyId = ''
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        resolvedCompanyId = await resolveCompanyId(window.location.search)
-        if (resolvedCompanyId) break
-        await new Promise((resolve) => setTimeout(resolve, 40))
-      }
-
-      if (cancelled) return
-
-      setCompanyId(resolvedCompanyId || '')
-      setCompanyWarning(resolvedCompanyId ? '' : 'Company is not resolved yet. Data may be limited until company is selected.')
-      if (resolvedCompanyId) {
-        stripCompanyParamsFromUrl()
-      }
-      setCompanyResolving(false)
-    }
-
-    void loadReportScope()
-
-    const onCompanyChanged = () => {
-      void loadReportScope()
-    }
-
-    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
-
-    return () => {
-      cancelled = true
-      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
-    }
-  }, [])
-
-  const openReport = (type: ReportType) => {
-    const params = new URLSearchParams()
-    if (type !== 'main') {
-      params.set('reportType', type)
-    }
-    if (companyId) {
-      params.set('companyId', companyId)
-    }
-    const query = params.toString()
-    router.push(`/reports/main${query ? `?${query}` : ''}`)
+  if (!shellBootstrap) {
+    redirect('/login')
   }
 
-  if (companyResolving) {
-    return <AppLoaderShell kind="reports" companyId="" lockViewport />
-  }
+  const companyId = shellBootstrap.activeCompanyId || ''
+  const companyName = shellBootstrap.companies.find((company) => company.id === companyId)?.name || companyId
+  const reportType = normalizeReportType(params.reportType)
+  const operationsView = normalizeOperationsView(params.view)
+  const initialPartyId = typeof params.partyId === 'string' ? params.partyId.trim() : ''
+  const financialYearRange = getServerFinancialYearRange(shellBootstrap.layoutData.financialYearPayload)
+  const generatedAt = new Date().toLocaleString('en-IN')
+
+  const reportDashboardSeed =
+    companyId && reportType !== 'stock' && reportType !== 'operations'
+      ? await loadServerReportDashboardWorkspace(
+          companyId,
+          reportType === 'main' ? 'main' : reportType,
+          shellBootstrap.layoutData.financialYearPayload
+        )
+          .then((payload) => ({
+            datasets: [
+              {
+                companyId,
+                companyName,
+                purchaseBills: Array.isArray(payload.purchaseBills) ? payload.purchaseBills : [],
+                specialPurchaseBills: Array.isArray(payload.specialPurchaseBills) ? payload.specialPurchaseBills : [],
+                salesBills: Array.isArray(payload.salesBills) ? payload.salesBills : [],
+                payments: Array.isArray(payload.payments) ? payload.payments : [],
+                banks: Array.isArray(payload.banks) ? payload.banks : []
+              }
+            ],
+            dateFrom: financialYearRange.dateFromInput,
+            dateTo: financialYearRange.dateToInput,
+            lastGeneratedAt: generatedAt
+          }))
+          .catch(() => null)
+      : null
+
+  const stockReportSeed =
+    companyId && reportType === 'stock'
+      ? await loadServerStockReportRows(
+          companyId,
+          shellBootstrap.layoutData.financialYearPayload
+        )
+          .then((rows) => ({
+            rows,
+            dateFrom: financialYearRange.dateFromInput,
+            dateTo: financialYearRange.dateToInput,
+            lastGeneratedAt: generatedAt
+          }))
+          .catch(() => null)
+      : null
+
+  const operationsReportSeed =
+    companyId && reportType === 'operations'
+      ? await loadServerOperationsReport(
+          companyId,
+          operationsView,
+          shellBootstrap.layoutData.financialYearPayload,
+          {
+            partyId: initialPartyId
+          }
+        )
+          .then((payload) => ({
+            payload: payload as Record<string, unknown>,
+            dateFrom: financialYearRange.dateFromInput,
+            dateTo: financialYearRange.dateToInput,
+            lastGeneratedAt:
+              typeof (payload as { meta?: { generatedAt?: string } })?.meta?.generatedAt === 'string'
+                ? new Date((payload as { meta?: { generatedAt?: string } }).meta!.generatedAt!).toLocaleString('en-IN')
+                : generatedAt
+          }))
+          .catch(() => null)
+      : null
 
   return (
-      <DashboardLayout companyId={companyId} lockViewport>
-        <div className="min-h-full bg-[#f5f5f7]">
-        <div className="mx-auto w-full max-w-[1600px] space-y-6 p-6 md:p-8">
-          {companyWarning && (
-            <div className="rounded-[1.25rem] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              {companyWarning}
-            </div>
-          )}
-
-          <section className="overflow-hidden rounded-[2rem] border border-black/5 bg-[#fbfaf8] shadow-[0_24px_60px_-40px_rgba(15,23,42,0.16)]">
-            <div className="px-4 py-4 md:px-6">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-500">Reports</p>
-                  <h1 className="mt-1 text-xl font-semibold tracking-tight text-slate-950 md:text-2xl">Switch report</h1>
-                </div>
-
-                <div className="flex overflow-x-auto pb-1">
-                  <div className="flex min-w-max gap-2">
-                    {[
-                      { key: 'main', label: 'Dashboard', icon: BarChart3 },
-                      { key: 'purchase', label: 'Purchase', icon: ShoppingCart },
-                      { key: 'sales', label: 'Sales', icon: Receipt },
-                      { key: 'stock', label: 'Stock', icon: Package },
-                      { key: 'operations', label: 'Operations', icon: FileClock }
-                    ].map((item) => {
-                      const active = activeReportType === item.key
-                      return (
-                        <button
-                          key={item.key}
-                          type="button"
-                          onClick={() => openReport(item.key as ReportType)}
-                          className={`inline-flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-sm font-medium transition-colors ${
-                            active
-                              ? 'border-slate-900 bg-slate-900 text-white'
-                              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                          }`}
-                        >
-                          <item.icon className="h-4 w-4" />
-                          <span>{item.label}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {activeReportType === 'stock' ? (
-            <StockReportDashboard
-              initialCompanyId={companyId}
-              onBackToDashboard={() => router.push('/main/dashboard')}
-            />
-          ) : activeReportType === 'operations' ? (
-            <OperationsReportWorkspace
-              initialCompanyId={companyId}
-              initialView={activeOperationsView}
-              onBackToDashboard={() => router.push('/main/dashboard')}
-            />
-          ) : (
-            <ReportDashboard
-              initialCompanyId={companyId}
-              reportType={activeReportType === 'main' ? 'main' : activeReportType}
-              onBackToDashboard={() => router.push('/main/dashboard')}
-            />
-          )}
-        </div>
-      </div>
-    </DashboardLayout>
+    <ReportsMainClient
+      initialCompanyId={companyId}
+      initialLayoutData={shellBootstrap.layoutData}
+      companyOptions={shellBootstrap.companies.map((company) => ({
+        id: company.id,
+        name: company.name
+      }))}
+      initialReportType={reportType}
+      initialOperationsView={operationsView}
+      initialSelectedPartyId={initialPartyId}
+      initialCompanyWarning={companyId ? '' : 'Company is not resolved yet. Data may be limited until company is selected.'}
+      initialReportDashboardSeed={reportDashboardSeed}
+      initialStockReportSeed={stockReportSeed}
+      initialOperationsReportSeed={operationsReportSeed}
+    />
   )
 }

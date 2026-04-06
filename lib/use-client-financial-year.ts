@@ -7,6 +7,7 @@ import {
   getEffectiveClientFinancialYear,
   getFinancialYearDateRangeInput,
   loadClientFinancialYears,
+  primeClientFinancialYears,
   type ClientFinancialYearPayload,
   type ClientFinancialYearSummary,
   type FinancialYearDateRangeInput
@@ -22,9 +23,11 @@ const EMPTY_PAYLOAD: ClientFinancialYearPayload = {
 export function useClientFinancialYear(options: {
   traderId?: string
   enabled?: boolean
+  initialPayload?: ClientFinancialYearPayload | null
 } = {}) {
-  const [payload, setPayload] = useState<ClientFinancialYearPayload>(EMPTY_PAYLOAD)
-  const [loading, setLoading] = useState(Boolean(options.enabled !== false))
+  const initialPayload = options.initialPayload || EMPTY_PAYLOAD
+  const [payload, setPayload] = useState<ClientFinancialYearPayload>(initialPayload)
+  const [loading, setLoading] = useState(Boolean(options.enabled !== false && !options.initialPayload))
   const [error, setError] = useState<string | null>(null)
 
   const reload = useCallback(async (force = false) => {
@@ -55,13 +58,21 @@ export function useClientFinancialYear(options: {
   useEffect(() => {
     let cancelled = false
 
+    if (options.initialPayload) {
+      primeClientFinancialYears(options.initialPayload, options.traderId ? options.traderId : 'self')
+    }
+
     const load = async (force = false) => {
       const nextPayload = await reload(force)
       if (cancelled) return
       setPayload(nextPayload)
     }
 
-    void load(false)
+    if (!options.initialPayload) {
+      void load(false)
+    } else {
+      setLoading(false)
+    }
 
     const onFinancialYearChanged = () => {
       void load(true)
@@ -73,7 +84,7 @@ export function useClientFinancialYear(options: {
       cancelled = true
       window.removeEventListener(APP_FINANCIAL_YEAR_CHANGED_EVENT, onFinancialYearChanged)
     }
-  }, [reload])
+  }, [options.initialPayload, options.traderId, reload])
 
   const financialYear = getEffectiveClientFinancialYear(payload)
   const financialYearRange = getFinancialYearDateRangeInput(financialYear)

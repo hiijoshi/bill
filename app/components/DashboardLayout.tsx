@@ -11,16 +11,20 @@ import { clearClientCache, getOrLoadClientCache, setClientCache } from '@/lib/cl
 import { APP_COMPANY_CHANGED_EVENT, notifyAppCompanyChanged, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import {
   loadShellBootstrap,
-  SHELL_ACTIVE_COMPANY_CACHE_KEY
+  SHELL_ACTIVE_COMPANY_CACHE_KEY,
+  SHELL_AUTH_CACHE_KEY,
+  SHELL_COMPANIES_CACHE_KEY
 } from '@/lib/client-shell-data'
 import { switchClientFinancialYear } from '@/lib/client-financial-years'
 import { useClientFinancialYear } from '@/lib/use-client-financial-year'
+import type { DashboardLayoutInitialData, SubscriptionBannerPayload } from '@/lib/app-shell-types'
 
 interface DashboardLayoutProps {
   children: React.ReactNode
   companyId: string
   headerActions?: React.ReactNode
   lockViewport?: boolean
+  initialData?: DashboardLayoutInitialData | null
 }
 
 type AuthMePayload = {
@@ -42,50 +46,71 @@ type CompanySummary = {
   locked?: boolean
 }
 
-type SubscriptionBannerPayload = {
-  entitlement?: {
-    lifecycleState?: string | null
-    message?: string | null
-    daysLeft?: number | null
-  } | null
-  dataLifecycle?: {
-    state?: string | null
-    readOnlyMode?: boolean
-    message?: string | null
-  } | null
-  currentSubscription?: {
-    planName?: string | null
-    endDate?: string | null
-  } | null
-}
-
 const SUBSCRIPTION_CACHE_KEY = 'shell:subscription-current'
 const SUBSCRIPTION_CACHE_AGE_MS = 60_000
 const APP_SHELL_AUTH_LOADED_EVENT = 'app-shell-auth-loaded'
 
-export default function DashboardLayout({ children, companyId, headerActions, lockViewport = false }: DashboardLayoutProps) {
+export default function DashboardLayout({
+  children,
+  companyId,
+  headerActions,
+  lockViewport = false,
+  initialData = null
+}: DashboardLayoutProps) {
+  const initialShellBootstrap = initialData?.shellBootstrap || null
+  const initialAuthPayload = (initialShellBootstrap?.auth as AuthMePayload | null) || null
+  const initialAvailableCompanies = initialShellBootstrap?.companies || []
+  const initialResolvedCompanyId =
+    String(companyId || initialShellBootstrap?.activeCompanyId || initialAuthPayload?.company?.id || '').trim()
+  const initialCompanyName =
+    (String(initialAuthPayload?.company?.id || '').trim() === initialResolvedCompanyId
+      ? String(initialAuthPayload?.company?.name || '').trim()
+      : '') ||
+    initialAvailableCompanies.find((row) => row.id === initialResolvedCompanyId)?.name ||
+    (initialResolvedCompanyId ? 'Selected company' : null)
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
-  const [currentUser, setCurrentUser] = useState<string | null>(null)
-  const [currentUserName, setCurrentUserName] = useState<string | null>(null)
-  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null)
-  const [availableCompanies, setAvailableCompanies] = useState<CompanySummary[]>([])
-  const [resolvedCompanyId, setResolvedCompanyId] = useState(companyId)
-  const [currentCompanyName, setCurrentCompanyName] = useState<string | null>(null)
+  const [currentUser, setCurrentUser] = useState<string | null>(initialAuthPayload?.user?.userId || null)
+  const [currentUserName, setCurrentUserName] = useState<string | null>(initialAuthPayload?.user?.name || null)
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(initialAuthPayload?.user?.role || null)
+  const [availableCompanies, setAvailableCompanies] = useState<CompanySummary[]>(initialAvailableCompanies)
+  const [resolvedCompanyId, setResolvedCompanyId] = useState(initialResolvedCompanyId)
+  const [currentCompanyName, setCurrentCompanyName] = useState<string | null>(initialCompanyName)
   const [isSwitchingCompany, setIsSwitchingCompany] = useState(false)
   const [companySwitchError, setCompanySwitchError] = useState<string | null>(null)
   const [isSwitchingFinancialYear, setIsSwitchingFinancialYear] = useState(false)
   const [financialYearSwitchError, setFinancialYearSwitchError] = useState<string | null>(null)
-  const [subscriptionBanner, setSubscriptionBanner] = useState<SubscriptionBannerPayload | null>(null)
+  const [subscriptionBanner, setSubscriptionBanner] = useState<SubscriptionBannerPayload | null>(initialData?.subscriptionBanner || null)
   const {
     payload: financialYearPayload,
     financialYear,
     reload: reloadFinancialYears
-  } = useClientFinancialYear()
+  } = useClientFinancialYear({
+    initialPayload: initialData?.financialYearPayload || undefined
+  })
   const router = useRouter()
 
   const loadShellContext = useCallback(async (force = false) => {
     try {
+      if (!force && initialShellBootstrap) {
+        setAvailableCompanies(initialShellBootstrap.companies)
+        setSubscriptionBanner(initialData?.subscriptionBanner || null)
+        setCurrentUser(initialAuthPayload?.user?.userId || null)
+        setCurrentUserName(initialAuthPayload?.user?.name || null)
+        setCurrentUserRole(initialAuthPayload?.user?.role || null)
+        if (typeof window !== 'undefined') {
+          if (initialAuthPayload) {
+            setClientCache(SHELL_AUTH_CACHE_KEY, initialAuthPayload, { persist: true })
+          }
+          setClientCache(SHELL_COMPANIES_CACHE_KEY, initialShellBootstrap.companies, { persist: true })
+          if (initialResolvedCompanyId) {
+            setClientCache(SHELL_ACTIVE_COMPANY_CACHE_KEY, initialResolvedCompanyId, { persist: true })
+          }
+          window.dispatchEvent(new Event(APP_SHELL_AUTH_LOADED_EVENT))
+        }
+        return
+      }
+
       const [shellBootstrap, subscriptionPayload] = await Promise.all([
         loadShellBootstrap({
           force,
@@ -171,7 +196,7 @@ export default function DashboardLayout({ children, companyId, headerActions, lo
     } catch (error) {
       void error
     }
-  }, [companyId, router])
+  }, [companyId, initialAuthPayload, initialData?.subscriptionBanner, initialResolvedCompanyId, initialShellBootstrap, router])
 
   useEffect(() => {
     const run = (force = false) => {

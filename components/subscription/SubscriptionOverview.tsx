@@ -128,10 +128,19 @@ function getBadgeVariant(state?: string | null): 'default' | 'secondary' | 'dest
   return 'outline'
 }
 
-export default function SubscriptionOverview() {
-  const [current, setCurrent] = useState<CurrentPayload | null>(null)
-  const [history, setHistory] = useState<HistoryPayload | null>(null)
-  const [loading, setLoading] = useState(true)
+interface SubscriptionOverviewProps {
+  initialCurrent?: CurrentPayload | null
+  initialHistory?: HistoryPayload | null
+}
+
+export default function SubscriptionOverview({
+  initialCurrent = null,
+  initialHistory = null
+}: SubscriptionOverviewProps) {
+  const hasInitialData = Boolean(initialCurrent || initialHistory)
+  const [current, setCurrent] = useState<CurrentPayload | null>(initialCurrent)
+  const [history, setHistory] = useState<HistoryPayload | null>(initialHistory)
+  const [loading, setLoading] = useState(!hasInitialData)
   const [actionLoading, setActionLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -167,8 +176,9 @@ export default function SubscriptionOverview() {
   }, [])
 
   useEffect(() => {
+    if (hasInitialData) return
     void load()
-  }, [load])
+  }, [hasInitialData, load])
 
   const currentLifecycleState = current?.dataLifecycle?.state || current?.entitlement?.lifecycleState || 'none'
 

@@ -255,6 +255,14 @@ export async function switchClientFinancialYear(financialYearId: string | null):
   return payload
 }
 
+export function primeClientFinancialYears(
+  payload: ClientFinancialYearPayload,
+  cacheScope: string = 'self'
+): void {
+  const key = `${FINANCIAL_YEAR_CACHE_KEY}:${cacheScope}`
+  setClientCache(key, payload, { persist: true })
+}
+
 export function notifyAppFinancialYearChanged(financialYearId: string): void {
   if (typeof window === 'undefined') return
   window.dispatchEvent(

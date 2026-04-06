@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BarChart3, Download, FileText, Filter, RefreshCw, Search, Table2 } from 'lucide-react'
 import { ActionButton } from '@/components/performance/action-button'
 import { ReportWorkspaceSkeleton } from '@/components/performance/page-placeholders'
@@ -204,6 +204,10 @@ interface ReportDashboardProps {
   onBackToDashboard?: () => void
   reportType?: ReportType
   companyOptions?: CompanyRecord[]
+  initialDatasets?: CompanyDataset[] | null
+  initialDateFrom?: string
+  initialDateTo?: string
+  initialLastGeneratedAt?: string
 }
 
 const COMPANIES_CACHE_KEY = 'shell:companies'
@@ -442,17 +446,456 @@ const derivePaymentSplit = (payment: PaymentRecord, modeBucket: ModeBucket): { c
   return { cash: 0, online: 0 }
 }
 
+function buildReportOutput(args: {
+  datasets: CompanyDataset[]
+  reportType: ReportType
+  dateFrom: string
+  dateTo: string
+  selectedCompanyName: string
+}) {
+  const fromDate = parseDate(`${args.dateFrom}T00:00:00`)
+  const toDate = parseDate(`${args.dateTo}T23:59:59`)
+  if (!fromDate || !toDate || fromDate > toDate) {
+    return {
+      generatedRows: [] as ReportRow[],
+      analysisSnapshot: { ...EMPTY_ANALYSIS_SNAPSHOT },
+      availableBanks: [] as string[],
+      noticeMessage: '',
+      errorMessage: 'Invalid date range selected.'
+    }
+  }
+
+  const collectedBanks = new Set<string>()
+  const reportRows: ReportRow[] = []
+  const analysisAccumulator: AnalysisSnapshot = { ...EMPTY_ANALYSIS_SNAPSHOT }
+
+  for (const dataset of args.datasets) {
+    const paymentsByBill = new Map<string, PaymentRecord[]>()
+
+    for (const payment of dataset.payments) {
+      const billType = String(payment.billType || '').toLowerCase()
+      const key = `${billType}:${payment.billId}`
+      const rows = paymentsByBill.get(key) || []
+      rows.push(payment)
+      paymentsByBill.set(key, rows)
+    }
+
+    const bankNameByIfsc = new Map<string, string>()
+    for (const bank of dataset.banks) {
+      const ifsc = String(bank.ifscCode || '').trim().toUpperCase()
+      const name = String(bank.name || '').trim()
+      if (ifsc && name) {
+        bankNameByIfsc.set(ifsc, name)
+        collectedBanks.add(name)
+      }
+    }
+
+    for (const bill of dataset.purchaseBills) {
+      const farmer = bill.farmer || {}
+      const purchaseItems = Array.isArray(bill.purchaseItems) ? bill.purchaseItems : []
+      const totalWeight = purchaseItems.reduce((acc, item) => acc + normalizeAmount(item.qty), 0)
+      const totalBags = purchaseItems.reduce((acc, item) => acc + normalizeAmount(item.bags), 0)
+      const totalHammali = purchaseItems.reduce((acc, item) => acc + normalizeAmount(item.hammali), 0)
+      const weightedRate = purchaseItems.reduce(
+        (acc, item) => acc + normalizeAmount(item.qty) * normalizeAmount(item.rate),
+        0
+      )
+
+      const allPayments = (paymentsByBill.get(`purchase:${bill.id}`) || []).sort(
+        (left, right) => toTimestamp(right.payDate) - toTimestamp(left.payDate)
+      )
+      const paymentsInRange = allPayments.filter((payment) => passesDateRange(payment.payDate, fromDate, toDate))
+      const billInRange = passesDateRange(bill.billDate, fromDate, toDate)
+      if (!billInRange && paymentsInRange.length === 0) continue
+
+      if (billInRange) {
+        const purchaseTotal = normalizeAmount(bill.totalAmount)
+        const purchasePaid = normalizeAmount(bill.paidAmount)
+        analysisAccumulator.purchaseTotal += purchaseTotal
+        analysisAccumulator.purchasePaid += purchasePaid
+        analysisAccumulator.purchaseBalance += Math.max(0, purchaseTotal - purchasePaid)
+        analysisAccumulator.purchaseWeightedRate += weightedRate
+        analysisAccumulator.purchaseWeight += totalWeight
+      }
+
+      if (args.reportType === 'sales') continue
+
+      let cashAmount = 0
+      let onlineAmount = 0
+      let bankAmount = 0
+      let cashPaymentDate = ''
+      let onlinePaymentDate = ''
+      let bankPaymentDate = ''
+
+      for (const payment of paymentsInRange) {
+        const modeBucket = resolveModeBucket(payment.mode)
+        const split = derivePaymentSplit(payment, modeBucket)
+
+        if (modeBucket === 'cash') {
+          cashAmount += split.cash
+          if (!cashPaymentDate) cashPaymentDate = formatCompactDate(payment.cashPaymentDate || payment.payDate)
+        } else if (modeBucket === 'bank') {
+          bankAmount += split.online
+          if (!bankPaymentDate) bankPaymentDate = formatCompactDate(payment.onlinePaymentDate || payment.payDate)
+        } else if (modeBucket === 'online') {
+          onlineAmount += split.online
+          if (!onlinePaymentDate) onlinePaymentDate = formatCompactDate(payment.onlinePaymentDate || payment.payDate)
+        }
+      }
+
+      if (paymentsInRange.length === 0 && normalizeAmount(bill.paidAmount) > 0) {
+        cashAmount = normalizeAmount(bill.paidAmount)
+        cashPaymentDate = formatCompactDate(bill.billDate)
+      }
+
+      const netOnlineAmount = onlineAmount + bankAmount
+      const latestPayment = paymentsInRange[0]
+
+      let modeBucket: ModeBucket = 'none'
+      if (cashAmount > 0 && netOnlineAmount > 0) modeBucket = 'mixed'
+      else if (cashAmount > 0) modeBucket = 'cash'
+      else if (bankAmount > 0) modeBucket = 'bank'
+      else if (onlineAmount > 0) modeBucket = 'online'
+
+      const purchaseTotal = normalizeAmount(bill.totalAmount)
+      const purchasePaid = normalizeAmount(bill.paidAmount)
+      const status = purchaseTotal > 0 && purchasePaid >= purchaseTotal ? 'paid' : purchasePaid > 0 ? 'partial' : 'unpaid'
+      const sellerIfsc = String(farmer.ifscCode || latestPayment?.ifscCode || '').trim().toUpperCase()
+      const bankName =
+        String(farmer.bankName || latestPayment?.bankNameSnapshot || '').trim() ||
+        (sellerIfsc ? bankNameByIfsc.get(sellerIfsc) || '' : '') ||
+        'Not Available'
+
+      if (bankName && bankName !== 'Not Available') collectedBanks.add(bankName)
+
+      reportRows.push({
+        Party_Type: 'Farmer',
+        Bill_No: String(bill.billNo || '').trim(),
+        Seller_Name: String(bill.farmerNameSnapshot || farmer.name || '').trim(),
+        Seller_Address: String(bill.farmerAddressSnapshot || farmer.address || '').trim(),
+        SellerMob: String(bill.farmerContactSnapshot || farmer.phone1 || '').trim(),
+        Anubandh_No: String(bill.krashakAnubandhSnapshot || farmer.krashakAnubandhNumber || '').trim(),
+        Anubandh_Date: formatCompactDate(bill.billDate),
+        Bhugtan_No: String(latestPayment?.billNo || bill.billNo || '').trim(),
+        Bhugtan_Date: formatCompactDate(latestPayment?.payDate),
+        Auction_Rate: round2(totalWeight > 0 ? weightedRate / totalWeight : normalizeAmount(purchaseItems[0]?.rate)),
+        Actual_Weight: round3(totalWeight),
+        No_of_Bags: round2(totalBags),
+        Total_Hammali_Toul: round2(totalHammali),
+        Farmer_Payment: round2(normalizeAmount(bill.totalAmount)),
+        Payment_Mode: resolveModeCode(modeBucket),
+        CashAmount: round2(cashAmount),
+        Cash_Payment_Date: cashPaymentDate,
+        Online_Pay_Amount: round2(netOnlineAmount),
+        Online_Payment_Date: onlinePaymentDate || bankPaymentDate,
+        IFSC_Code: sellerIfsc || '0',
+        Farmer_BankAccount: String(farmer.accountNo || latestPayment?.beneficiaryBankAccount || '').trim() || '0',
+        UTR: String(latestPayment?.txnRef || '').trim() || '0',
+        ASFlag: String(latestPayment?.asFlag || '').trim() || statusToFlag(status),
+        Pending_Amount: round2(Math.max(0, purchaseTotal - purchasePaid)),
+        Payment_Status: status,
+        Bank_Name: bankName,
+        Company_Name: dataset.companyName,
+        _status: status,
+        _modeBucket: modeBucket,
+        _sortTs: toTimestamp(latestPayment?.payDate) || toTimestamp(bill.billDate),
+        _source: 'purchase'
+      })
+    }
+
+    for (const bill of dataset.specialPurchaseBills) {
+      const supplier = bill.supplier || {}
+      const specialItems = Array.isArray(bill.specialPurchaseItems) ? bill.specialPurchaseItems : []
+      const totalWeight = specialItems.reduce((acc, item) => acc + normalizeAmount(item.weight), 0)
+      const totalBags = specialItems.reduce((acc, item) => acc + normalizeAmount(item.noOfBags), 0)
+      const totalOtherAmount = specialItems.reduce((acc, item) => acc + normalizeAmount(item.otherAmount), 0)
+      const weightedRate = specialItems.reduce(
+        (acc, item) => acc + normalizeAmount(item.weight) * normalizeAmount(item.rate),
+        0
+      )
+
+      const allPayments = (paymentsByBill.get(`purchase:${bill.id}`) || []).sort(
+        (left, right) => toTimestamp(right.payDate) - toTimestamp(left.payDate)
+      )
+      const paymentsInRange = allPayments.filter((payment) => passesDateRange(payment.payDate, fromDate, toDate))
+      const billInRange = passesDateRange(bill.billDate, fromDate, toDate)
+      if (!billInRange && paymentsInRange.length === 0) continue
+
+      if (billInRange) {
+        const specialTotal = normalizeAmount(bill.totalAmount)
+        const specialPaid = normalizeAmount(bill.paidAmount)
+        analysisAccumulator.purchaseTotal += specialTotal
+        analysisAccumulator.purchasePaid += specialPaid
+        analysisAccumulator.purchaseBalance += Math.max(0, specialTotal - specialPaid)
+        analysisAccumulator.purchaseWeightedRate += weightedRate
+        analysisAccumulator.purchaseWeight += totalWeight
+      }
+
+      if (args.reportType === 'sales') continue
+
+      let cashAmount = 0
+      let onlineAmount = 0
+      let bankAmount = 0
+      let cashPaymentDate = ''
+      let onlinePaymentDate = ''
+      let bankPaymentDate = ''
+
+      for (const payment of paymentsInRange) {
+        const modeBucket = resolveModeBucket(payment.mode)
+        const split = derivePaymentSplit(payment, modeBucket)
+
+        if (modeBucket === 'cash') {
+          cashAmount += split.cash
+          if (!cashPaymentDate) cashPaymentDate = formatCompactDate(payment.cashPaymentDate || payment.payDate)
+        } else if (modeBucket === 'bank') {
+          bankAmount += split.online
+          if (!bankPaymentDate) bankPaymentDate = formatCompactDate(payment.onlinePaymentDate || payment.payDate)
+        } else if (modeBucket === 'online') {
+          onlineAmount += split.online
+          if (!onlinePaymentDate) onlinePaymentDate = formatCompactDate(payment.onlinePaymentDate || payment.payDate)
+        }
+      }
+
+      const specialTotal = normalizeAmount(bill.totalAmount)
+      const specialPaid = normalizeAmount(bill.paidAmount)
+
+      if (paymentsInRange.length === 0 && specialPaid > 0) {
+        cashAmount = specialPaid
+        cashPaymentDate = formatCompactDate(bill.billDate)
+      }
+
+      const netOnlineAmount = onlineAmount + bankAmount
+      const latestPayment = paymentsInRange[0]
+
+      let modeBucket: ModeBucket = 'none'
+      if (cashAmount > 0 && netOnlineAmount > 0) modeBucket = 'mixed'
+      else if (cashAmount > 0) modeBucket = 'cash'
+      else if (bankAmount > 0) modeBucket = 'bank'
+      else if (onlineAmount > 0) modeBucket = 'online'
+
+      const status = specialTotal > 0 && specialPaid >= specialTotal ? 'paid' : specialPaid > 0 ? 'partial' : 'unpaid'
+      const sellerIfsc = String(supplier.ifscCode || latestPayment?.ifscCode || '').trim().toUpperCase()
+      const bankName =
+        String(supplier.bankName || latestPayment?.bankNameSnapshot || '').trim() ||
+        (sellerIfsc ? bankNameByIfsc.get(sellerIfsc) || '' : '') ||
+        'Not Available'
+
+      if (bankName && bankName !== 'Not Available') collectedBanks.add(bankName)
+
+      reportRows.push({
+        Party_Type: 'Supplier',
+        Bill_No: String(bill.supplierInvoiceNo || '').trim(),
+        Seller_Name: String(supplier.name || '').trim(),
+        Seller_Address: String(supplier.address || '').trim(),
+        SellerMob: String(supplier.phone1 || '').trim(),
+        Anubandh_No: String(supplier.gstNumber || bill.supplierInvoiceNo || '').trim(),
+        Anubandh_Date: formatCompactDate(bill.billDate),
+        Bhugtan_No: String(latestPayment?.billNo || bill.supplierInvoiceNo || '').trim(),
+        Bhugtan_Date: formatCompactDate(latestPayment?.payDate),
+        Auction_Rate: round2(totalWeight > 0 ? weightedRate / totalWeight : normalizeAmount(specialItems[0]?.rate)),
+        Actual_Weight: round3(totalWeight),
+        No_of_Bags: round2(totalBags),
+        Total_Hammali_Toul: round2(totalOtherAmount),
+        Farmer_Payment: round2(specialTotal),
+        Payment_Mode: resolveModeCode(modeBucket),
+        CashAmount: round2(cashAmount),
+        Cash_Payment_Date: cashPaymentDate,
+        Online_Pay_Amount: round2(netOnlineAmount),
+        Online_Payment_Date: onlinePaymentDate || bankPaymentDate,
+        IFSC_Code: sellerIfsc || '0',
+        Farmer_BankAccount: String(supplier.accountNo || latestPayment?.beneficiaryBankAccount || '').trim() || '0',
+        UTR: String(latestPayment?.txnRef || '').trim() || '0',
+        ASFlag: String(latestPayment?.asFlag || '').trim() || statusToFlag(status),
+        Pending_Amount: round2(Math.max(0, specialTotal - specialPaid)),
+        Payment_Status: status,
+        Bank_Name: bankName,
+        Company_Name: dataset.companyName,
+        _status: status,
+        _modeBucket: modeBucket,
+        _sortTs: toTimestamp(latestPayment?.payDate) || toTimestamp(bill.billDate),
+        _source: 'purchase'
+      })
+    }
+
+    for (const bill of dataset.salesBills) {
+      const party = bill.party || {}
+      const salesItems = Array.isArray(bill.salesItems) ? bill.salesItems : []
+      const totalWeight = salesItems.reduce((acc, item) => acc + normalizeAmount(item.weight), 0)
+      const totalBags = salesItems.reduce((acc, item) => acc + normalizeAmount(item.bags), 0)
+      const weightedRate = salesItems.reduce(
+        (acc, item) => acc + normalizeAmount(item.weight) * normalizeAmount(item.rate),
+        0
+      )
+
+      const allPayments = (paymentsByBill.get(`sales:${bill.id}`) || []).sort(
+        (left, right) => toTimestamp(right.payDate) - toTimestamp(left.payDate)
+      )
+      const paymentsInRange = allPayments.filter((payment) => passesDateRange(payment.payDate, fromDate, toDate))
+      const billInRange = passesDateRange(bill.billDate, fromDate, toDate)
+      if (!billInRange && paymentsInRange.length === 0) continue
+
+      if (billInRange) {
+        const salesTotal = normalizeAmount(bill.totalAmount)
+        const salesReceived = normalizeAmount(bill.receivedAmount)
+        analysisAccumulator.salesTotal += salesTotal
+        analysisAccumulator.salesReceived += salesReceived
+        analysisAccumulator.salesBalance += Math.max(0, salesTotal - salesReceived)
+        analysisAccumulator.salesWeightedRate += weightedRate
+        analysisAccumulator.salesWeight += totalWeight
+      }
+
+      if (args.reportType === 'purchase') continue
+
+      let cashAmount = 0
+      let onlineAmount = 0
+      let bankAmount = 0
+      let cashPaymentDate = ''
+      let onlinePaymentDate = ''
+      let bankPaymentDate = ''
+
+      for (const payment of paymentsInRange) {
+        const modeBucket = resolveModeBucket(payment.mode)
+        const split = derivePaymentSplit(payment, modeBucket)
+
+        if (modeBucket === 'cash') {
+          cashAmount += split.cash
+          if (!cashPaymentDate) cashPaymentDate = formatCompactDate(payment.cashPaymentDate || payment.payDate)
+        } else if (modeBucket === 'bank') {
+          bankAmount += split.online
+          if (!bankPaymentDate) bankPaymentDate = formatCompactDate(payment.onlinePaymentDate || payment.payDate)
+        } else if (modeBucket === 'online') {
+          onlineAmount += split.online
+          if (!onlinePaymentDate) onlinePaymentDate = formatCompactDate(payment.onlinePaymentDate || payment.payDate)
+        }
+      }
+
+      if (paymentsInRange.length === 0 && normalizeAmount(bill.receivedAmount) > 0) {
+        cashAmount = normalizeAmount(bill.receivedAmount)
+        cashPaymentDate = formatCompactDate(bill.billDate)
+      }
+
+      const netOnlineAmount = onlineAmount + bankAmount
+      const latestPayment = paymentsInRange[0]
+
+      let modeBucket: ModeBucket = 'none'
+      if (cashAmount > 0 && netOnlineAmount > 0) modeBucket = 'mixed'
+      else if (cashAmount > 0) modeBucket = 'cash'
+      else if (bankAmount > 0) modeBucket = 'bank'
+      else if (onlineAmount > 0) modeBucket = 'online'
+
+      const salesTotal = normalizeAmount(bill.totalAmount)
+      const salesReceived = normalizeAmount(bill.receivedAmount)
+      const status = salesTotal > 0 && salesReceived >= salesTotal ? 'paid' : salesReceived > 0 ? 'partial' : 'unpaid'
+      const sellerIfsc = String(latestPayment?.ifscCode || '').trim().toUpperCase()
+      const bankName =
+        String(latestPayment?.bankNameSnapshot || '').trim() ||
+        (sellerIfsc ? bankNameByIfsc.get(sellerIfsc) || '' : '') ||
+        'Not Available'
+
+      if (bankName && bankName !== 'Not Available') collectedBanks.add(bankName)
+
+      reportRows.push({
+        Party_Type: 'Buyer',
+        Bill_No: String(bill.billNo || '').trim(),
+        Seller_Name: String(party.name || '').trim(),
+        Seller_Address: String(party.address || '').trim(),
+        SellerMob: String(party.phone1 || '').trim(),
+        Anubandh_No: String(bill.billNo || '').trim(),
+        Anubandh_Date: formatCompactDate(bill.billDate),
+        Bhugtan_No: String(latestPayment?.billNo || bill.billNo || '').trim(),
+        Bhugtan_Date: formatCompactDate(latestPayment?.payDate),
+        Auction_Rate: round2(totalWeight > 0 ? weightedRate / totalWeight : normalizeAmount(salesItems[0]?.rate)),
+        Actual_Weight: round3(totalWeight),
+        No_of_Bags: round2(totalBags),
+        Total_Hammali_Toul: 0,
+        Farmer_Payment: round2(normalizeAmount(bill.totalAmount)),
+        Payment_Mode: resolveModeCode(modeBucket),
+        CashAmount: round2(cashAmount),
+        Cash_Payment_Date: cashPaymentDate,
+        Online_Pay_Amount: round2(netOnlineAmount),
+        Online_Payment_Date: onlinePaymentDate || bankPaymentDate,
+        IFSC_Code: sellerIfsc || '0',
+        Farmer_BankAccount: String(latestPayment?.beneficiaryBankAccount || '').trim() || '0',
+        UTR: String(latestPayment?.txnRef || '').trim() || '0',
+        ASFlag: String(latestPayment?.asFlag || '').trim() || statusToFlag(status),
+        Pending_Amount: round2(Math.max(0, salesTotal - salesReceived)),
+        Payment_Status: status,
+        Bank_Name: bankName,
+        Company_Name: dataset.companyName,
+        _status: status,
+        _modeBucket: modeBucket,
+        _sortTs: toTimestamp(latestPayment?.payDate) || toTimestamp(bill.billDate),
+        _source: 'sales'
+      })
+    }
+  }
+
+  reportRows.sort((left, right) => {
+    const paymentDiff = right._sortTs - left._sortTs
+    if (paymentDiff !== 0) return paymentDiff
+    return String(left.Seller_Name).localeCompare(String(right.Seller_Name))
+  })
+
+  const purchaseRecordCount = args.datasets.reduce(
+    (sum, dataset) => sum + dataset.purchaseBills.length + dataset.specialPurchaseBills.length,
+    0
+  )
+  const salesRecordCount = args.datasets.reduce((sum, dataset) => sum + dataset.salesBills.length, 0)
+  const paymentRecordCount = args.datasets.reduce((sum, dataset) => sum + dataset.payments.length, 0)
+  const hasSourceRecords =
+    args.reportType === 'purchase'
+      ? purchaseRecordCount > 0
+      : args.reportType === 'sales'
+        ? salesRecordCount > 0
+        : purchaseRecordCount + salesRecordCount + paymentRecordCount > 0
+
+  return {
+    generatedRows: reportRows,
+    analysisSnapshot: analysisAccumulator,
+    availableBanks: Array.from(collectedBanks).sort((left, right) => left.localeCompare(right)),
+    noticeMessage:
+      reportRows.length === 0
+        ? buildReportEmptyStateMessage(args.reportType, args.selectedCompanyName, hasSourceRecords)
+        : '',
+    errorMessage: ''
+  }
+}
+
 export default function ReportDashboard({
   initialCompanyId,
   embedded = false,
   onBackToDashboard,
   reportType = 'main',
-  companyOptions
+  companyOptions,
+  initialDatasets = null,
+  initialDateFrom = '',
+  initialDateTo = '',
+  initialLastGeneratedAt = ''
 }: ReportDashboardProps) {
-  const [companies, setCompanies] = useState<CompanyRecord[]>([])
+  const initialPreparedOutput = useMemo(() => {
+    if (!Array.isArray(initialDatasets) || initialDatasets.length === 0) return null
+    if (!initialDateFrom || !initialDateTo) return null
+    const selectedCompanyName =
+      companyOptions?.find((company) => company.id === initialCompanyId)?.name ||
+      initialDatasets[0]?.companyName ||
+      initialCompanyId ||
+      'Selected company'
+
+    const prepared = buildReportOutput({
+      datasets: initialDatasets,
+      reportType,
+      dateFrom: initialDateFrom,
+      dateTo: initialDateTo,
+      selectedCompanyName
+    })
+
+    return prepared.errorMessage ? null : prepared
+  }, [companyOptions, initialCompanyId, initialDatasets, initialDateFrom, initialDateTo, reportType])
+
+  const [companies, setCompanies] = useState<CompanyRecord[]>(companyOptions || [])
   const [selectedCompanyId, setSelectedCompanyId] = useState(initialCompanyId || '')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [dateFrom, setDateFrom] = useState(initialDateFrom)
+  const [dateTo, setDateTo] = useState(initialDateTo)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [paymentModeFilter, setPaymentModeFilter] = useState<ModeFilter>('all')
   const [bankFilter, setBankFilter] = useState('all')
@@ -460,15 +903,17 @@ export default function ReportDashboard({
   const [headerSearchTerm, setHeaderSearchTerm] = useState('')
   const [selectedHeaders, setSelectedHeaders] = useState<CsvHeader[]>(() => [...getAvailableHeaders(reportType)])
 
-  const [generatedRows, setGeneratedRows] = useState<ReportRow[]>([])
-  const [analysisSnapshot, setAnalysisSnapshot] = useState<AnalysisSnapshot>(EMPTY_ANALYSIS_SNAPSHOT)
-  const [availableBanks, setAvailableBanks] = useState<string[]>([])
+  const [generatedRows, setGeneratedRows] = useState<ReportRow[]>(initialPreparedOutput?.generatedRows || [])
+  const [analysisSnapshot, setAnalysisSnapshot] = useState<AnalysisSnapshot>(initialPreparedOutput?.analysisSnapshot || EMPTY_ANALYSIS_SNAPSHOT)
+  const [availableBanks, setAvailableBanks] = useState<string[]>(initialPreparedOutput?.availableBanks || [])
   const [loading, setLoading] = useState(false)
-  const [loadingCompanies, setLoadingCompanies] = useState(true)
+  const [loadingCompanies, setLoadingCompanies] = useState(!(Array.isArray(companyOptions) && companyOptions.length > 0))
   const [errorMessage, setErrorMessage] = useState('')
-  const [noticeMessage, setNoticeMessage] = useState('')
-  const [lastGeneratedAt, setLastGeneratedAt] = useState('')
+  const [noticeMessage, setNoticeMessage] = useState(initialPreparedOutput?.noticeMessage || '')
+  const [lastGeneratedAt, setLastGeneratedAt] = useState(initialLastGeneratedAt)
   const { financialYear } = useClientFinancialYear()
+  const skipInitialFinancialYearSyncRef = useRef(Boolean(initialDateFrom || initialDateTo))
+  const skipPreparedGenerationRef = useRef(Boolean(initialPreparedOutput && initialDateFrom && initialDateTo))
   const selectedCompanyName = useMemo(
     () => companies.find((company) => company.id === selectedCompanyId)?.name || selectedCompanyId || 'Selected company',
     [companies, selectedCompanyId]
@@ -487,6 +932,10 @@ export default function ReportDashboard({
   }, [availableHeaders])
 
   useEffect(() => {
+    if (skipInitialFinancialYearSyncRef.current) {
+      skipInitialFinancialYearSyncRef.current = false
+      return
+    }
     const range = getFinancialYearDateRangeInput(financialYear)
     setDateFrom(range.dateFrom)
     setDateTo(range.dateTo)
@@ -616,414 +1065,20 @@ export default function ReportDashboard({
         })
       )
 
-      const collectedBanks = new Set<string>()
-      const reportRows: ReportRow[] = []
-      const analysisAccumulator: AnalysisSnapshot = { ...EMPTY_ANALYSIS_SNAPSHOT }
-
-      for (const dataset of datasets) {
-        const paymentsByBill = new Map<string, PaymentRecord[]>()
-
-        for (const payment of dataset.payments) {
-          const billType = String(payment.billType || '').toLowerCase()
-          const key = `${billType}:${payment.billId}`
-          const rows = paymentsByBill.get(key) || []
-          rows.push(payment)
-          paymentsByBill.set(key, rows)
-        }
-
-        const bankNameByIfsc = new Map<string, string>()
-        for (const bank of dataset.banks) {
-          const ifsc = String(bank.ifscCode || '').trim().toUpperCase()
-          const name = String(bank.name || '').trim()
-          if (ifsc && name) {
-            bankNameByIfsc.set(ifsc, name)
-            collectedBanks.add(name)
-          }
-        }
-
-        for (const bill of dataset.purchaseBills) {
-          const farmer = bill.farmer || {}
-          const purchaseItems = Array.isArray(bill.purchaseItems) ? bill.purchaseItems : []
-          const totalWeight = purchaseItems.reduce((acc, item) => acc + normalizeAmount(item.qty), 0)
-          const totalBags = purchaseItems.reduce((acc, item) => acc + normalizeAmount(item.bags), 0)
-          const totalHammali = purchaseItems.reduce((acc, item) => acc + normalizeAmount(item.hammali), 0)
-          const weightedRate = purchaseItems.reduce(
-            (acc, item) => acc + normalizeAmount(item.qty) * normalizeAmount(item.rate),
-            0
-          )
-
-          const allPayments = (paymentsByBill.get(`purchase:${bill.id}`) || []).sort(
-            (a, b) => toTimestamp(b.payDate) - toTimestamp(a.payDate)
-          )
-          const paymentsInRange = allPayments.filter((payment) => passesDateRange(payment.payDate, fromDate, toDate))
-          const billInRange = passesDateRange(bill.billDate, fromDate, toDate)
-          if (!billInRange && paymentsInRange.length === 0) continue
-
-          if (billInRange) {
-            const purchaseTotal = normalizeAmount(bill.totalAmount)
-            const purchasePaid = normalizeAmount(bill.paidAmount)
-            analysisAccumulator.purchaseTotal += purchaseTotal
-            analysisAccumulator.purchasePaid += purchasePaid
-            analysisAccumulator.purchaseBalance += Math.max(0, purchaseTotal - purchasePaid)
-            analysisAccumulator.purchaseWeightedRate += weightedRate
-            analysisAccumulator.purchaseWeight += totalWeight
-          }
-
-          if (reportType === 'sales') continue
-
-          const effectivePayments = paymentsInRange
-
-          let cashAmount = 0
-          let onlineAmount = 0
-          let bankAmount = 0
-          let cashPaymentDate = ''
-          let onlinePaymentDate = ''
-          let bankPaymentDate = ''
-
-          for (const payment of effectivePayments) {
-            const modeBucket = resolveModeBucket(payment.mode)
-            const split = derivePaymentSplit(payment, modeBucket)
-
-            if (modeBucket === 'cash') {
-              cashAmount += split.cash
-              if (!cashPaymentDate) cashPaymentDate = formatCompactDate(payment.cashPaymentDate || payment.payDate)
-            } else if (modeBucket === 'bank') {
-              bankAmount += split.online
-              if (!bankPaymentDate) bankPaymentDate = formatCompactDate(payment.onlinePaymentDate || payment.payDate)
-            } else if (modeBucket === 'online') {
-              onlineAmount += split.online
-              if (!onlinePaymentDate) onlinePaymentDate = formatCompactDate(payment.onlinePaymentDate || payment.payDate)
-            }
-          }
-
-          if (effectivePayments.length === 0 && normalizeAmount(bill.paidAmount) > 0) {
-            cashAmount = normalizeAmount(bill.paidAmount)
-            cashPaymentDate = formatCompactDate(bill.billDate)
-          }
-
-          const netOnlineAmount = onlineAmount + bankAmount
-          const latestPayment = effectivePayments[0]
-
-          let modeBucket: ModeBucket = 'none'
-          if (cashAmount > 0 && netOnlineAmount > 0) modeBucket = 'mixed'
-          else if (cashAmount > 0) modeBucket = 'cash'
-          else if (bankAmount > 0) modeBucket = 'bank'
-          else if (onlineAmount > 0) modeBucket = 'online'
-
-          const purchaseTotal = normalizeAmount(bill.totalAmount)
-          const purchasePaid = normalizeAmount(bill.paidAmount)
-          const status = purchaseTotal > 0 && purchasePaid >= purchaseTotal ? 'paid' : purchasePaid > 0 ? 'partial' : 'unpaid'
-          const sellerIfsc = String(farmer.ifscCode || latestPayment?.ifscCode || '').trim().toUpperCase()
-          const bankName =
-            String(farmer.bankName || latestPayment?.bankNameSnapshot || '').trim() ||
-            (sellerIfsc ? bankNameByIfsc.get(sellerIfsc) || '' : '') ||
-            'Not Available'
-
-          if (bankName && bankName !== 'Not Available') collectedBanks.add(bankName)
-
-          const row: ReportRow = {
-            Party_Type: 'Farmer',
-            Bill_No: String(bill.billNo || '').trim(),
-            Seller_Name: String(bill.farmerNameSnapshot || farmer.name || '').trim(),
-            Seller_Address: String(bill.farmerAddressSnapshot || farmer.address || '').trim(),
-            SellerMob: String(bill.farmerContactSnapshot || farmer.phone1 || '').trim(),
-            Anubandh_No: String(bill.krashakAnubandhSnapshot || farmer.krashakAnubandhNumber || '').trim(),
-            Anubandh_Date: formatCompactDate(bill.billDate),
-            Bhugtan_No: String(latestPayment?.billNo || bill.billNo || '').trim(),
-            Bhugtan_Date: formatCompactDate(latestPayment?.payDate),
-            Auction_Rate: round2(totalWeight > 0 ? weightedRate / totalWeight : normalizeAmount(purchaseItems[0]?.rate)),
-            Actual_Weight: round3(totalWeight),
-            No_of_Bags: round2(totalBags),
-            Total_Hammali_Toul: round2(totalHammali),
-            Farmer_Payment: round2(normalizeAmount(bill.totalAmount)),
-            Payment_Mode: resolveModeCode(modeBucket),
-            CashAmount: round2(cashAmount),
-            Cash_Payment_Date: cashPaymentDate,
-            Online_Pay_Amount: round2(netOnlineAmount),
-            Online_Payment_Date: onlinePaymentDate || bankPaymentDate,
-            IFSC_Code: sellerIfsc || '0',
-            Farmer_BankAccount: String(farmer.accountNo || latestPayment?.beneficiaryBankAccount || '').trim() || '0',
-            UTR: String(latestPayment?.txnRef || '').trim() || '0',
-            ASFlag: String(latestPayment?.asFlag || '').trim() || statusToFlag(status),
-            Pending_Amount: round2(Math.max(0, purchaseTotal - purchasePaid)),
-            Payment_Status: status,
-            Bank_Name: bankName,
-            Company_Name: dataset.companyName,
-            _status: status,
-            _modeBucket: modeBucket,
-            _sortTs: toTimestamp(latestPayment?.payDate) || toTimestamp(bill.billDate),
-            _source: 'purchase'
-          }
-
-          reportRows.push(row)
-        }
-
-        for (const bill of dataset.specialPurchaseBills) {
-          const supplier = bill.supplier || {}
-          const specialItems = Array.isArray(bill.specialPurchaseItems) ? bill.specialPurchaseItems : []
-          const totalWeight = specialItems.reduce((acc, item) => acc + normalizeAmount(item.weight), 0)
-          const totalBags = specialItems.reduce((acc, item) => acc + normalizeAmount(item.noOfBags), 0)
-          const totalOtherAmount = specialItems.reduce((acc, item) => acc + normalizeAmount(item.otherAmount), 0)
-          const weightedRate = specialItems.reduce(
-            (acc, item) => acc + normalizeAmount(item.weight) * normalizeAmount(item.rate),
-            0
-          )
-
-          const allPayments = (paymentsByBill.get(`purchase:${bill.id}`) || []).sort(
-            (a, b) => toTimestamp(b.payDate) - toTimestamp(a.payDate)
-          )
-          const paymentsInRange = allPayments.filter((payment) => passesDateRange(payment.payDate, fromDate, toDate))
-          const billInRange = passesDateRange(bill.billDate, fromDate, toDate)
-          if (!billInRange && paymentsInRange.length === 0) continue
-
-          if (billInRange) {
-            const specialTotal = normalizeAmount(bill.totalAmount)
-            const specialPaid = normalizeAmount(bill.paidAmount)
-            analysisAccumulator.purchaseTotal += specialTotal
-            analysisAccumulator.purchasePaid += specialPaid
-            analysisAccumulator.purchaseBalance += Math.max(0, specialTotal - specialPaid)
-            analysisAccumulator.purchaseWeightedRate += weightedRate
-            analysisAccumulator.purchaseWeight += totalWeight
-          }
-
-          if (reportType === 'sales') continue
-
-          const effectivePayments = paymentsInRange
-
-          let cashAmount = 0
-          let onlineAmount = 0
-          let bankAmount = 0
-          let cashPaymentDate = ''
-          let onlinePaymentDate = ''
-          let bankPaymentDate = ''
-
-          for (const payment of effectivePayments) {
-            const modeBucket = resolveModeBucket(payment.mode)
-            const split = derivePaymentSplit(payment, modeBucket)
-
-            if (modeBucket === 'cash') {
-              cashAmount += split.cash
-              if (!cashPaymentDate) cashPaymentDate = formatCompactDate(payment.cashPaymentDate || payment.payDate)
-            } else if (modeBucket === 'bank') {
-              bankAmount += split.online
-              if (!bankPaymentDate) bankPaymentDate = formatCompactDate(payment.onlinePaymentDate || payment.payDate)
-            } else if (modeBucket === 'online') {
-              onlineAmount += split.online
-              if (!onlinePaymentDate) onlinePaymentDate = formatCompactDate(payment.onlinePaymentDate || payment.payDate)
-            }
-          }
-
-          const specialTotal = normalizeAmount(bill.totalAmount)
-          const specialPaid = normalizeAmount(bill.paidAmount)
-
-          if (effectivePayments.length === 0 && specialPaid > 0) {
-            cashAmount = specialPaid
-            cashPaymentDate = formatCompactDate(bill.billDate)
-          }
-
-          const netOnlineAmount = onlineAmount + bankAmount
-          const latestPayment = effectivePayments[0]
-
-          let modeBucket: ModeBucket = 'none'
-          if (cashAmount > 0 && netOnlineAmount > 0) modeBucket = 'mixed'
-          else if (cashAmount > 0) modeBucket = 'cash'
-          else if (bankAmount > 0) modeBucket = 'bank'
-          else if (onlineAmount > 0) modeBucket = 'online'
-
-          const status = specialTotal > 0 && specialPaid >= specialTotal ? 'paid' : specialPaid > 0 ? 'partial' : 'unpaid'
-          const sellerIfsc = String(supplier.ifscCode || latestPayment?.ifscCode || '').trim().toUpperCase()
-          const bankName =
-            String(supplier.bankName || latestPayment?.bankNameSnapshot || '').trim() ||
-            (sellerIfsc ? bankNameByIfsc.get(sellerIfsc) || '' : '') ||
-            'Not Available'
-
-          if (bankName && bankName !== 'Not Available') collectedBanks.add(bankName)
-
-          const row: ReportRow = {
-            Party_Type: 'Supplier',
-            Bill_No: String(bill.supplierInvoiceNo || '').trim(),
-            Seller_Name: String(supplier.name || '').trim(),
-            Seller_Address: String(supplier.address || '').trim(),
-            SellerMob: String(supplier.phone1 || '').trim(),
-            Anubandh_No: String(supplier.gstNumber || bill.supplierInvoiceNo || '').trim(),
-            Anubandh_Date: formatCompactDate(bill.billDate),
-            Bhugtan_No: String(latestPayment?.billNo || bill.supplierInvoiceNo || '').trim(),
-            Bhugtan_Date: formatCompactDate(latestPayment?.payDate),
-            Auction_Rate: round2(totalWeight > 0 ? weightedRate / totalWeight : normalizeAmount(specialItems[0]?.rate)),
-            Actual_Weight: round3(totalWeight),
-            No_of_Bags: round2(totalBags),
-            Total_Hammali_Toul: round2(totalOtherAmount),
-            Farmer_Payment: round2(specialTotal),
-            Payment_Mode: resolveModeCode(modeBucket),
-            CashAmount: round2(cashAmount),
-            Cash_Payment_Date: cashPaymentDate,
-            Online_Pay_Amount: round2(netOnlineAmount),
-            Online_Payment_Date: onlinePaymentDate || bankPaymentDate,
-            IFSC_Code: sellerIfsc || '0',
-            Farmer_BankAccount: String(supplier.accountNo || latestPayment?.beneficiaryBankAccount || '').trim() || '0',
-            UTR: String(latestPayment?.txnRef || '').trim() || '0',
-            ASFlag: String(latestPayment?.asFlag || '').trim() || statusToFlag(status),
-            Pending_Amount: round2(Math.max(0, specialTotal - specialPaid)),
-            Payment_Status: status,
-            Bank_Name: bankName,
-            Company_Name: dataset.companyName,
-            _status: status,
-            _modeBucket: modeBucket,
-            _sortTs: toTimestamp(latestPayment?.payDate) || toTimestamp(bill.billDate),
-            _source: 'purchase'
-          }
-
-          reportRows.push(row)
-        }
-
-        for (const bill of dataset.salesBills) {
-          const party = bill.party || {}
-          const salesItems = Array.isArray(bill.salesItems) ? bill.salesItems : []
-          const totalWeight = salesItems.reduce((acc, item) => acc + normalizeAmount(item.weight), 0)
-          const totalBags = salesItems.reduce((acc, item) => acc + normalizeAmount(item.bags), 0)
-          const weightedRate = salesItems.reduce(
-            (acc, item) => acc + normalizeAmount(item.weight) * normalizeAmount(item.rate),
-            0
-          )
-
-          const allPayments = (paymentsByBill.get(`sales:${bill.id}`) || []).sort(
-            (a, b) => toTimestamp(b.payDate) - toTimestamp(a.payDate)
-          )
-          const paymentsInRange = allPayments.filter((payment) => passesDateRange(payment.payDate, fromDate, toDate))
-          const billInRange = passesDateRange(bill.billDate, fromDate, toDate)
-          if (!billInRange && paymentsInRange.length === 0) continue
-
-          if (billInRange) {
-            const salesTotal = normalizeAmount(bill.totalAmount)
-            const salesReceived = normalizeAmount(bill.receivedAmount)
-            analysisAccumulator.salesTotal += salesTotal
-            analysisAccumulator.salesReceived += salesReceived
-            analysisAccumulator.salesBalance += Math.max(0, salesTotal - salesReceived)
-            analysisAccumulator.salesWeightedRate += weightedRate
-            analysisAccumulator.salesWeight += totalWeight
-          }
-
-          if (reportType === 'purchase') continue
-
-          const effectivePayments = paymentsInRange
-
-          let cashAmount = 0
-          let onlineAmount = 0
-          let bankAmount = 0
-          let cashPaymentDate = ''
-          let onlinePaymentDate = ''
-          let bankPaymentDate = ''
-
-          for (const payment of effectivePayments) {
-            const modeBucket = resolveModeBucket(payment.mode)
-            const split = derivePaymentSplit(payment, modeBucket)
-
-            if (modeBucket === 'cash') {
-              cashAmount += split.cash
-              if (!cashPaymentDate) cashPaymentDate = formatCompactDate(payment.cashPaymentDate || payment.payDate)
-            } else if (modeBucket === 'bank') {
-              bankAmount += split.online
-              if (!bankPaymentDate) bankPaymentDate = formatCompactDate(payment.onlinePaymentDate || payment.payDate)
-            } else if (modeBucket === 'online') {
-              onlineAmount += split.online
-              if (!onlinePaymentDate) onlinePaymentDate = formatCompactDate(payment.onlinePaymentDate || payment.payDate)
-            }
-          }
-
-          if (effectivePayments.length === 0 && normalizeAmount(bill.receivedAmount) > 0) {
-            cashAmount = normalizeAmount(bill.receivedAmount)
-            cashPaymentDate = formatCompactDate(bill.billDate)
-          }
-
-          const netOnlineAmount = onlineAmount + bankAmount
-          const latestPayment = effectivePayments[0]
-
-          let modeBucket: ModeBucket = 'none'
-          if (cashAmount > 0 && netOnlineAmount > 0) modeBucket = 'mixed'
-          else if (cashAmount > 0) modeBucket = 'cash'
-          else if (bankAmount > 0) modeBucket = 'bank'
-          else if (onlineAmount > 0) modeBucket = 'online'
-
-          const salesTotal = normalizeAmount(bill.totalAmount)
-          const salesReceived = normalizeAmount(bill.receivedAmount)
-          const status = salesTotal > 0 && salesReceived >= salesTotal ? 'paid' : salesReceived > 0 ? 'partial' : 'unpaid'
-          const sellerIfsc = String(latestPayment?.ifscCode || '').trim().toUpperCase()
-          const bankName =
-            String(latestPayment?.bankNameSnapshot || '').trim() ||
-            (sellerIfsc ? bankNameByIfsc.get(sellerIfsc) || '' : '') ||
-            'Not Available'
-
-          if (bankName && bankName !== 'Not Available') collectedBanks.add(bankName)
-
-          const row: ReportRow = {
-            Party_Type: 'Buyer',
-            Bill_No: String(bill.billNo || '').trim(),
-            Seller_Name: String(party.name || '').trim(),
-            Seller_Address: String(party.address || '').trim(),
-            SellerMob: String(party.phone1 || '').trim(),
-            Anubandh_No: String(bill.billNo || '').trim(),
-            Anubandh_Date: formatCompactDate(bill.billDate),
-            Bhugtan_No: String(latestPayment?.billNo || bill.billNo || '').trim(),
-            Bhugtan_Date: formatCompactDate(latestPayment?.payDate),
-            Auction_Rate: round2(totalWeight > 0 ? weightedRate / totalWeight : normalizeAmount(salesItems[0]?.rate)),
-            Actual_Weight: round3(totalWeight),
-            No_of_Bags: round2(totalBags),
-            Total_Hammali_Toul: 0,
-            Farmer_Payment: round2(normalizeAmount(bill.totalAmount)),
-            Payment_Mode: resolveModeCode(modeBucket),
-            CashAmount: round2(cashAmount),
-            Cash_Payment_Date: cashPaymentDate,
-            Online_Pay_Amount: round2(netOnlineAmount),
-            Online_Payment_Date: onlinePaymentDate || bankPaymentDate,
-            IFSC_Code: sellerIfsc || '0',
-            Farmer_BankAccount: String(latestPayment?.beneficiaryBankAccount || '').trim() || '0',
-            UTR: String(latestPayment?.txnRef || '').trim() || '0',
-            ASFlag: String(latestPayment?.asFlag || '').trim() || statusToFlag(status),
-            Pending_Amount: round2(Math.max(0, salesTotal - salesReceived)),
-            Payment_Status: status,
-            Bank_Name: bankName,
-            Company_Name: dataset.companyName,
-            _status: status,
-            _modeBucket: modeBucket,
-            _sortTs: toTimestamp(latestPayment?.payDate) || toTimestamp(bill.billDate),
-            _source: 'sales'
-          }
-
-          reportRows.push(row)
-        }
-      }
-
-      reportRows.sort((a, b) => {
-        const paymentDiff = b._sortTs - a._sortTs
-        if (paymentDiff !== 0) return paymentDiff
-        return String(a.Seller_Name).localeCompare(String(b.Seller_Name))
+      const prepared = buildReportOutput({
+        datasets,
+        reportType,
+        dateFrom,
+        dateTo,
+        selectedCompanyName
       })
 
-      const purchaseRecordCount = datasets.reduce(
-        (sum, dataset) => sum + dataset.purchaseBills.length + dataset.specialPurchaseBills.length,
-        0
-      )
-      const salesRecordCount = datasets.reduce((sum, dataset) => sum + dataset.salesBills.length, 0)
-      const paymentRecordCount = datasets.reduce((sum, dataset) => sum + dataset.payments.length, 0)
-      const hasSourceRecords =
-        reportType === 'purchase'
-          ? purchaseRecordCount > 0
-          : reportType === 'sales'
-            ? salesRecordCount > 0
-            : purchaseRecordCount + salesRecordCount + paymentRecordCount > 0
-
-      setGeneratedRows(reportRows)
-      setAnalysisSnapshot(analysisAccumulator)
-      setAvailableBanks(Array.from(collectedBanks).sort((a, b) => a.localeCompare(b)))
+      setGeneratedRows(prepared.generatedRows)
+      setAnalysisSnapshot(prepared.analysisSnapshot)
+      setAvailableBanks(prepared.availableBanks)
       setLastGeneratedAt(new Date().toLocaleString('en-IN'))
-
-      if (reportRows.length === 0) {
-        setNoticeMessage(buildReportEmptyStateMessage(reportType, selectedCompanyName, hasSourceRecords))
-        setErrorMessage('')
-      } else {
-        setNoticeMessage('')
-        setErrorMessage('')
-      }
+      setNoticeMessage(prepared.noticeMessage)
+      setErrorMessage(prepared.errorMessage)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Report generation failed.'
       setNoticeMessage('')
@@ -1035,6 +1090,10 @@ export default function ReportDashboard({
 
   useEffect(() => {
     if (loadingCompanies) return
+    if (skipPreparedGenerationRef.current) {
+      skipPreparedGenerationRef.current = false
+      return
+    }
     if (!selectedCompanyId) return
     void generateReport()
   }, [loadingCompanies, selectedCompanyId, dateFrom, dateTo, generateReport])

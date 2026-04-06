@@ -197,6 +197,12 @@ interface OperationsReportWorkspaceProps {
   initialView?: ReportView
   embedded?: boolean
   onBackToDashboard?: () => void
+  companyOptions?: CompanyRecord[]
+  initialReportData?: OperationsReportPayload | null
+  initialDateFrom?: string
+  initialDateTo?: string
+  initialLastGeneratedAt?: string
+  initialSelectedPartyId?: string
 }
 
 const surfaceCardClass = 'rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]'
@@ -541,32 +547,42 @@ export default function OperationsReportWorkspace({
   initialCompanyId,
   initialView = 'outstanding',
   embedded = false,
-  onBackToDashboard
+  onBackToDashboard,
+  companyOptions,
+  initialReportData = null,
+  initialDateFrom = '',
+  initialDateTo = '',
+  initialLastGeneratedAt = '',
+  initialSelectedPartyId = ''
 }: OperationsReportWorkspaceProps) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const today = useMemo(() => new Date(), [])
 
-  const [companies, setCompanies] = useState<CompanyRecord[]>([])
+  const [companies, setCompanies] = useState<CompanyRecord[]>(companyOptions || [])
   const [scope] = useState<ReportScope>('company')
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>(initialCompanyId ? [initialCompanyId] : [])
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
-  const [selectedPartyId, setSelectedPartyId] = useState('')
+  const [dateFrom, setDateFrom] = useState(initialDateFrom)
+  const [dateTo, setDateTo] = useState(initialDateTo)
+  const [selectedPartyId, setSelectedPartyId] = useState(initialSelectedPartyId)
   const [activeView, setActiveView] = useState<ReportView>(initialView)
   const [outstandingSort, setOutstandingSort] = useState<OutstandingSort>('highest')
   const [outstandingBucketFilter, setOutstandingBucketFilter] = useState<'all' | OutstandingAgeBucket>('all')
   const [bankFilter, setBankFilter] = useState('all')
   const [bankDirectionFilter, setBankDirectionFilter] = useState<LedgerDirectionFilter>('all')
   const [searchTerm, setSearchTerm] = useState('')
-  const [loadingCompanies, setLoadingCompanies] = useState(true)
+  const [loadingCompanies, setLoadingCompanies] = useState(!(Array.isArray(companyOptions) && companyOptions.length > 0))
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
-  const [lastGeneratedAt, setLastGeneratedAt] = useState('')
-  const [reportData, setReportData] = useState<OperationsReportPayload | null>(null)
+  const [lastGeneratedAt, setLastGeneratedAt] = useState(initialLastGeneratedAt)
+  const [reportData, setReportData] = useState<OperationsReportPayload | null>(initialReportData)
   const { financialYear } = useClientFinancialYear()
   const companyFilterRef = useRef<HTMLDetailsElement | null>(null)
+  const skipInitialFinancialYearSyncRef = useRef(Boolean(initialDateFrom || initialDateTo))
+  const skipPreparedGenerationRef = useRef(
+    Boolean(initialReportData && (initialCompanyId || initialDateFrom || initialDateTo))
+  )
   const selectedCompanyId = selectedCompanyIds[0] || ''
   const canAggregateCompanies = reportData?.meta?.canAggregateCompanies ?? true
 
@@ -583,6 +599,23 @@ export default function OperationsReportWorkspace({
   const loadCompanies = useCallback(async () => {
     setLoadingCompanies(true)
     try {
+      if (Array.isArray(companyOptions) && companyOptions.length > 0) {
+        setCompanies(companyOptions)
+        setSelectedCompanyIds((previous) => {
+          if (initialCompanyId && companyOptions.some((company) => company.id === initialCompanyId)) {
+            return [initialCompanyId]
+          }
+
+          const validPrevious = previous.filter((companyId) => companyOptions.some((company) => company.id === companyId))
+          if (validPrevious.length > 0) {
+            return validPrevious
+          }
+
+          return companyOptions[0]?.id ? [companyOptions[0].id] : []
+        })
+        return
+      }
+
       const normalized = (await loadShellCompanies())
         .map((row) => ({
           id: String(row.id || ''),
@@ -609,7 +642,7 @@ export default function OperationsReportWorkspace({
     } finally {
       setLoadingCompanies(false)
     }
-  }, [initialCompanyId])
+  }, [companyOptions, initialCompanyId])
 
   useEffect(() => {
     void loadCompanies()
@@ -622,6 +655,10 @@ export default function OperationsReportWorkspace({
   }, [companies, scope, selectedCompanyIds.length])
 
   useEffect(() => {
+    if (skipInitialFinancialYearSyncRef.current) {
+      skipInitialFinancialYearSyncRef.current = false
+      return
+    }
     const range = getFinancialYearDateRangeInput(financialYear)
     setDateFrom(range.dateFrom)
     setDateTo(range.dateTo)
@@ -734,6 +771,10 @@ export default function OperationsReportWorkspace({
   useEffect(() => {
     if (loadingCompanies) return
     if (scope === 'company' && selectedCompanyIds.length === 0) return
+    if (skipPreparedGenerationRef.current) {
+      skipPreparedGenerationRef.current = false
+      return
+    }
     void generateReport()
   }, [generateReport, loadingCompanies, scope, selectedCompanyIds.length, dateFrom, dateTo])
 

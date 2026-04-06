@@ -1,0 +1,1095 @@
+'use client'
+
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { useRouter } from 'next/navigation'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Badge } from '@/components/ui/badge'
+import DashboardLayout from '@/app/components/DashboardLayout'
+import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
+import { ActionButton } from '@/components/performance/action-button'
+import { PaymentDashboardSkeleton } from '@/components/performance/page-placeholders'
+import { RefreshOverlay } from '@/components/performance/refresh-overlay'
+import { Edit, Eye, Plus, Upload } from 'lucide-react'
+import { invalidateAppDataCaches, matchesAppDataChange, notifyAppDataChanged, subscribeAppDataChanged } from '@/lib/app-live-data'
+import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { isAbortError } from '@/lib/http'
+import {
+  getPaymentTypeLabel,
+  isBillLinkedPaymentType,
+  isPaymentEntryType,
+  SELF_TRANSFER_PAYMENT_TYPE
+} from '@/lib/payment-entry-types'
+import { DEFAULT_PAYMENT_MODES, type PaymentModeOption } from '@/lib/payment-mode-utils'
+import { loadClientPaymentWorkspace } from '@/lib/client-payment-workspace'
+import { getFinancialYearDateRangeInput, type ClientFinancialYearPayload } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
+import type { DashboardLayoutInitialData } from '@/lib/app-shell-types'
+
+interface PurchaseBill {
+  id: string
+  billNo: string
+  billDate: string
+  totalAmount: number
+  paidAmount: number
+  balanceAmount: number
+  status: string
+  supplier?: {
+    name: string
+  } | null
+  farmer: {
+    name: string
+    address: string
+    krashakAnubandhNumber: string
+  } | null
+}
+
+interface SalesBill {
+  id: string
+  billNo: string
+  billDate: string
+  totalAmount: number
+  receivedAmount: number
+  balanceAmount: number
+  status: string
+  party: {
+    name: string
+    address: string
+    phone1: string
+  }
+}
+
+interface Payment {
+  id: string
+  billType: string
+  billTypeLabel: string
+  billId: string
+  billNo: string
+  partyName: string
+  payDate: string
+  amount: number
+  mode: string
+  modeCategory: 'cash' | 'online' | 'bank' | 'transfer'
+  modeLabel: string
+  status: 'pending' | 'paid'
+  txnRef?: string
+  note?: string
+  createdAt: string
+}
+
+type PaymentModeRecord = PaymentModeOption
+
+type PaymentApiRecord = {
+  id: string
+  billType?: string
+  billTypeLabel?: string
+  billId?: string
+  billNo?: string
+  partyName?: string
+  payDate?: string
+  amount?: number
+  mode?: string
+  status?: 'pending' | 'paid'
+  txnRef?: string
+  note?: string
+  createdAt?: string
+}
+
+type PaymentsApiPayload =
+  | PaymentApiRecord[]
+  | {
+      data?: PaymentApiRecord[]
+    }
+
+type BillApiPayload<T> =
+  | T[]
+  | {
+      data?: T[]
+    }
+
+const clampNonNegative = (value: number): number => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return 0
+  return Math.max(0, parsed)
+}
+
+const formatDateSafe = (value: string): string => {
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return '-'
+  return parsed.toLocaleDateString()
+}
+
+const toDateInputValue = (value: string): string => {
+  const parsed = new Date(value)
+  const fallback = new Date()
+  const base = Number.isFinite(parsed.getTime()) ? parsed : fallback
+  const year = base.getFullYear()
+  const month = String(base.getMonth() + 1).padStart(2, '0')
+  const day = String(base.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const normalizePaymentsCollection = (payload: PaymentsApiPayload): PaymentApiRecord[] => {
+  if (Array.isArray(payload)) return payload
+  if (payload && typeof payload === 'object' && Array.isArray(payload.data)) {
+    return payload.data
+  }
+  return []
+}
+
+const normalizeBillCollection = <T,>(payload: BillApiPayload<T>): T[] => {
+  if (Array.isArray(payload)) return payload
+  if (payload && typeof payload === 'object' && Array.isArray(payload.data)) {
+    return payload.data
+  }
+  return []
+}
+
+const getPaymentModeCategory = (rawMode: unknown): 'cash' | 'online' | 'bank' | 'transfer' => {
+  const normalized = String(rawMode || '').trim().toLowerCase()
+  if (normalized === SELF_TRANSFER_PAYMENT_TYPE || normalized.includes('transfer')) {
+    return 'transfer'
+  }
+  if (!normalized || normalized === 'cash' || normalized === 'c' || normalized.includes('cash') || normalized.includes('nakad')) {
+    return 'cash'
+  }
+  if (
+    normalized === 'bank' ||
+    normalized.includes('bank') ||
+    normalized.includes('neft') ||
+    normalized.includes('rtgs') ||
+    normalized.includes('imps') ||
+    normalized.includes('cheque') ||
+    normalized.includes('check') ||
+    normalized.includes('dd') ||
+    normalized.includes('wire') ||
+    normalized.includes('transfer')
+  ) {
+    return 'bank'
+  }
+  if (
+    normalized === 'online' ||
+    normalized.includes('online') ||
+    normalized.includes('upi') ||
+    normalized.includes('wallet') ||
+    normalized.includes('card') ||
+    normalized.includes('qr') ||
+    normalized.includes('gpay') ||
+    normalized.includes('phonepe') ||
+    normalized.includes('paytm') ||
+    normalized.includes('netbanking')
+  ) {
+    return 'online'
+  }
+  return 'bank'
+}
+
+const getPaymentModeLabel = (rawMode: unknown): string => {
+  const value = String(rawMode || '').trim()
+  if (!value) return 'Cash'
+
+  const normalized = value.toLowerCase()
+  if (normalized === SELF_TRANSFER_PAYMENT_TYPE || normalized.includes('transfer')) return 'Self Transfer'
+  if (normalized === 'cash' || normalized === 'c') return 'Cash'
+  if (normalized === 'online') return 'Online'
+  if (normalized === 'bank') return 'Bank Transfer'
+  return value.toUpperCase() === value ? value : value.replace(/_/g, ' ')
+}
+
+interface PaymentDashboardClientProps {
+  initialCompanyId?: string
+  initialPurchaseBills?: PurchaseBill[]
+  initialSalesBills?: SalesBill[]
+  initialPayments?: Payment[]
+  initialPaymentModes?: PaymentModeRecord[]
+  initialLayoutData?: DashboardLayoutInitialData | null
+}
+
+export default function PaymentDashboardClient({
+  initialCompanyId = '',
+  initialPurchaseBills = [],
+  initialSalesBills = [],
+  initialPayments = [],
+  initialPaymentModes = [],
+  initialLayoutData = null
+}: PaymentDashboardClientProps) {
+  const router = useRouter()
+  const hasInitialWorkspace = Boolean(initialCompanyId)
+  const [activeTab, setActiveTab] = useState<'purchase' | 'sales'>('purchase')
+  const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>(initialPurchaseBills)
+  const [salesBills, setSalesBills] = useState<SalesBill[]>(initialSalesBills)
+  const [payments, setPayments] = useState<Payment[]>(initialPayments)
+  const [paymentModes, setPaymentModes] = useState<PaymentModeRecord[]>(initialPaymentModes)
+  const [loading, setLoading] = useState(!hasInitialWorkspace)
+  const [refreshing, setRefreshing] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [companyId, setCompanyId] = useState(initialCompanyId)
+  const { financialYear } = useClientFinancialYear({
+    initialPayload: initialLayoutData?.financialYearPayload || undefined
+  })
+  const hasVisibleDataRef = useRef(false)
+  const [partyFilter, setPartyFilter] = useState('all')
+  const [paymentTypeFilter, setPaymentTypeFilter] = useState<'all' | string>('all')
+  const [modeFilter, setModeFilter] = useState<'all' | 'cash' | 'online' | 'bank' | 'transfer'>('all')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+
+  const [isEditPaymentOpen, setIsEditPaymentOpen] = useState(false)
+  const [editingPaymentId, setEditingPaymentId] = useState('')
+  const [paymentDraft, setPaymentDraft] = useState({
+    payDate: '',
+    amount: '',
+    mode: DEFAULT_PAYMENT_MODES[0]?.code || 'CASH',
+    status: 'paid' as 'pending' | 'paid',
+    txnRef: '',
+    note: ''
+  })
+  const [savingPayment, setSavingPayment] = useState(false)
+
+  useEffect(() => {
+    if (!initialCompanyId) return
+    const cacheKey = `payments-dashboard:${initialCompanyId}`
+    setCompanyId(initialCompanyId)
+    setPurchaseBills(initialPurchaseBills)
+    setSalesBills(initialSalesBills)
+    setPayments(initialPayments)
+    setPaymentModes(initialPaymentModes)
+    setLoading(false)
+    setClientCache(cacheKey, {
+      purchaseBills: initialPurchaseBills,
+      salesBills: initialSalesBills,
+      payments: initialPayments
+    })
+  }, [
+    initialCompanyId,
+    initialPaymentModes,
+    initialPayments,
+    initialPurchaseBills,
+    initialSalesBills
+  ])
+
+  useEffect(() => {
+    hasVisibleDataRef.current =
+      purchaseBills.length > 0 || salesBills.length > 0 || payments.length > 0 || paymentModes.length > 0
+  }, [paymentModes.length, payments.length, purchaseBills.length, salesBills.length])
+
+  useEffect(() => {
+    const range = getFinancialYearDateRangeInput(financialYear)
+    setDateFrom(range.dateFrom)
+    setDateTo(range.dateTo)
+  }, [financialYear?.id])
+
+  const paymentModeOptions = useMemo<PaymentModeRecord[]>(
+    () => (paymentModes.length > 0 ? paymentModes : DEFAULT_PAYMENT_MODES),
+    [paymentModes]
+  )
+
+  const paymentDraftModeOptions = useMemo<PaymentModeRecord[]>(() => {
+    const normalizedDraftMode = String(paymentDraft.mode || '').trim().toLowerCase()
+    if (!normalizedDraftMode || normalizedDraftMode === SELF_TRANSFER_PAYMENT_TYPE) {
+      return paymentModeOptions
+    }
+
+    const hasDraftModeOption = paymentModeOptions.some((paymentMode) => {
+      const normalizedCode = String(paymentMode.code || '').trim().toLowerCase()
+      const normalizedName = String(paymentMode.name || '').trim().toLowerCase()
+      return normalizedCode === normalizedDraftMode || normalizedName === normalizedDraftMode
+    })
+
+    if (hasDraftModeOption) {
+      return paymentModeOptions
+    }
+
+    return [
+      {
+        id: `legacy-${normalizedDraftMode}`,
+        name: getPaymentModeLabel(paymentDraft.mode),
+        code: paymentDraft.mode,
+        isActive: true
+      },
+      ...paymentModeOptions
+    ]
+  }, [paymentDraft.mode, paymentModeOptions])
+
+  const fetchData = useCallback(async (force = false) => {
+    let hydratedFromCache = false
+    try {
+      setErrorMessage(null)
+      const companyIdParam = initialCompanyId || await resolveCompanyId(window.location.search)
+
+      if (!companyIdParam) {
+        alert('Company not selected')
+        router.push('/main/profile')
+        return
+      }
+
+      setCompanyId(companyIdParam)
+      stripCompanyParamsFromUrl()
+
+      const cacheKey = `payments-dashboard:${companyIdParam}`
+      const cached = getClientCache<{
+        purchaseBills: PurchaseBill[]
+        salesBills: SalesBill[]
+        payments: Payment[]
+      }>(cacheKey, 10_000)
+      if (cached) {
+        hydratedFromCache = true
+        setPurchaseBills(cached.purchaseBills)
+        setSalesBills(cached.salesBills)
+        setPayments(cached.payments)
+        setLoading(false)
+      }
+
+      if (!hasVisibleDataRef.current && !hydratedFromCache) {
+        setLoading(true)
+      } else {
+        setRefreshing(true)
+      }
+
+      const workspace = await loadClientPaymentWorkspace(companyIdParam, {
+        includePaymentModes: true,
+        force
+      })
+      const purchaseBillsPayload =
+        ((workspace as { purchaseBills?: BillApiPayload<PurchaseBill> }).purchaseBills || []) as BillApiPayload<PurchaseBill>
+      const salesBillsPayload =
+        ((workspace as { salesBills?: BillApiPayload<SalesBill> }).salesBills || []) as BillApiPayload<SalesBill>
+      const paymentsPayload =
+        ((workspace as { payments?: PaymentsApiPayload }).payments || []) as PaymentsApiPayload
+      const paymentModesPayload =
+        ((workspace as { paymentModes?: PaymentModeRecord[] }).paymentModes || []) as PaymentModeRecord[]
+      const nextPurchaseBills: PurchaseBill[] = normalizeBillCollection<PurchaseBill>(purchaseBillsPayload)
+        .map((bill) => ({
+            ...bill,
+            totalAmount: clampNonNegative(bill.totalAmount),
+            paidAmount: clampNonNegative(bill.paidAmount),
+            balanceAmount: clampNonNegative(bill.balanceAmount)
+          }))
+      const nextSalesBills: SalesBill[] = normalizeBillCollection<SalesBill>(salesBillsPayload)
+        .map((bill) => ({
+            ...bill,
+            totalAmount: clampNonNegative(bill.totalAmount),
+            receivedAmount: clampNonNegative(bill.receivedAmount),
+            balanceAmount: clampNonNegative(bill.balanceAmount)
+          }))
+      setPurchaseBills(nextPurchaseBills)
+      setSalesBills(nextSalesBills)
+      setPaymentModes(
+        (Array.isArray(paymentModesPayload) ? paymentModesPayload : [])
+          .map((paymentMode) => ({
+            id: String(paymentMode?.id || ''),
+            name: String(paymentMode?.name || '').trim(),
+            code: String(paymentMode?.code || '').trim(),
+            isActive: paymentMode?.isActive !== false
+          }))
+          .filter((paymentMode) => paymentMode.id && paymentMode.name && paymentMode.code && paymentMode.isActive)
+      )
+
+      const normalizedPayments: Payment[] = normalizePaymentsCollection(paymentsPayload).map((payment) => ({
+        ...payment,
+        billType: isPaymentEntryType(payment.billType) ? payment.billType : String(payment.billType || '').trim(),
+        billTypeLabel: payment.billTypeLabel || getPaymentTypeLabel(payment.billType),
+        billId: payment.billId || '',
+        billNo: payment.billNo || '',
+        partyName: payment.partyName || '',
+        payDate: payment.payDate || '',
+        amount: clampNonNegative(payment.amount || 0),
+        mode: String(payment.mode || '').trim(),
+        modeCategory: getPaymentModeCategory(payment.mode),
+        modeLabel: getPaymentModeLabel(payment.mode),
+        status: payment.status === 'pending' ? 'pending' : 'paid',
+        txnRef: payment.txnRef || '',
+        note: payment.note || '',
+        createdAt: payment.createdAt || payment.payDate || ''
+      }))
+      setPayments(normalizedPayments)
+      setClientCache(cacheKey, {
+        purchaseBills: nextPurchaseBills,
+        salesBills: nextSalesBills,
+        payments: normalizedPayments
+      })
+
+      setLoading(false)
+      setRefreshing(false)
+    } catch (error) {
+      if (isAbortError(error)) return
+      const status = typeof error === 'object' && error && 'status' in error ? Number((error as { status?: number }).status || 0) : 0
+      if (status === 401) {
+        setLoading(false)
+        setRefreshing(false)
+        router.push('/login')
+        return
+      }
+      console.error('Error fetching data:', error)
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to refresh payment workspace.')
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }, [initialCompanyId, router])
+
+  useEffect(() => {
+    if (hasInitialWorkspace) {
+      stripCompanyParamsFromUrl()
+      return
+    }
+
+    let cancelled = false
+    ;(async () => {
+      if (cancelled) return
+      await fetchData(true)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [fetchData, hasInitialWorkspace])
+
+  useEffect(() => {
+    const unsubscribe = subscribeAppDataChanged((detail) => {
+      if (matchesAppDataChange(detail, companyId, ['purchase-bills', 'sales-bills', 'payments', 'payment-modes'])) {
+        void fetchData(true)
+      }
+    })
+
+    const onCompanyChanged = () => {
+      void fetchData(true)
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      unsubscribe()
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
+  }, [companyId, fetchData])
+
+  const handleMakePayment = (billId: string) => {
+    const route = activeTab === 'purchase' ? '/payment/purchase/entry' : '/payment/sales/entry'
+    router.push(`${route}?billId=${billId}`)
+  }
+
+  const handleEditBill = (billId: string, billType: 'purchase' | 'sales' = activeTab) => {
+    const route = billType === 'purchase' ? '/purchase/edit' : '/sales/entry'
+    const query = companyId
+      ? `billId=${billId}&companyId=${encodeURIComponent(companyId)}`
+      : `billId=${billId}`
+    router.push(`${route}?${query}`)
+  }
+
+  const openPaymentEditor = (payment: Payment) => {
+    const rawMode = String(payment.mode || '').trim()
+    const matchedPaymentMode = paymentModeOptions.find((paymentMode) => {
+      const normalizedDraftMode = rawMode.toLowerCase()
+      return (
+        String(paymentMode.code || '').trim().toLowerCase() === normalizedDraftMode ||
+        String(paymentMode.name || '').trim().toLowerCase() === normalizedDraftMode
+      )
+    })
+
+    setEditingPaymentId(payment.id)
+    setPaymentDraft({
+      payDate: toDateInputValue(payment.payDate),
+      amount: String(clampNonNegative(payment.amount)),
+      mode: rawMode.toLowerCase().includes('transfer')
+        ? SELF_TRANSFER_PAYMENT_TYPE
+        : matchedPaymentMode?.code || rawMode || payment.modeCategory,
+      status: payment.status === 'pending' ? 'pending' : 'paid',
+      txnRef: payment.txnRef || '',
+      note: payment.note || ''
+    })
+    setIsEditPaymentOpen(true)
+  }
+
+  const handleUpdatePayment = async () => {
+    if (!editingPaymentId) return
+    const amount = Number(paymentDraft.amount)
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert('Enter a valid payment amount.')
+      return
+    }
+    if (!paymentDraft.payDate) {
+      alert('Payment date is required.')
+      return
+    }
+
+    setSavingPayment(true)
+    try {
+      const response = await fetch(`/api/payments/${editingPaymentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          payDate: paymentDraft.payDate,
+          amount,
+          mode: paymentDraft.mode,
+          status: paymentDraft.status,
+          txnRef: paymentDraft.txnRef.trim() || null,
+          note: paymentDraft.note.trim() || null
+        })
+      })
+      const payload = await response.json().catch(() => ({} as { error?: string }))
+      if (!response.ok) {
+        throw new Error(payload.error || 'Failed to update payment')
+      }
+      invalidateAppDataCaches(companyId, ['payments'])
+      notifyAppDataChanged({ companyId, scopes: ['payments'] })
+      await fetchData()
+      setIsEditPaymentOpen(false)
+      setEditingPaymentId('')
+      alert('Payment entry updated successfully.')
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Failed to update payment')
+    } finally {
+      setSavingPayment(false)
+    }
+  }
+
+  const currentBills = useMemo(
+    () => (activeTab === 'purchase' ? purchaseBills : salesBills),
+    [activeTab, purchaseBills, salesBills]
+  )
+
+  const pendingCurrentBills = useMemo(
+    () => currentBills.filter((bill) => clampNonNegative(bill.balanceAmount) > 0),
+    [currentBills]
+  )
+
+  const totalPending = useMemo(
+    () => currentBills.reduce((sum, bill) => sum + clampNonNegative(bill.balanceAmount), 0),
+    [currentBills]
+  )
+
+  const totalPaid = useMemo(() => {
+    return currentBills.reduce((sum, bill) => {
+      if (activeTab === 'purchase') {
+        return sum + clampNonNegative((bill as PurchaseBill).paidAmount)
+      } else {
+        return sum + clampNonNegative((bill as SalesBill).receivedAmount)
+      }
+    }, 0)
+  }, [activeTab, currentBills])
+
+  const getBillName = (bill: PurchaseBill | SalesBill) => {
+    if (activeTab === 'purchase') {
+      return (bill as PurchaseBill).supplier?.name || (bill as PurchaseBill).farmer?.name || '-'
+    } else {
+      return (bill as SalesBill).party?.name || '-'
+    }
+  }
+
+  const paymentPartyOptions = useMemo(() => {
+    const unique = Array.from(
+      new Set(
+        payments
+          .filter((payment) => paymentTypeFilter === 'all' || payment.billType === paymentTypeFilter)
+          .map((payment) => payment.partyName || '')
+          .filter(Boolean)
+      )
+    )
+    return unique.sort((a, b) => a.localeCompare(b))
+  }, [paymentTypeFilter, payments])
+
+  const filteredPayments = useMemo(() => {
+    const fromDate = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null
+    const toDate = dateTo ? new Date(`${dateTo}T23:59:59`) : null
+
+    return payments
+      .filter((payment) => {
+        if (paymentTypeFilter !== 'all' && payment.billType !== paymentTypeFilter) return false
+        if (partyFilter !== 'all' && payment.partyName !== partyFilter) return false
+        if (modeFilter !== 'all' && payment.modeCategory !== modeFilter) return false
+
+        const paymentDate = new Date(payment.payDate)
+        if (fromDate && paymentDate < fromDate) return false
+        if (toDate && paymentDate > toDate) return false
+        return true
+      })
+      .sort((a, b) => {
+        const aTime = new Date(a.payDate).getTime()
+        const bTime = new Date(b.payDate).getTime()
+        return bTime - aTime
+      })
+  }, [payments, paymentTypeFilter, partyFilter, modeFilter, dateFrom, dateTo])
+
+  const hasPaymentDashboardData =
+    purchaseBills.length > 0 || salesBills.length > 0 || payments.length > 0 || paymentModes.length > 0
+
+  if (loading && !companyId && !hasPaymentDashboardData) {
+    return (
+      <AppLoaderShell
+        kind="payment"
+        companyId={companyId}
+        title="Opening payment history"
+        message="Collecting bill payments, self transfers, cash entries, and bank-linked movements."
+      />
+    )
+  }
+
+  return (
+    <DashboardLayout companyId={companyId} initialData={initialLayoutData}>
+      <div className="p-6">
+        <div className="max-w-7xl mx-auto">
+          {errorMessage ? (
+            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {errorMessage}
+            </div>
+          ) : null}
+
+          {loading && !hasPaymentDashboardData ? (
+            <PaymentDashboardSkeleton />
+          ) : (
+            <>
+          <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <h1 className="text-3xl font-bold">Payment Management</h1>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => router.push('/payment/cash-bank/entry')}>
+                <Plus className="w-4 h-4 mr-1" />
+                Cash / Bank Payment
+              </Button>
+              <Button variant="outline" onClick={() => router.push('/payment/journal-voucher/entry')}>
+                <Plus className="w-4 h-4 mr-1" />
+                Journal Voucher
+              </Button>
+              <Button variant="outline" onClick={() => router.push('/payment/bank-statement/upload')}>
+                <Upload className="w-4 h-4 mr-1" />
+                Upload Bank Statement
+              </Button>
+              <Button variant="outline" onClick={() => router.push('/payment/self-transfer/entry')}>
+                <Plus className="w-4 h-4 mr-1" />
+                Self Transfer
+              </Button>
+              <Button variant="outline" onClick={() => router.push('/main/dashboard')}>
+                Back to Dashboard
+              </Button>
+            </div>
+          </div>
+
+          {/* Summary Cards */}
+          <div className="relative mb-6">
+            <RefreshOverlay refreshing={refreshing} label="Refreshing payment summary" />
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+            <Card>
+              <CardContent className="pt-6">
+                <div className="text-center">
+                  <p className="text-sm text-gray-600">Total {activeTab === 'purchase' ? 'Purchase' : 'Sales'} Amount</p>
+                  <p className="text-2xl font-bold text-blue-600">
+                    ₹{currentBills.reduce((sum, bill) => sum + clampNonNegative(bill.totalAmount), 0).toFixed(2)}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="text-center">
+                  <p className="text-sm text-gray-600">Total {activeTab === 'purchase' ? 'Paid' : 'Received'}</p>
+                  <p className="text-2xl font-bold text-green-600">
+                    ₹{totalPaid.toFixed(2)}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="text-center">
+                  <p className="text-sm text-gray-600">Total Pending</p>
+                  <p className="text-2xl font-bold text-red-600">
+                    ₹{totalPending.toFixed(2)}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+            </div>
+          </div>
+
+          {/* Tab Navigation */}
+          <div className="flex space-x-1 mb-6 border-b">
+            <button
+              onClick={() => setActiveTab('purchase')}
+              className={`px-4 py-2 font-medium text-sm ${
+                activeTab === 'purchase'
+                  ? 'border-b-2 border-blue-500 text-blue-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Purchase Payments
+            </button>
+            <button
+              onClick={() => setActiveTab('sales')}
+              className={`px-4 py-2 font-medium text-sm ${
+                activeTab === 'sales'
+                  ? 'border-b-2 border-blue-500 text-blue-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Sales Receipts
+            </button>
+          </div>
+
+          {/* Bills Table */}
+          <Card className="relative mb-6">
+            <RefreshOverlay refreshing={refreshing} label="Refreshing pending bills" />
+            <CardHeader>
+              <CardTitle>
+                {activeTab === 'purchase' ? 'Purchase Bills' : 'Sales Bills'} - Pending Payments
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Bill No</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>{activeTab === 'purchase' ? 'Supplier' : 'Party'}</TableHead>
+                      <TableHead>Total Amount</TableHead>
+                      <TableHead>{activeTab === 'purchase' ? 'Paid' : 'Received'}</TableHead>
+                      <TableHead>Balance</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pendingCurrentBills.map((bill) => (
+                      <TableRow key={bill.id}>
+                        <TableCell>{bill.billNo}</TableCell>
+                        <TableCell>{formatDateSafe(bill.billDate)}</TableCell>
+                        <TableCell>{getBillName(bill)}</TableCell>
+                        <TableCell>₹{clampNonNegative(bill.totalAmount).toFixed(2)}</TableCell>
+                        <TableCell>
+                          ₹{(activeTab === 'purchase'
+                            ? clampNonNegative((bill as PurchaseBill).paidAmount)
+                            : clampNonNegative((bill as SalesBill).receivedAmount)).toFixed(2)}
+                        </TableCell>
+                        <TableCell>₹{clampNonNegative(bill.balanceAmount).toFixed(2)}</TableCell>
+                        <TableCell>
+                          <Badge variant={
+                            bill.status === 'paid' ? 'default' :
+                            bill.status === 'partial' ? 'secondary' : 'destructive'
+                          }>
+                            {bill.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-1">
+                            <Button
+                              size="sm"
+                              onClick={() => handleMakePayment(bill.id)}
+                              disabled={clampNonNegative(bill.balanceAmount) === 0}
+                            >
+                              <Plus className="w-4 h-4 mr-1" />
+                              Pay
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => router.push(`/${activeTab}/view?billId=${bill.id}`)}
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleEditBill(bill.id)}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {pendingCurrentBills.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={8} className="text-center text-gray-500">
+                          No pending bills found
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Payment History */}
+          <Card className="relative">
+            <RefreshOverlay refreshing={refreshing} label="Refreshing payment entries" />
+            <CardHeader>
+              <CardTitle>Payment History</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-6">
+                <div>
+                  <Label htmlFor="paymentTypeFilter">Type</Label>
+                  <Select value={paymentTypeFilter} onValueChange={setPaymentTypeFilter}>
+                    <SelectTrigger id="paymentTypeFilter">
+                      <SelectValue placeholder="All types" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Types</SelectItem>
+                      <SelectItem value="purchase">Purchase Payment</SelectItem>
+                      <SelectItem value="sales">Sales Receipt</SelectItem>
+                      <SelectItem value="cash_bank_payment">Cash / Bank Payment</SelectItem>
+                      <SelectItem value="cash_bank_receipt">Cash / Bank Receipt</SelectItem>
+                      <SelectItem value="self_transfer">Self Transfer</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="partyFilter">Party</Label>
+                  <Select value={partyFilter} onValueChange={setPartyFilter}>
+                    <SelectTrigger id="partyFilter">
+                      <SelectValue placeholder="All parties" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Parties</SelectItem>
+                      {paymentPartyOptions.map((partyName) => (
+                        <SelectItem key={partyName} value={partyName}>
+                          {partyName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="modeFilter">Bank/Mode</Label>
+                  <Select
+                    value={modeFilter}
+                    onValueChange={(value: 'all' | 'cash' | 'online' | 'bank' | 'transfer') => setModeFilter(value)}
+                  >
+                    <SelectTrigger id="modeFilter">
+                      <SelectValue placeholder="All modes" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Modes</SelectItem>
+                      <SelectItem value="bank">Bank Transfer</SelectItem>
+                      <SelectItem value="online">Online</SelectItem>
+                      <SelectItem value="cash">Cash</SelectItem>
+                      <SelectItem value="transfer">Self Transfer</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="dateFrom">Date From</Label>
+                  <Input id="dateFrom" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="dateTo">Date To</Label>
+                  <Input id="dateTo" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                </div>
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => {
+                      setPaymentTypeFilter('all')
+                      setPartyFilter('all')
+                      setModeFilter('all')
+                      setDateFrom('')
+                      setDateTo('')
+                    }}
+                  >
+                    Clear Filters
+                  </Button>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Bill No</TableHead>
+                      <TableHead>Counterparty / Transfer</TableHead>
+                      <TableHead>Payment Date</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Mode</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Transaction Ref</TableHead>
+                      <TableHead>Note</TableHead>
+                      <TableHead>Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredPayments.map((payment) => (
+                      <TableRow key={payment.id}>
+                        <TableCell>
+                          <Badge variant="outline">{payment.billTypeLabel}</Badge>
+                        </TableCell>
+                        <TableCell>{payment.billNo}</TableCell>
+                        <TableCell>{payment.partyName}</TableCell>
+                        <TableCell>{formatDateSafe(payment.payDate)}</TableCell>
+                        <TableCell>₹{clampNonNegative(payment.amount).toFixed(2)}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{payment.modeLabel}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={payment.status === 'paid' ? 'default' : 'secondary'}>
+                            {payment.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>{payment.txnRef || '-'}</TableCell>
+                        <TableCell>{payment.note || '-'}</TableCell>
+                        <TableCell>
+                          <div className="flex gap-1">
+                            <Button size="sm" variant="outline" onClick={() => openPaymentEditor(payment)}>
+                              <Edit className="mr-1 h-4 w-4" />
+                              Edit Entry
+                            </Button>
+                            {isBillLinkedPaymentType(payment.billType) && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() =>
+                                  handleEditBill(payment.billId, payment.billType === 'sales' ? 'sales' : 'purchase')
+                                }
+                              >
+                                Edit Bill
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {filteredPayments.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={10} className="text-center text-gray-500">
+                          No payment history found for selected filters
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Dialog
+            open={isEditPaymentOpen}
+            onOpenChange={(open) => {
+              if (savingPayment) return
+              setIsEditPaymentOpen(open)
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Edit Payment Entry</DialogTitle>
+                <DialogDescription>
+                  Update the saved payment details and keep the linked entry accurate.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="grid gap-4 py-1">
+                <div className="grid gap-2">
+                  <Label htmlFor="editPayDate">Payment Date</Label>
+                  <Input
+                    id="editPayDate"
+                    type="date"
+                    value={paymentDraft.payDate}
+                    onChange={(e) => setPaymentDraft((prev) => ({ ...prev, payDate: e.target.value }))}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="editAmount">Amount</Label>
+                  <Input
+                    id="editAmount"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={paymentDraft.amount}
+                    onChange={(e) => setPaymentDraft((prev) => ({ ...prev, amount: e.target.value }))}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="grid gap-2">
+                    <Label htmlFor="editMode">Mode</Label>
+                    <Select
+                      value={paymentDraft.mode}
+                      onValueChange={(value) => setPaymentDraft((prev) => ({ ...prev, mode: value }))}
+                    >
+                      <SelectTrigger id="editMode">
+                        <SelectValue placeholder="Select mode" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {paymentDraftModeOptions.map((paymentMode) => (
+                          <SelectItem key={paymentMode.id} value={paymentMode.code}>
+                            {paymentMode.name}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value={SELF_TRANSFER_PAYMENT_TYPE}>Self Transfer</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="editStatus">Status</Label>
+                    <Select
+                      value={paymentDraft.status}
+                      onValueChange={(value: 'pending' | 'paid') =>
+                        setPaymentDraft((prev) => ({ ...prev, status: value }))
+                      }
+                    >
+                      <SelectTrigger id="editStatus">
+                        <SelectValue placeholder="Select status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="paid">Paid</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="editTxnRef">Transaction Ref</Label>
+                  <Input
+                    id="editTxnRef"
+                    value={paymentDraft.txnRef}
+                    onChange={(e) => setPaymentDraft((prev) => ({ ...prev, txnRef: e.target.value }))}
+                    placeholder="Optional reference"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="editNote">Note</Label>
+                  <Input
+                    id="editNote"
+                    value={paymentDraft.note}
+                    onChange={(e) => setPaymentDraft((prev) => ({ ...prev, note: e.target.value }))}
+                    placeholder="Optional note"
+                  />
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setIsEditPaymentOpen(false)}
+                  disabled={savingPayment}
+                >
+                  Cancel
+                </Button>
+                <ActionButton
+                  onClick={handleUpdatePayment}
+                  state={savingPayment ? 'loading' : 'idle'}
+                  idleLabel="Update Entry"
+                  loadingLabel="Updating..."
+                />
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+            </>
+          )}
+        </div>
+      </div>
+    </DashboardLayout>
+  )
+}

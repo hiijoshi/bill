@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { getSession } from '@/lib/session'
 import SuperAdminOverviewClient from '@/app/super-admin/components/SuperAdminOverviewClient'
 import { loadSuperAdminOverviewData } from '@/lib/server-super-admin-overview'
+import { fetchInternalApiJson } from '@/lib/server-internal-api'
 
 export default async function SuperAdminDashboardPage() {
   const session = await getSession('super_admin')
@@ -19,8 +20,11 @@ export default async function SuperAdminDashboardPage() {
     users: overview.users || [],
     permissionPreview: overview.permissionPreview || null
   }
+  const initialProfile = await fetchInternalApiJson<{ user?: { userId?: string; name?: string; role?: string } }>(
+    '/api/super-admin/profile'
+  ).catch(() => null)
 
   return (
-    <SuperAdminOverviewClient initialOverview={initialOverview} />
+    <SuperAdminOverviewClient initialOverview={initialOverview} initialProfile={initialProfile} />
   )
 }
