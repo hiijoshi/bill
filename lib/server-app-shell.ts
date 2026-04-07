@@ -12,12 +12,13 @@ import type { DashboardLayoutInitialData, SubscriptionBannerPayload } from '@/li
 import { getAccessibleCompanies, normalizeAppRole, normalizeId } from '@/lib/api-security'
 import { getFinancialYearContext } from '@/lib/financial-years'
 import { prisma } from '@/lib/prisma'
+import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
 import { getSession } from '@/lib/session'
 import {
   getCompanyCookieNameCandidates,
   getFinancialYearCookieNameCandidates
 } from '@/lib/session-cookies'
-import { getCurrentTraderSubscription, getTraderSubscriptionEntitlement } from '@/lib/subscription-core'
+import { getTraderSubscriptionEntitlement } from '@/lib/subscription-core'
 import { ensureSubscriptionManagementSchemaReady } from '@/lib/subscription-schema'
 import { getTraderDataLifecycleSummary } from '@/lib/trader-retention'
 
@@ -38,6 +39,8 @@ type ServerUserRow = {
     maxUsers: number | null
   } | null
 }
+
+const SUBSCRIPTION_BANNER_CACHE_TTL_MS = 20_000
 
 export type ServerAppShellBootstrap = {
   auth: RequestAuthContext
@@ -159,43 +162,51 @@ async function loadSubscriptionBanner(user: ServerUserRow): Promise<Subscription
     return null
   }
 
-  const [entitlement, currentSubscription, dataLifecycle] = await Promise.all([
-    getTraderSubscriptionEntitlement(prisma, user.traderId, new Date(), {
-      id: user.trader.id,
-      name: user.trader.name || '',
-      maxCompanies: user.trader.maxCompanies,
-      maxUsers: user.trader.maxUsers,
-      locked: user.trader.locked,
-      deletedAt: user.trader.deletedAt
-    }),
-    getCurrentTraderSubscription(prisma, user.traderId),
-    getTraderDataLifecycleSummary(prisma, user.traderId, new Date(), {
-      traderDeletedAt: user.trader.deletedAt
-    })
+  const now = new Date()
+  const cacheKey = makeServerCacheKey('shell-subscription-banner', [
+    user.traderId,
+    user.trader.locked,
+    user.trader.deletedAt?.toISOString() || '',
+    now.toISOString().slice(0, 16)
   ])
 
-  return {
-    entitlement: entitlement
-      ? {
-          lifecycleState: entitlement.lifecycleState,
-          message: entitlement.message,
-          daysLeft: entitlement.daysLeft
-        }
-      : null,
-    dataLifecycle: dataLifecycle
-      ? {
-          state: dataLifecycle.state,
-          readOnlyMode: dataLifecycle.readOnlyMode,
-          message: dataLifecycle.message
-        }
-      : null,
-    currentSubscription: currentSubscription
-      ? {
-          planName: currentSubscription.planName,
-          endDate: currentSubscription.endDate
-        }
-      : null
-  }
+  return getOrSetServerCache(cacheKey, SUBSCRIPTION_BANNER_CACHE_TTL_MS, async () => {
+    const entitlement = await getTraderSubscriptionEntitlement(prisma, user.traderId, now, {
+      id: user.trader!.id,
+      name: user.trader!.name || '',
+      maxCompanies: user.trader!.maxCompanies,
+      maxUsers: user.trader!.maxUsers,
+      locked: user.trader!.locked,
+      deletedAt: user.trader!.deletedAt
+    })
+    const dataLifecycle = await getTraderDataLifecycleSummary(prisma, user.traderId, now, {
+      traderDeletedAt: user.trader!.deletedAt,
+      entitlement
+    })
+
+    return {
+      entitlement: entitlement
+        ? {
+            lifecycleState: entitlement.lifecycleState,
+            message: entitlement.message,
+            daysLeft: entitlement.daysLeft
+          }
+        : null,
+      dataLifecycle: dataLifecycle
+        ? {
+            state: dataLifecycle.state,
+            readOnlyMode: dataLifecycle.readOnlyMode,
+            message: dataLifecycle.message
+          }
+        : null,
+      currentSubscription: entitlement?.currentSubscription
+        ? {
+            planName: entitlement.currentSubscription.planName,
+            endDate: entitlement.currentSubscription.endDate
+          }
+        : null
+    }
+  })
 }
 
 async function loadFinancialYearPayload(args: {

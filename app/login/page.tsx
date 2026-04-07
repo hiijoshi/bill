@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,10 +8,23 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { LoaderMark } from '@/components/loaders/task-loader'
-import { Building2, User, Lock, AlertCircle } from 'lucide-react'
+import { Building2, User, Lock, AlertCircle, Loader2 } from 'lucide-react'
 import { clearClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
 import { loadClientPermissions, primeClientPermissions } from '@/lib/client-permissions'
+
+type LoginPhase = 'idle' | 'authenticating' | 'preparing' | 'redirecting'
+
+function waitForNextPaint() {
+  return new Promise<void>((resolve) => {
+    if (typeof window === 'undefined') {
+      resolve()
+      return
+    }
+
+    window.requestAnimationFrame(() => resolve())
+  })
+}
 
 export default function LoginPage() {
   return (
@@ -24,15 +37,36 @@ export default function LoginPage() {
 function LoginPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [loading, setLoading] = useState(false)
+  const [phase, setPhase] = useState<LoginPhase>('idle')
   const [error, setError] = useState('')
   const [traderId, setTraderId] = useState('')
   const [userId, setUserId] = useState('')
   const [password, setPassword] = useState('')
+  const loading = phase !== 'idle'
+  const loadingMessage = useMemo(() => {
+    if (phase === 'authenticating') {
+      return 'Checking your credentials...'
+    }
+
+    if (phase === 'preparing') {
+      return 'Preparing your company access and dashboard...'
+    }
+
+    if (phase === 'redirecting') {
+      return 'Opening your workspace...'
+    }
+
+    return ''
+  }, [phase])
 
   useEffect(() => {
     clearClientCache()
   }, [])
+
+  useEffect(() => {
+    router.prefetch('/main/dashboard')
+    router.prefetch('/main/profile')
+  }, [router])
 
   useEffect(() => {
     const queryTraderId = searchParams.get('traderId')?.trim() || ''
@@ -62,8 +96,9 @@ function LoginPageContent() {
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setError('')
-    setLoading(true)
+    setPhase('authenticating')
   
+    let didStartNavigation = false
 
     try {
       clearClientCache()
@@ -139,6 +174,7 @@ function LoginPageContent() {
             .filter((company) => company.id.length > 0)
         : []
       const fallbackCompanyId = companyId || normalizedCompanies.find((company) => !company.locked)?.id || ''
+      setPhase('preparing')
 
       setClientCache(
         'shell:auth-me',
@@ -174,6 +210,10 @@ function LoginPageContent() {
       }
 
       if (!fallbackCompanyId) {
+        didStartNavigation = true
+        setPhase('redirecting')
+        router.prefetch('/main/profile')
+        await waitForNextPaint()
         router.replace('/main/profile')
         return
       }
@@ -202,12 +242,18 @@ function LoginPageContent() {
         (companyId === fallbackCompanyId ? loginPayload.bootstrap?.defaultRoute : '') ||
         resolveFirstAccessibleAppRoute(resolvedPermissions, fallbackCompanyId)
       ).trim() || '/main/dashboard'
+      didStartNavigation = true
+      setPhase('redirecting')
+      router.prefetch(nextRoute)
+      await waitForNextPaint()
       router.replace(nextRoute)
     } catch (error) {
-      
       setError(error instanceof Error ? error.message : 'Login failed. Please try again.')
+      setPhase('idle')
     } finally {
-      setLoading(false)
+      if (!didStartNavigation) {
+        setPhase('idle')
+      }
     }
   }
 
@@ -327,6 +373,19 @@ function LoginPageContent() {
           </CardContent>
         </Card>
       </div>
+      {loading ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/88 backdrop-blur-sm">
+          <div className="rounded-3xl border border-slate-200 bg-white px-6 py-5 shadow-xl">
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-slate-900">Signing you in</p>
+                <p className="text-sm text-slate-600">{loadingMessage}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
