@@ -10,6 +10,10 @@ const pendingLoads = new Map<string, Promise<unknown>>()
 
 let redisClient: RedisClientType | null = null
 let redisDisabled = false
+const REDIS_CONNECT_TIMEOUT_MS = Math.max(
+  250,
+  Math.min(5_000, Number(process.env.REDIS_CONNECT_TIMEOUT_MS || 1_000))
+)
 
 function logCacheWarning(message: string, error?: unknown) {
   if (process.env.NODE_ENV !== 'development') {
@@ -35,12 +39,38 @@ async function getRedisClient(): Promise<RedisClientType | null> {
     return null
   }
 
+  let candidateClient: RedisClientType | null = null
   try {
-    redisClient = createClient({ url: process.env.REDIS_URL })
-    await redisClient.connect()
+    candidateClient = createClient({
+      url: process.env.REDIS_URL,
+      socket: {
+        connectTimeout: REDIS_CONNECT_TIMEOUT_MS,
+        reconnectStrategy: false
+      }
+    })
+    candidateClient.on('error', () => {
+      // Connection failures are handled during get/set calls. Avoid noisy server logs.
+    })
+    await candidateClient.connect()
+    redisClient = candidateClient
     return redisClient
   } catch (error) {
     redisDisabled = true
+    if (candidateClient) {
+      try {
+        candidateClient.destroy()
+      } catch {
+        // Ignore teardown failures after a failed connect attempt.
+      }
+    }
+    if (redisClient) {
+      try {
+        redisClient.destroy()
+      } catch {
+        // Ignore teardown failures after a failed connect attempt.
+      }
+      redisClient = null
+    }
     logCacheWarning('Failed to connect to Redis for caching. Falling back to in-memory cache.', error)
     return null
   }
