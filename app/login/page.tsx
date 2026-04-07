@@ -11,7 +11,7 @@ import { LoaderMark } from '@/components/loaders/task-loader'
 import { Building2, User, Lock, AlertCircle } from 'lucide-react'
 import { clearClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
-import { primeClientPermissions } from '@/lib/client-permissions'
+import { loadClientPermissions, primeClientPermissions } from '@/lib/client-permissions'
 
 export default function LoginPage() {
   return (
@@ -138,6 +138,7 @@ function LoginPageContent() {
             }))
             .filter((company) => company.id.length > 0)
         : []
+      const fallbackCompanyId = companyId || normalizedCompanies.find((company) => !company.locked)?.id || ''
 
       setClientCache(
         'shell:auth-me',
@@ -146,12 +147,12 @@ function LoginPageContent() {
             userId: loginPayload.user?.userId || null,
             name: loginPayload.user?.name || null,
             role: loginPayload.user?.role || null,
-            companyId: companyId || null
+            companyId: fallbackCompanyId || null
           },
-          company: companyId
+          company: fallbackCompanyId
             ? {
-                id: companyId,
-                name: String(loginPayload.company?.name || companyId).trim() || companyId
+                id: fallbackCompanyId,
+                name: String(loginPayload.company?.name || fallbackCompanyId).trim() || fallbackCompanyId
               }
             : null
         },
@@ -162,24 +163,44 @@ function LoginPageContent() {
         setClientCache('shell:companies', normalizedCompanies, { persist: true })
       }
 
-      if (companyId) {
-        setClientCache('shell:active-company-id', companyId, { persist: true })
+      if (fallbackCompanyId) {
+        setClientCache('shell:active-company-id', fallbackCompanyId, { persist: true })
         primeClientPermissions({
-          companyId,
+          companyId: fallbackCompanyId,
           permissions: normalizedPermissions,
           grantedReadModules: loginPayload.bootstrap?.grantedReadModules,
           grantedWriteModules: loginPayload.bootstrap?.grantedWriteModules
         })
       }
 
-      if (!companyId) {
-        router.replace('/company/select')
+      if (!fallbackCompanyId) {
+        router.replace('/main/profile')
         return
       }
 
+      if (!companyId) {
+        const selectCompanyResponse = await fetch('/api/auth/company', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ companyId: fallbackCompanyId, force: true }),
+        })
+
+        if (!selectCompanyResponse.ok) {
+          const selectCompanyPayload = await selectCompanyResponse.json().catch(() => ({}))
+          throw new Error(selectCompanyPayload.error || 'Failed to activate company')
+        }
+      }
+
+      const resolvedPermissions =
+        companyId === fallbackCompanyId
+          ? normalizedPermissions
+          : (await loadClientPermissions(fallbackCompanyId, { force: true })).permissions
+
       const nextRoute = String(
-        loginPayload.bootstrap?.defaultRoute ||
-        resolveFirstAccessibleAppRoute(normalizedPermissions, companyId)
+        (companyId === fallbackCompanyId ? loginPayload.bootstrap?.defaultRoute : '') ||
+        resolveFirstAccessibleAppRoute(resolvedPermissions, fallbackCompanyId)
       ).trim() || '/main/dashboard'
       router.replace(nextRoute)
     } catch (error) {

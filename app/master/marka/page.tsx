@@ -11,6 +11,7 @@ import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Hash, Upload } from 'lucide-react'
+import { APP_COMPANY_CHANGED_EVENT } from '@/lib/company-context'
 import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
 interface Marka {
@@ -55,6 +56,17 @@ export default function MarkaMasterPage() {
 
   useEffect(() => {
     void fetchMarkas()
+
+    const onCompanyChanged = () => {
+      setLoading(true)
+      void fetchMarkas()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
   }, [fetchMarkas])
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { parseBooleanParam, requireRoles } from '@/lib/api-security'
+import { invalidateAuthGuardStateForUser } from '@/lib/auth-guard-state'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { normalizeTraderLimitInput } from '@/lib/trader-limits'
 import { normalizePrismaApiError } from '@/lib/prisma-errors'
+import { markCompanyLiveUpdates, markSuperAdminLiveUpdate, markUserSessionLiveUpdates } from '@/lib/live-update-state'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'Trader ID is required') })
 
@@ -152,6 +154,35 @@ export async function PUT(
       }
     }
 
+    const affectedUsers =
+      parsedBody.data.locked !== undefined && parsedBody.data.locked !== existingTrader.locked
+        ? await prisma.user.findMany({
+            where: {
+              traderId,
+              deletedAt: null
+            },
+            select: {
+              id: true,
+              traderId: true,
+              userId: true
+            }
+          })
+        : []
+    const affectedCompanyIds =
+      parsedBody.data.locked !== undefined && parsedBody.data.locked !== existingTrader.locked
+        ? (
+            await prisma.company.findMany({
+              where: {
+                traderId,
+                deletedAt: null
+              },
+              select: {
+                id: true
+              }
+            })
+          ).map((company) => company.id)
+        : []
+
     const updatedTrader = await prisma.$transaction(async (tx) => {
       const updated = await tx.trader.update({
         where: { id: traderId },
@@ -208,6 +239,12 @@ export async function PUT(
       after: updatedTrader,
       requestMeta: getAuditRequestMeta(request)
     })
+    markSuperAdminLiveUpdate()
+    markCompanyLiveUpdates(affectedCompanyIds)
+    markUserSessionLiveUpdates(affectedUsers)
+    affectedUsers.forEach((user) => {
+      invalidateAuthGuardStateForUser(user)
+    })
 
     const response = await getTraderById(traderId, false)
     return NextResponse.json(response)
@@ -233,71 +270,13 @@ export async function DELETE(
     if (!parsedParams.success) {
       return NextResponse.json({ error: 'Invalid trader ID' }, { status: 400 })
     }
-
-    const traderId = parsedParams.data.id
-    if (traderId === 'system') {
-      return NextResponse.json({ error: 'Cannot delete system trader' }, { status: 403 })
-    }
-
-    const existingTrader = await prisma.trader.findFirst({
-      where: { id: traderId, deletedAt: null }
-    })
-
-    if (!existingTrader) {
-      return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
-    }
-
-    const deletedAt = new Date()
-
-    const deletedSnapshot = await prisma.$transaction(async (tx) => {
-      const trader = await tx.trader.update({
-        where: { id: traderId },
-        data: {
-          locked: true,
-          deletedAt
-        }
-      })
-
-      await tx.company.updateMany({
-        where: {
-          traderId,
-          deletedAt: null
-        },
-        data: {
-          locked: true,
-          deletedAt
-        }
-      })
-
-      await tx.user.updateMany({
-        where: {
-          traderId,
-          deletedAt: null
-        },
-        data: {
-          locked: true,
-          deletedAt
-        }
-      })
-
-      return trader
-    })
-
-    await writeAuditLog({
-      actor: {
-        id: authResult.auth.userDbId || authResult.auth.userId,
-        role: authResult.auth.role
+    return NextResponse.json(
+      {
+        error:
+          'Direct trader deletion is disabled. Use trader subscription closure workflow: create backup, mark deletion pending, then confirm final deletion.'
       },
-      action: 'DELETE',
-      resourceType: 'TRADER',
-      resourceId: traderId,
-      scope: { traderId },
-      before: existingTrader,
-      after: deletedSnapshot,
-      requestMeta: getAuditRequestMeta(request)
-    })
-
-    return NextResponse.json({ success: true })
+      { status: 409 }
+    )
   } catch (error) {
     const apiError = normalizePrismaApiError(error, 'Failed to delete trader')
     return NextResponse.json({ error: apiError.message }, { status: apiError.status })

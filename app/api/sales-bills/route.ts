@@ -14,6 +14,11 @@ import {
   listSalesAdditionalChargesByBillIds,
   replaceSalesAdditionalChargesForBill,
 } from '@/lib/sales-additional-charge-store'
+import {
+  assertFinancialYearOpenForDate,
+  FinancialYearValidationError,
+  getFinancialYearDateFilter
+} from '@/lib/financial-years'
 
 const salesItemSchema = z.object({
   productId: z.string().min(1),
@@ -67,6 +72,8 @@ const salesUpdateSchema = salesCreateSchema.extend({
   id: z.string().optional()
 })
 
+type SalesBillListView = 'default' | 'list' | 'payment' | 'report'
+
 function safeToDate(value?: string): Date {
   if (!value) return new Date()
   const parsed = new Date(value)
@@ -103,6 +110,11 @@ function normalizeBillNo(invoiceNo: unknown, billNo: unknown): string {
   const fromBillNo = String(billNo || '').trim()
   if (fromBillNo) return fromBillNo
   return '1'
+}
+
+function normalizeSalesBillListView(value: string | null): SalesBillListView {
+  if (value === 'list' || value === 'payment' || value === 'report') return value
+  return 'default'
 }
 
 function normalizeSalesItems(items: Array<z.infer<typeof salesItemSchema>>) {
@@ -441,6 +453,12 @@ export async function POST(request: NextRequest) {
     const billDateValue = safeToDate(body.invoiceDate || body.billDate)
     const billNo = normalizeBillNo(body.invoiceNo, body.billNo)
 
+    await assertFinancialYearOpenForDate({
+      companyId,
+      date: billDateValue,
+      actionLabel: 'Sales bill'
+    })
+
     const riskDenied = await assertPartyCreditRisk({
       companyId,
       partyId: party.id,
@@ -553,6 +571,9 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     )
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     const message = error instanceof Error ? error.message : 'Internal server error'
     const status = message.includes('not found') || message.includes('required') ? 400 : 500
     return NextResponse.json({ error: message }, { status })
@@ -565,9 +586,8 @@ export async function GET(request: NextRequest) {
     const companyId = normalizeId(searchParams.get('companyId'))
     const billId = normalizeId(searchParams.get('billId'))
     const last = searchParams.get('last')
-    const dateFrom = searchParams.get('dateFrom')
-    const dateTo = searchParams.get('dateTo')
     const includeCancelled = parseBooleanParam(searchParams.get('includeCancelled'))
+    const view = normalizeSalesBillListView(searchParams.get('view'))
 
     if (!companyId) {
       return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
@@ -575,6 +595,11 @@ export async function GET(request: NextRequest) {
 
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
+
+    const financialYearFilter = await getFinancialYearDateFilter({
+      request,
+      companyId
+    })
 
     if (last === 'true') {
       const bills = await prisma.salesBill.findMany({
@@ -629,41 +654,145 @@ export async function GET(request: NextRequest) {
       ...(includeCancelled ? {} : { status: { not: 'cancelled' } })
     }
 
-    if (dateFrom || dateTo) {
+    if (financialYearFilter.dateFrom || financialYearFilter.dateTo) {
       whereClause.billDate = {}
-      if (dateFrom) whereClause.billDate.gte = safeToDate(dateFrom)
-      if (dateTo) whereClause.billDate.lte = safeToDate(`${dateTo}T23:59:59.999`)
+      if (financialYearFilter.dateFrom) whereClause.billDate.gte = financialYearFilter.dateFrom
+      if (financialYearFilter.dateTo) whereClause.billDate.lte = financialYearFilter.dateTo
     }
 
     if (pagination.search) {
       whereClause.OR = [{ billNo: { contains: pagination.search } }, { status: { contains: pagination.search } }]
     }
 
+    const listQuery =
+      view === 'payment'
+        ? prisma.salesBill.findMany({
+            where: whereClause,
+            select: {
+              id: true,
+              companyId: true,
+              billNo: true,
+              billDate: true,
+              totalAmount: true,
+              receivedAmount: true,
+              balanceAmount: true,
+              status: true,
+              party: {
+                select: {
+                  id: true,
+                  address: true,
+                  name: true,
+                  phone1: true
+                }
+              }
+            },
+            orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }],
+            ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
+          })
+        : view === 'list'
+          ? prisma.salesBill.findMany({
+              where: whereClause,
+              select: {
+                id: true,
+                billNo: true,
+                billDate: true,
+                totalAmount: true,
+                receivedAmount: true,
+                balanceAmount: true,
+                status: true,
+                party: {
+                  select: {
+                    name: true,
+                    address: true,
+                    phone1: true
+                  }
+                },
+                salesItems: {
+                  select: {
+                    weight: true,
+                    bags: true,
+                    rate: true,
+                    amount: true,
+                    product: {
+                      select: {
+                        name: true
+                      }
+                    }
+                  }
+                },
+                transportBills: {
+                  select: {
+                    transportName: true,
+                    lorryNo: true,
+                    freightAmount: true,
+                    otherAmount: true,
+                    insuranceAmount: true
+                  }
+                }
+              },
+              orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }],
+              ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
+            })
+        : view === 'report'
+          ? prisma.salesBill.findMany({
+              where: whereClause,
+              select: {
+                id: true,
+                companyId: true,
+                billNo: true,
+                billDate: true,
+                totalAmount: true,
+                receivedAmount: true,
+                balanceAmount: true,
+                status: true,
+                party: {
+                  select: {
+                    name: true,
+                    address: true,
+                    phone1: true
+                  }
+                },
+                salesItems: {
+                  select: {
+                    weight: true,
+                    bags: true,
+                    rate: true
+                  }
+                }
+              },
+              orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }],
+              ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
+            })
+          : prisma.salesBill.findMany({
+              where: whereClause,
+              include: {
+                party: true,
+                salesItems: {
+                  include: {
+                    product: true
+                  }
+                },
+                transportBills: true
+              },
+              orderBy: { createdAt: 'desc' },
+              ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
+            })
+
     const [salesBills, total] = await Promise.all([
-      prisma.salesBill.findMany({
-        where: whereClause,
-        include: {
-          party: true,
-          salesItems: {
-            include: {
-              product: true
-            }
-          },
-          transportBills: true
-        },
-        orderBy: { createdAt: 'desc' },
-        ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
-      }),
+      listQuery,
       pagination.enabled ? prisma.salesBill.count({ where: whereClause }) : Promise.resolve(0)
     ])
 
-    const additionalChargesMap = await listSalesAdditionalChargesByBillIds(
-      prisma,
-      salesBills.map((bill) => bill.id)
-    )
+    const additionalChargesMap =
+      view === 'default'
+        ? await listSalesAdditionalChargesByBillIds(
+            prisma,
+            salesBills.map((bill) => bill.id)
+          )
+        : new Map()
     const safeSalesBills = salesBills.map((bill) => ({
       ...sanitizeSalesBill(bill),
-      additionalCharges: additionalChargesMap.get(bill.id) || [],
+      ...(view === 'default' ? { additionalCharges: additionalChargesMap.get(bill.id) || [] } : {})
     }))
 
     if (pagination.enabled) {
@@ -674,7 +803,10 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json(safeSalesBills)
-  } catch {
+  } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -783,6 +915,12 @@ export async function PUT(request: NextRequest) {
     const nextBillDate = body.invoiceDate || body.billDate ? safeToDate(body.invoiceDate || body.billDate) : existing.billDate
     const hasBillNoInput = String(body.invoiceNo || '').trim() || String(body.billNo || '').trim()
     const nextBillNo = hasBillNoInput ? normalizeBillNo(body.invoiceNo, body.billNo) : existing.billNo
+
+    await assertFinancialYearOpenForDate({
+      companyId,
+      date: nextBillDate,
+      actionLabel: 'Sales bill update'
+    })
 
     const riskDenied = await assertPartyCreditRisk({
       companyId,
@@ -940,6 +1078,9 @@ export async function PUT(request: NextRequest) {
         : null,
     })
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     const message = error instanceof Error ? error.message : 'Internal server error'
     const status = message.includes('not found') || message.includes('required') ? 400 : 500
     return NextResponse.json({ error: message }, { status })

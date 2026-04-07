@@ -18,6 +18,7 @@ import {
   getDefaultPurchaseProductId,
   setDefaultPurchaseProductId
 } from '@/lib/default-product'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
 import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
@@ -128,23 +129,30 @@ export default function ProductMasterPage() {
     })
   }, [])
 
-  const fetchUnits = useCallback(async () => {
+  const fetchUnits = useCallback(async (targetCompanyId: string) => {
+    if (!targetCompanyId) {
+      setUnits([])
+      return
+    }
+
     const cached = getClientCache<{ companyId?: string; units?: Unit[] }>(
       UNIT_MASTER_CACHE_KEY,
       UNIT_MASTER_CACHE_AGE_MS
     )
 
-    if (cached && Array.isArray(cached.units) && cached.units.length > 0) {
+    const cachedCompanyId = typeof cached?.companyId === 'string' ? cached.companyId : ''
+
+    if (cachedCompanyId === targetCompanyId && Array.isArray(cached?.units) && cached.units.length > 0) {
       applyUnitRows(
         cached.units,
-        typeof cached.companyId === 'string' ? cached.companyId : ''
+        cachedCompanyId
       )
     }
 
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const response = await fetch('/api/units', { cache: 'no-store' })
+          const response = await fetch(`/api/units?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' })
           const data = (await response.json().catch(() => ({}))) as UnitResponsePayload | Unit[]
           const rows = (Array.isArray((data as UnitResponsePayload)?.units)
             ? (data as UnitResponsePayload).units
@@ -153,8 +161,8 @@ export default function ProductMasterPage() {
               : []) as Unit[]
           const resolvedCompanyId =
             typeof (data as UnitResponsePayload)?.companyId === 'string'
-              ? (data as UnitResponsePayload).companyId || ''
-              : ''
+              ? (data as UnitResponsePayload).companyId || targetCompanyId
+              : targetCompanyId
 
           if (response.ok) {
             applyUnitRows(rows, resolvedCompanyId)
@@ -175,13 +183,13 @@ export default function ProductMasterPage() {
 
           if (typeof payload.error === 'string' && payload.error.trim()) {
             setErrorMessage(payload.error.trim())
-          } else if (cached?.units?.length) {
+          } else if (cachedCompanyId === targetCompanyId && cached?.units?.length) {
             setErrorMessage('Unit list is taking longer than expected. Showing the last loaded data.')
           } else {
             setErrorMessage('Unable to load units right now. Please refresh and try again.')
           }
 
-          if (!cached?.units?.length) {
+          if (!(cachedCompanyId === targetCompanyId && cached?.units?.length)) {
             setUnits([])
           }
           return
@@ -194,11 +202,11 @@ export default function ProductMasterPage() {
           }
           if (timeoutLikeError) {
             setErrorMessage(
-              cached?.units?.length
+              cachedCompanyId === targetCompanyId && cached?.units?.length
                 ? 'Unit list is taking longer than expected. Showing the last loaded data.'
                 : 'Unit list took too long to load. Please refresh once.'
             )
-            if (!cached?.units?.length) {
+            if (!(cachedCompanyId === targetCompanyId && cached?.units?.length)) {
               setUnits([])
             }
             return
@@ -210,33 +218,42 @@ export default function ProductMasterPage() {
     } catch (error) {
       if (isAbortError(error)) {
         setErrorMessage(
-          cached?.units?.length
+          cachedCompanyId === targetCompanyId && cached?.units?.length
             ? 'Unit list is taking longer than expected. Showing the last loaded data.'
             : 'Unit list took too long to load. Please refresh once.'
         )
-        if (!cached?.units?.length) {
+        if (!(cachedCompanyId === targetCompanyId && cached?.units?.length)) {
           setUnits([])
         }
         return
       }
       console.error('Error fetching units:', error)
       setErrorMessage('Unable to load units right now. Please refresh and try again.')
-      if (!cached?.units?.length) {
+      if (!(cachedCompanyId === targetCompanyId && cached?.units?.length)) {
         setUnits([])
       }
     }
   }, [applyUnitRows])
 
-  const fetchProducts = useCallback(async () => {
+  const fetchProducts = useCallback(async (targetCompanyId: string) => {
+    if (!targetCompanyId) {
+      setProducts([])
+      setDefaultPurchaseProductIdState('')
+      setLoading(false)
+      return
+    }
+
     const cached = getClientCache<{ companyId?: string; products?: Product[] }>(
       PRODUCT_MASTER_CACHE_KEY,
       PRODUCT_MASTER_CACHE_AGE_MS
     )
 
-    if (cached && Array.isArray(cached.products) && cached.products.length > 0) {
+    const cachedCompanyId = typeof cached?.companyId === 'string' ? cached.companyId : ''
+
+    if (cachedCompanyId === targetCompanyId && Array.isArray(cached?.products) && cached.products.length > 0) {
       applyProductRows(
         cached.products,
-        typeof cached.companyId === 'string' ? cached.companyId : ''
+        cachedCompanyId
       )
       setLoading(false)
     }
@@ -244,7 +261,7 @@ export default function ProductMasterPage() {
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const response = await fetch('/api/products', { cache: 'no-store' })
+          const response = await fetch(`/api/products?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' })
           const data = (await response.json().catch(() => ({}))) as ProductResponsePayload | Product[]
           const rows = (Array.isArray((data as ProductResponsePayload)?.products)
             ? (data as ProductResponsePayload).products
@@ -255,8 +272,8 @@ export default function ProductMasterPage() {
                 : []) as Product[]
           const resolvedCompanyId =
             typeof (data as ProductResponsePayload)?.companyId === 'string'
-              ? (data as ProductResponsePayload).companyId || ''
-              : ''
+              ? (data as ProductResponsePayload).companyId || targetCompanyId
+              : targetCompanyId
 
           if (response.ok) {
             applyProductRows(rows, resolvedCompanyId)
@@ -280,7 +297,7 @@ export default function ProductMasterPage() {
               ? payload.error.trim()
               : 'Unable to load products right now. Please refresh and try again.'
           )
-          if (!cached?.products?.length) {
+          if (!(cachedCompanyId === targetCompanyId && cached?.products?.length)) {
             setProducts([])
           }
           return
@@ -293,11 +310,11 @@ export default function ProductMasterPage() {
           }
           if (timeoutLikeError) {
             setErrorMessage(
-              cached?.products?.length
+              cachedCompanyId === targetCompanyId && cached?.products?.length
                 ? 'Product list is taking longer than expected. Showing the last loaded data.'
                 : 'Product list took too long to load. Please refresh once.'
             )
-            if (!cached?.products?.length) {
+            if (!(cachedCompanyId === targetCompanyId && cached?.products?.length)) {
               setProducts([])
             }
             return
@@ -309,18 +326,18 @@ export default function ProductMasterPage() {
     } catch (error) {
       if (isAbortError(error)) {
         setErrorMessage(
-          cached?.products?.length
+          cachedCompanyId === targetCompanyId && cached?.products?.length
             ? 'Product list is taking longer than expected. Showing the last loaded data.'
             : 'Product list took too long to load. Please refresh once.'
         )
-        if (!cached?.products?.length) {
+        if (!(cachedCompanyId === targetCompanyId && cached?.products?.length)) {
           setProducts([])
         }
         return
       }
       console.error('Error fetching products:', error)
       setErrorMessage('Unable to load products right now. Please refresh and try again.')
-      if (!cached?.products?.length) {
+      if (!(cachedCompanyId === targetCompanyId && cached?.products?.length)) {
         setProducts([])
       }
     } finally {
@@ -329,9 +346,40 @@ export default function ProductMasterPage() {
   }, [applyProductRows])
 
   useEffect(() => {
-    ;(async () => {
-      await Promise.all([fetchProducts(), fetchUnits()])
-    })()
+    let cancelled = false
+
+    const loadProductScope = async () => {
+      setLoading(true)
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (cancelled) return
+
+      if (!resolvedCompanyId) {
+        setCompanyId('')
+        setProducts([])
+        setUnits([])
+        setDefaultPurchaseProductIdState('')
+        setErrorMessage('Company not selected. Please select company once.')
+        setLoading(false)
+        return
+      }
+
+      setCompanyId(resolvedCompanyId)
+      stripCompanyParamsFromUrl()
+      await Promise.all([fetchProducts(resolvedCompanyId), fetchUnits(resolvedCompanyId)])
+    }
+
+    void loadProductScope()
+
+    const onCompanyChanged = () => {
+      void loadProductScope()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
   }, [fetchProducts, fetchUnits])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -385,7 +433,7 @@ export default function ProductMasterPage() {
 
         alert(editingProduct ? 'Product updated successfully!' : 'Product created successfully!')
         resetForm()
-        fetchProducts()
+        void fetchProducts(resolvedCompanyId)
       } else {
         const error = await response.json().catch(() => ({}))
         alert(error?.error || 'Operation failed')
@@ -428,7 +476,7 @@ export default function ProductMasterPage() {
         }
 
         alert('Product deleted successfully!')
-        fetchProducts()
+        void fetchProducts(companyId)
       } else {
         const error = await response.json().catch(() => ({}))
         alert(error?.error || 'Delete failed')
@@ -453,7 +501,7 @@ export default function ProductMasterPage() {
           clearDefaultPurchaseProductId(companyId)
         }
         setDefaultPurchaseProductIdState('')
-        fetchProducts()
+        void fetchProducts(companyId)
       }
     } catch (error) {
       console.error('Error deleting all products:', error)
@@ -511,7 +559,7 @@ export default function ProductMasterPage() {
     }
 
     alert(formatMasterImportSummary('Product', result))
-    await fetchProducts()
+    await fetchProducts(companyId)
   }
 
   const resetForm = () => {

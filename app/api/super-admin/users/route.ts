@@ -10,6 +10,7 @@ import { PERMISSION_MODULES, type PermissionModule } from '@/lib/permissions'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { syncSupabaseForLegacyUserMutation, syncSupabaseForLegacyUserMutationWithTimeout } from '@/lib/supabase/legacy-user-sync'
 import { isUniqueConstraintError, normalizePrismaApiError } from '@/lib/prisma-errors'
+import { markSuperAdminLiveUpdate } from '@/lib/live-update-state'
 
 const createUserSchema = z
   .object({
@@ -212,6 +213,7 @@ async function respondForExistingUserLink(params: {
     requestMeta: getAuditRequestMeta(request),
     notes: 'Attached existing user to additional company'
   })
+  markSuperAdminLiveUpdate()
 
   let cloudSyncWarning: string | null = null
   if (isSupabaseConfigured()) {
@@ -250,13 +252,39 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = new URL(request.url).searchParams
     const includeDeleted = parseBooleanParam(searchParams.get('includeDeleted'))
-    const traderId = searchParams.get('traderId')?.trim()
+    const traderId = searchParams.get('traderId')?.trim() || ''
     const companyId = searchParams.get('companyId')?.trim()
+    let scopedTraderId = traderId
+
+    if (companyId) {
+      const scopedCompany = await prisma.company.findFirst({
+        where: {
+          id: companyId,
+          ...(includeDeleted ? {} : { deletedAt: null })
+        },
+        select: {
+          id: true,
+          traderId: true
+        }
+      })
+
+      if (!scopedCompany) {
+        return NextResponse.json([])
+      }
+
+      if (scopedTraderId && scopedCompany.traderId && scopedCompany.traderId !== scopedTraderId) {
+        return NextResponse.json([])
+      }
+
+      if (!scopedTraderId && scopedCompany.traderId) {
+        scopedTraderId = scopedCompany.traderId
+      }
+    }
 
     const users = await prisma.user.findMany({
       where: {
         ...(includeDeleted ? {} : { deletedAt: null }),
-        ...(traderId ? { traderId } : {}),
+        ...(scopedTraderId ? { traderId: scopedTraderId } : {}),
         ...(companyId
           ? {
               OR: [
@@ -443,6 +471,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
     }
 
+    if (!traderCapacity.canManageUsers) {
+      return NextResponse.json(
+        { error: traderCapacity.subscriptionMessage || 'Trader subscription does not allow user creation' },
+        { status: 403 }
+      )
+    }
+
     if (
       traderCapacity.maxUsers !== null &&
       traderCapacity.currentUsers >= traderCapacity.maxUsers
@@ -549,6 +584,7 @@ export async function POST(request: NextRequest) {
       after: userWithoutPassword,
       requestMeta: getAuditRequestMeta(request)
     })
+    markSuperAdminLiveUpdate()
 
     return NextResponse.json(
       {

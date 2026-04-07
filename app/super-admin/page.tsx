@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation'
 import { getSession } from '@/lib/session'
-import { prisma } from '@/lib/prisma'
 import SuperAdminOverviewClient from '@/app/super-admin/components/SuperAdminOverviewClient'
+import { loadSuperAdminOverviewData } from '@/lib/server-super-admin-overview'
+import { fetchInternalApiJson } from '@/lib/server-internal-api'
 
 export default async function SuperAdminDashboardPage() {
   const session = await getSession('super_admin')
@@ -9,24 +10,21 @@ export default async function SuperAdminDashboardPage() {
     redirect('/super-admin/login')
   }
 
-  const [traders, companies, users] = await Promise.all([
-    prisma.trader.count({ where: { deletedAt: null } }),
-    prisma.company.count({ where: { deletedAt: null } }),
-    prisma.user.count({
-      where: {
-        deletedAt: null,
-        NOT: [{ role: 'SUPER_ADMIN' }, { role: 'super_admin' }]
-      }
-    })
-  ])
+  const overview = await loadSuperAdminOverviewData({
+    sections: ['stats', 'traders', 'companies', 'users', 'permissionPreview']
+  })
+  const initialOverview = {
+    stats: overview.stats || { traders: 0, companies: 0, users: 0 },
+    traders: overview.traders || [],
+    companies: overview.companies || [],
+    users: overview.users || [],
+    permissionPreview: overview.permissionPreview || null
+  }
+  const initialProfile = await fetchInternalApiJson<{ user?: { userId?: string; name?: string; role?: string } }>(
+    '/api/super-admin/profile'
+  ).catch(() => null)
 
   return (
-    <SuperAdminOverviewClient
-      initialStats={{
-        traders,
-        companies,
-        users
-      }}
-    />
+    <SuperAdminOverviewClient initialOverview={initialOverview} initialProfile={initialProfile} />
   )
 }

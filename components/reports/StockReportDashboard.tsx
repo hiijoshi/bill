@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BarChart3, Download, FileText, RefreshCw, Search, Table2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { printSimpleTableReport } from '@/lib/report-print'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import {
+  loadShellCompanies,
+  SHELL_COMPANIES_CACHE_AGE_MS as COMPANIES_CACHE_AGE_MS,
+  SHELL_COMPANIES_CACHE_KEY as COMPANIES_CACHE_KEY
+} from '@/lib/client-shell-data'
+import { getFinancialYearDateRangeInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 type EntryType = 'all' | 'purchase' | 'sales' | 'adjustment'
 
@@ -56,10 +63,13 @@ interface StockReportDashboardProps {
   initialCompanyId?: string
   embedded?: boolean
   onBackToDashboard?: () => void
+  companyOptions?: CompanyRecord[]
+  initialGeneratedRows?: StockRow[]
+  initialDateFrom?: string
+  initialDateTo?: string
+  initialLastGeneratedAt?: string
 }
 
-const COMPANIES_CACHE_KEY = 'shell:companies'
-const COMPANIES_CACHE_AGE_MS = 60_000
 const STOCK_REPORT_CACHE_AGE_MS = 20_000
 
 const numberFormatter = new Intl.NumberFormat('en-IN', {
@@ -105,23 +115,30 @@ const csvEscape = (value: string | number): string => `"${String(value ?? '').re
 export default function StockReportDashboard({
   initialCompanyId,
   embedded = false,
-  onBackToDashboard
+  onBackToDashboard,
+  companyOptions,
+  initialGeneratedRows = [],
+  initialDateFrom = '',
+  initialDateTo = '',
+  initialLastGeneratedAt = ''
 }: StockReportDashboardProps) {
-  const today = useMemo(() => new Date(), [])
-  const firstDay = useMemo(() => new Date(today.getFullYear(), today.getMonth(), 1), [today])
-
-  const [companies, setCompanies] = useState<CompanyRecord[]>([])
+  const [companies, setCompanies] = useState<CompanyRecord[]>(companyOptions || [])
   const [selectedCompanyId, setSelectedCompanyId] = useState(initialCompanyId || '')
-  const [dateFrom, setDateFrom] = useState(toDateInputValue(firstDay))
-  const [dateTo, setDateTo] = useState(toDateInputValue(today))
+  const [dateFrom, setDateFrom] = useState(initialDateFrom)
+  const [dateTo, setDateTo] = useState(initialDateTo)
   const [entryTypeFilter, setEntryTypeFilter] = useState<EntryType>('all')
   const [searchTerm, setSearchTerm] = useState('')
 
-  const [loadingCompanies, setLoadingCompanies] = useState(true)
+  const [loadingCompanies, setLoadingCompanies] = useState(!(Array.isArray(companyOptions) && companyOptions.length > 0))
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
-  const [lastGeneratedAt, setLastGeneratedAt] = useState('')
-  const [generatedRows, setGeneratedRows] = useState<StockRow[]>([])
+  const [lastGeneratedAt, setLastGeneratedAt] = useState(initialLastGeneratedAt)
+  const [generatedRows, setGeneratedRows] = useState<StockRow[]>(initialGeneratedRows)
+  const { financialYear } = useClientFinancialYear()
+  const skipInitialFinancialYearSyncRef = useRef(Boolean(initialDateFrom || initialDateTo))
+  const skipPreparedGenerationRef = useRef(
+    Boolean(initialCompanyId && initialDateFrom && initialDateTo)
+  )
 
   useEffect(() => {
     if (!initialCompanyId) return
@@ -129,11 +146,33 @@ export default function StockReportDashboard({
   }, [initialCompanyId])
 
   useEffect(() => {
+    if (skipInitialFinancialYearSyncRef.current) {
+      skipInitialFinancialYearSyncRef.current = false
+      return
+    }
+    const range = getFinancialYearDateRangeInput(financialYear)
+    setDateFrom(range.dateFrom)
+    setDateTo(range.dateTo)
+  }, [financialYear?.id])
+
+  useEffect(() => {
     let cancelled = false
 
     const loadCompanies = async () => {
       setLoadingCompanies(true)
       try {
+        if (Array.isArray(companyOptions) && companyOptions.length > 0) {
+          if (cancelled) return
+          setCompanies(companyOptions)
+          const availableIds = new Set(companyOptions.map((row) => row.id))
+          setSelectedCompanyId((previous) => {
+            if (initialCompanyId && availableIds.has(initialCompanyId)) return initialCompanyId
+            if (previous && availableIds.has(previous)) return previous
+            return companyOptions[0]?.id || ''
+          })
+          return
+        }
+
         const cachedCompanies = getClientCache<CompanyRecord[]>(COMPANIES_CACHE_KEY, COMPANIES_CACHE_AGE_MS)
         if (cachedCompanies && cachedCompanies.length > 0) {
           if (cancelled) return
@@ -147,18 +186,12 @@ export default function StockReportDashboard({
           return
         }
 
-        const response = await fetch('/api/companies', { cache: 'no-store' })
-        if (!response.ok) {
-          throw new Error('Unable to load companies')
-        }
-
-        const payload = await response.json().catch(() => [])
-        const rows = normalizeCollection<CompanyRecord>(payload)
+        const rows = normalizeCollection<CompanyRecord>(await loadShellCompanies())
 
         if (cancelled) return
 
         setCompanies(rows)
-        setClientCache(COMPANIES_CACHE_KEY, rows)
+        setClientCache(COMPANIES_CACHE_KEY, rows, { persist: true })
         const availableIds = new Set(rows.map((row) => row.id))
         setSelectedCompanyId((previous) => {
           if (initialCompanyId && availableIds.has(initialCompanyId)) return initialCompanyId
@@ -180,7 +213,7 @@ export default function StockReportDashboard({
     return () => {
       cancelled = true
     }
-  }, [initialCompanyId])
+  }, [companyOptions, initialCompanyId])
 
   const generateReport = useCallback(async () => {
     if (!dateFrom || !dateTo) {
@@ -296,6 +329,10 @@ export default function StockReportDashboard({
 
   useEffect(() => {
     if (loadingCompanies) return
+    if (skipPreparedGenerationRef.current) {
+      skipPreparedGenerationRef.current = false
+      return
+    }
     if (!selectedCompanyId) return
     void generateReport()
   }, [loadingCompanies, selectedCompanyId, dateFrom, dateTo, entryTypeFilter, generateReport])

@@ -19,6 +19,8 @@ import {
 } from '@/lib/journal-vouchers'
 import { loadClientCachedValue } from '@/lib/client-cached-value'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { getDefaultTransactionDateInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 type AccountingHeadRecord = {
   id: string
@@ -121,8 +123,9 @@ function JournalVoucherEntryPageContent() {
   const [companyId, setCompanyId] = useState('')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const { financialYear } = useClientFinancialYear()
 
-  const [voucherDate, setVoucherDate] = useState(new Date().toISOString().split('T')[0])
+  const [voucherDate, setVoucherDate] = useState('')
   const [voucherNo, setVoucherNo] = useState('')
   const [referenceNo, setReferenceNo] = useState('')
   const [remark, setRemark] = useState('')
@@ -134,6 +137,10 @@ function JournalVoucherEntryPageContent() {
   const [banks, setBanks] = useState<BankRecord[]>([])
 
   useEffect(() => {
+    setVoucherDate(getDefaultTransactionDateInput(financialYear))
+  }, [financialYear?.id])
+
+  useEffect(() => {
     let cancelled = false
 
     ;(async () => {
@@ -141,7 +148,7 @@ function JournalVoucherEntryPageContent() {
       if (cancelled) return
       if (!resolvedCompanyId) {
         setLoading(false)
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
 
@@ -307,13 +314,18 @@ function JournalVoucherEntryPageContent() {
     return accountHeadOptions
   }
 
-  const totalDebit = useMemo(
-    () => lines.reduce((sum, line) => sum + parseAmount(line.debitAmount), 0),
+  const filledLines = useMemo(
+    () => lines.filter((line) => parseAmount(line.debitAmount) > 0 || parseAmount(line.creditAmount) > 0),
     [lines]
   )
+
+  const totalDebit = useMemo(
+    () => filledLines.reduce((sum, line) => sum + parseAmount(line.debitAmount), 0),
+    [filledLines]
+  )
   const totalCredit = useMemo(
-    () => lines.reduce((sum, line) => sum + parseAmount(line.creditAmount), 0),
-    [lines]
+    () => filledLines.reduce((sum, line) => sum + parseAmount(line.creditAmount), 0),
+    [filledLines]
   )
   const difference = useMemo(() => totalDebit - totalCredit, [totalCredit, totalDebit])
 
@@ -353,7 +365,8 @@ function JournalVoucherEntryPageContent() {
       return
     }
 
-    const normalizedLines = lines.map((line) => ({
+    const filledLines = lines.filter((line) => parseAmount(line.debitAmount) > 0 || parseAmount(line.creditAmount) > 0)
+    const normalizedLines = filledLines.map((line) => ({
       ledgerType: line.ledgerType,
       ledgerId: line.ledgerType === 'CASH' ? null : line.ledgerId || null,
       debitAmount: parseAmount(line.debitAmount),
@@ -361,14 +374,18 @@ function JournalVoucherEntryPageContent() {
       remark: line.remark.trim() || null
     }))
 
-    const hasIncompleteLine = lines.some((line) => {
+    const hasIncompleteLine = filledLines.some((line) => {
       const hasLedger = line.ledgerType === 'CASH' || Boolean(line.ledgerId)
-      const hasAmount = parseAmount(line.debitAmount) > 0 || parseAmount(line.creditAmount) > 0
-      return !hasLedger || !hasAmount
+      return !hasLedger
     })
 
+    if (normalizedLines.length < 2) {
+      alert('At least two ledger rows with amounts are required.')
+      return
+    }
+
     if (hasIncompleteLine) {
-      alert('Select ledger account and amount for every row.')
+      alert('Select ledger account for every filled row.')
       return
     }
 

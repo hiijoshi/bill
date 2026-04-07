@@ -6,25 +6,52 @@ const ALLOWED_ORIGINS_LIST = (process.env.ALLOWED_ORIGINS || 'http://localhost:3
   .map((o) => o.trim())
   .filter(Boolean)
 
-const PRIMARY_ALLOWED_ORIGIN = ALLOWED_ORIGINS_LIST[0] || 'http://localhost:3000'
+const DEFAULT_LOCAL_ALLOWED_HOSTS = ['127.0.0.1:3000', 'localhost:3000']
+
+function toHost(origin: string): string | null {
+  try {
+    return new URL(origin).host
+  } catch {
+    return origin || null
+  }
+}
+
+const ALLOWED_ACTION_HOSTS = Array.from(
+  new Set(
+    [...DEFAULT_LOCAL_ALLOWED_HOSTS, ...ALLOWED_ORIGINS_LIST.map((origin) => toHost(origin)).filter(Boolean) as string[]]
+  )
+)
+
+const CONNECT_SRC_VALUES = ["'self'"]
+
+if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+  try {
+    const supabaseOrigin = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).origin
+    CONNECT_SRC_VALUES.push(supabaseOrigin)
+    CONNECT_SRC_VALUES.push(supabaseOrigin.replace(/^http/, 'ws'))
+  } catch {
+    CONNECT_SRC_VALUES.push('https://*.supabase.co', 'https://*.supabase.com', 'wss://*.supabase.co')
+  }
+}
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ['127.0.0.1:51445'],
+  allowedDevOrigins: DEFAULT_LOCAL_ALLOWED_HOSTS,
+  serverExternalPackages: ['@napi-rs/canvas', 'pdf-parse', 'pdfjs-dist'],
   turbopack: {
     root: process.cwd()
   },
+  // Performance optimizations
+  compress: true,
+  poweredByHeader: false,
+  reactStrictMode: true,
+  images: {
+    formats: ['image/webp', 'image/avif'],
+    minimumCacheTTL: 60,
+  },
   experimental: {
-    optimizePackageImports: ['lucide-react'],
+    optimizePackageImports: ['lucide-react', '@radix-ui/react-dialog', '@radix-ui/react-select'],
     serverActions: {
-      allowedOrigins: [
-        '127.0.0.1:51445',
-        'mbill.hiijoshi.in',
-        'hiijoshi.in',
-        'www.hiijoshi.in',
-        ...ALLOWED_ORIGINS_LIST.map((o) => {
-          try { return new URL(o).host } catch { return o }
-        })
-      ].filter(Boolean)
+      allowedOrigins: ALLOWED_ACTION_HOSTS
     }
   },
   async headers() {
@@ -32,26 +59,6 @@ const nextConfig: NextConfig = {
       {
         source: '/api/:path*',
         headers: [
-          {
-            key: 'Access-Control-Allow-Origin',
-            value: PRIMARY_ALLOWED_ORIGIN
-          },
-          {
-            key: 'Access-Control-Allow-Methods',
-            value: 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-          },
-          {
-            key: 'Access-Control-Allow-Headers',
-            value: 'Content-Type, Authorization, X-Requested-With, X-CSRF-Token'
-          },
-          {
-            key: 'Access-Control-Allow-Credentials',
-            value: 'true'
-          },
-          {
-            key: 'Vary',
-            value: 'Origin'
-          },
           {
             key: 'X-Content-Type-Options',
             value: 'nosniff'
@@ -71,8 +78,8 @@ const nextConfig: NextConfig = {
           {
             key: 'Content-Security-Policy',
             value: isProduction
-              ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co https://*.supabase.com wss://*.supabase.co"
-              : "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co https://*.supabase.com wss://*.supabase.co"
+              ? `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src ${CONNECT_SRC_VALUES.join(' ')}`
+              : `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src ${CONNECT_SRC_VALUES.join(' ')}`
           }
         ]
       }
@@ -80,4 +87,11 @@ const nextConfig: NextConfig = {
   }
 };
 
-export default nextConfig;
+const withBundleAnalyzer =
+  process.env.ANALYZE === 'true'
+    ? require('@next/bundle-analyzer')({
+        enabled: true
+      })
+    : (config: NextConfig) => config
+
+export default withBundleAnalyzer(nextConfig);

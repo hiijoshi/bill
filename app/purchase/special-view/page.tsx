@@ -110,7 +110,7 @@ function SpecialPurchaseViewContent() {
       if (!resolvedCompanyId) {
         setLoading(false)
         alert('Company not selected')
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
 

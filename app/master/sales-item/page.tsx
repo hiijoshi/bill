@@ -13,6 +13,7 @@ import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Package, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
 import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
@@ -68,6 +69,7 @@ const SALES_ITEM_MASTER_CACHE_AGE_MS = 30_000
 
 export default function SalesItemMasterPage() {
   const importInputRef = useRef<HTMLInputElement | null>(null)
+  const [companyId, setCompanyId] = useState('')
   const [salesItems, setSalesItems] = useState<SalesItem[]>([])
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
@@ -88,21 +90,30 @@ export default function SalesItemMasterPage() {
   const [products, setProducts] = useState<ProductOption[]>([])
   const gstRates = ['5', '12', '18', '28']
 
-  const applyProducts = useCallback((rows: ProductOption[]) => {
+  const applyProducts = useCallback((rows: ProductOption[], resolvedCompanyId: string) => {
     setProducts(rows)
-    setClientCache(PRODUCT_MASTER_CACHE_KEY, { products: rows })
+    if (resolvedCompanyId) {
+      setCompanyId((prev) => prev || resolvedCompanyId)
+    }
+    setClientCache(PRODUCT_MASTER_CACHE_KEY, { companyId: resolvedCompanyId, products: rows })
   }, [])
 
-  const fetchProducts = useCallback(async () => {
-    const cached = getClientCache<{ products?: ProductOption[] }>(PRODUCT_MASTER_CACHE_KEY, PRODUCT_MASTER_CACHE_AGE_MS)
-    if (cached && Array.isArray(cached.products) && cached.products.length > 0) {
-      applyProducts(cached.products)
+  const fetchProducts = useCallback(async (targetCompanyId: string) => {
+    if (!targetCompanyId) {
+      setProducts([])
+      return
+    }
+
+    const cached = getClientCache<{ companyId?: string; products?: ProductOption[] }>(PRODUCT_MASTER_CACHE_KEY, PRODUCT_MASTER_CACHE_AGE_MS)
+    const cachedCompanyId = typeof cached?.companyId === 'string' ? cached.companyId : ''
+    if (cachedCompanyId === targetCompanyId && Array.isArray(cached?.products) && cached.products.length > 0) {
+      applyProducts(cached.products, cachedCompanyId)
     }
 
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const response = await fetch('/api/products', { cache: 'no-store' })
+          const response = await fetch(`/api/products?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' })
           const payload = (await response.json().catch(() => ({}))) as ProductResponsePayload | ProductOption[]
           const rows = (Array.isArray((payload as ProductResponsePayload)?.products)
             ? (payload as ProductResponsePayload).products
@@ -113,7 +124,7 @@ export default function SalesItemMasterPage() {
                 : []) as ProductOption[]
 
           if (response.ok) {
-            applyProducts(rows)
+            applyProducts(rows, targetCompanyId)
             return
           }
 
@@ -129,11 +140,11 @@ export default function SalesItemMasterPage() {
             continue
           }
 
-          if (!cached?.products?.length) {
+          if (!(cachedCompanyId === targetCompanyId && cached?.products?.length)) {
             setProducts([])
           }
           setErrorMessage(
-            cached?.products?.length
+            cachedCompanyId === targetCompanyId && cached?.products?.length
               ? 'Product list is taking longer than expected. Showing the last loaded data.'
               : 'Unable to load products right now. Please refresh and try again.'
           )
@@ -144,11 +155,11 @@ export default function SalesItemMasterPage() {
             continue
           }
           if (isAbortError(error)) {
-            if (!cached?.products?.length) {
+            if (!(cachedCompanyId === targetCompanyId && cached?.products?.length)) {
               setProducts([])
             }
             setErrorMessage(
-              cached?.products?.length
+              cachedCompanyId === targetCompanyId && cached?.products?.length
                 ? 'Product list is taking longer than expected. Showing the last loaded data.'
                 : 'Product list took too long to load. Please refresh once.'
             )
@@ -161,29 +172,39 @@ export default function SalesItemMasterPage() {
       if (isAbortError(error)) return
       console.error('Error fetching products:', error)
       setErrorMessage('Unable to load products right now. Please refresh and try again.')
-      if (!cached?.products?.length) {
+      if (!(cachedCompanyId === targetCompanyId && cached?.products?.length)) {
         setProducts([])
       }
     }
   }, [applyProducts])
 
-  const applySalesItems = useCallback((rows: SalesItem[]) => {
+  const applySalesItems = useCallback((rows: SalesItem[], resolvedCompanyId: string) => {
     setSalesItems(rows)
-    setClientCache(SALES_ITEM_MASTER_CACHE_KEY, { data: rows })
+    if (resolvedCompanyId) {
+      setCompanyId(resolvedCompanyId)
+    }
+    setClientCache(SALES_ITEM_MASTER_CACHE_KEY, { companyId: resolvedCompanyId, data: rows })
     setErrorMessage('')
   }, [])
 
-  const fetchSalesItems = useCallback(async () => {
-    const cached = getClientCache<{ data?: SalesItem[] }>(SALES_ITEM_MASTER_CACHE_KEY, SALES_ITEM_MASTER_CACHE_AGE_MS)
-    if (cached && Array.isArray(cached.data) && cached.data.length > 0) {
-      applySalesItems(cached.data)
+  const fetchSalesItems = useCallback(async (targetCompanyId: string) => {
+    if (!targetCompanyId) {
+      setSalesItems([])
+      setLoading(false)
+      return
+    }
+
+    const cached = getClientCache<{ companyId?: string; data?: SalesItem[] }>(SALES_ITEM_MASTER_CACHE_KEY, SALES_ITEM_MASTER_CACHE_AGE_MS)
+    const cachedCompanyId = typeof cached?.companyId === 'string' ? cached.companyId : ''
+    if (cachedCompanyId === targetCompanyId && Array.isArray(cached?.data) && cached.data.length > 0) {
+      applySalesItems(cached.data, cachedCompanyId)
       setLoading(false)
     }
 
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const response = await fetch('/api/sales-item-masters', { cache: 'no-store' })
+          const response = await fetch(`/api/sales-item-masters?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' })
           const payload = (await response.json().catch(() => ({}))) as SalesItemResponsePayload
           const rows = Array.isArray(payload)
             ? payload
@@ -192,7 +213,7 @@ export default function SalesItemMasterPage() {
               : []
 
           if (response.ok) {
-            applySalesItems(rows)
+            applySalesItems(rows, targetCompanyId)
             return
           }
 
@@ -208,11 +229,11 @@ export default function SalesItemMasterPage() {
             continue
           }
 
-          if (!cached?.data?.length) {
+          if (!(cachedCompanyId === targetCompanyId && cached?.data?.length)) {
             setSalesItems([])
           }
           setErrorMessage(
-            cached?.data?.length
+            cachedCompanyId === targetCompanyId && cached?.data?.length
               ? 'Sales item list is taking longer than expected. Showing the last loaded data.'
               : 'Unable to load sales items right now. Please refresh and try again.'
           )
@@ -223,11 +244,11 @@ export default function SalesItemMasterPage() {
             continue
           }
           if (isAbortError(error)) {
-            if (!cached?.data?.length) {
+            if (!(cachedCompanyId === targetCompanyId && cached?.data?.length)) {
               setSalesItems([])
             }
             setErrorMessage(
-              cached?.data?.length
+              cachedCompanyId === targetCompanyId && cached?.data?.length
                 ? 'Sales item list is taking longer than expected. Showing the last loaded data.'
                 : 'Sales item list took too long to load. Please refresh once.'
             )
@@ -240,7 +261,7 @@ export default function SalesItemMasterPage() {
       if (isAbortError(error)) return
       console.error('Error fetching sales items:', error)
       setErrorMessage('Unable to load sales items right now. Please refresh and try again.')
-      if (!cached?.data?.length) {
+      if (!(cachedCompanyId === targetCompanyId && cached?.data?.length)) {
         setSalesItems([])
       }
     } finally {
@@ -249,7 +270,39 @@ export default function SalesItemMasterPage() {
   }, [applySalesItems])
 
   useEffect(() => {
-    void Promise.all([fetchSalesItems(), fetchProducts()])
+    let cancelled = false
+
+    const loadSalesItemScope = async () => {
+      setLoading(true)
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (cancelled) return
+
+      if (!resolvedCompanyId) {
+        setCompanyId('')
+        setProducts([])
+        setSalesItems([])
+        setErrorMessage('Company not selected. Please select company once.')
+        setLoading(false)
+        return
+      }
+
+      setCompanyId(resolvedCompanyId)
+      stripCompanyParamsFromUrl()
+      await Promise.all([fetchSalesItems(resolvedCompanyId), fetchProducts(resolvedCompanyId)])
+    }
+
+    void loadSalesItemScope()
+
+    const onCompanyChanged = () => {
+      void loadSalesItemScope()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
   }, [fetchProducts, fetchSalesItems])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -281,7 +334,7 @@ export default function SalesItemMasterPage() {
       if (response.ok) {
         alert(editingSalesItem ? 'Sales item updated successfully!' : 'Sales item created successfully!')
         resetForm()
-        fetchSalesItems()
+        void fetchSalesItems(companyId)
       } else {
         const error = await response.json()
         alert(error.error || 'Operation failed')
@@ -316,7 +369,7 @@ export default function SalesItemMasterPage() {
 
       if (response.ok) {
         alert('Sales item deleted successfully!')
-        fetchSalesItems()
+        void fetchSalesItems(companyId)
       } else {
         const error = await response.json()
         alert(error.error || 'Delete failed')
@@ -359,14 +412,14 @@ export default function SalesItemMasterPage() {
   }
 
   const handleImportCsv = async (file: File) => {
-    const { ok, result } = await uploadMasterCsv('/api/sales-item-masters/import', file)
+    const { ok, result } = await uploadMasterCsv('/api/sales-item-masters/import', file, companyId || undefined)
     if (!ok) {
       alert(result.error || 'Sales item import failed')
       return
     }
 
     alert(formatMasterImportSummary('Sales Item', result))
-    await fetchSalesItems()
+    await fetchSalesItems(companyId)
   }
 
   const resetForm = () => {
@@ -387,7 +440,7 @@ export default function SalesItemMasterPage() {
     return (
       <AppLoaderShell
         kind="master"
-        companyId=""
+        companyId={companyId}
         fullscreen
         title="Loading sales items"
         message="Preparing sales item masters, GST links, and invoice-ready mappings."
@@ -396,7 +449,7 @@ export default function SalesItemMasterPage() {
   }
 
   return (
-    <DashboardLayout companyId="">
+    <DashboardLayout companyId={companyId}>
       <div className="p-6">
         <div className="max-w-6xl mx-auto">
           {errorMessage && (

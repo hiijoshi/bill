@@ -123,8 +123,22 @@ export default function RootLayout({
       const isSuperAdminAuthEndpoint =
         urlString === '/api/super-admin/auth' ||
         urlString === `${window.location.origin}/api/super-admin/auth`
+      const isBankStatementImportApi =
+        urlString === '/api/payments/bank-statement/import' ||
+        urlString === `${window.location.origin}/api/payments/bank-statement/import`
+      const isSubscriptionManagementApi =
+        urlString.startsWith('/api/super-admin/trader-subscriptions') ||
+        urlString.startsWith(`${window.location.origin}/api/super-admin/trader-subscriptions`) ||
+        urlString.startsWith('/api/super-admin/subscription-plans') ||
+        urlString.startsWith(`${window.location.origin}/api/super-admin/subscription-plans`)
       const timeoutMsForRequest = (() => {
+        if (isSubscriptionManagementApi) {
+          return Math.max(superAdminApiTimeoutMs, 60000)
+        }
         if (isSuperAdminApi) return superAdminApiTimeoutMs
+        if (isBankStatementImportApi) {
+          return Math.max(apiTimeoutMs, 240000)
+        }
         if (urlString.includes('/api/reports/')) {
           return Math.max(apiTimeoutMs, 45000)
         }
@@ -188,9 +202,12 @@ export default function RootLayout({
           return await originalFetch(input, finalInit)
         } catch (error) {
           if (isAbortError(error)) {
+            const timeoutMessage = didTimeout && isBankStatementImportApi
+              ? 'Bank statement scan took too long. Try once again, or upload CSV / Excel for the fastest result.'
+              : 'Request timed out. Please retry once.'
             return new Response(JSON.stringify(
               didTimeout
-                ? { timedOut: true, error: 'Request timed out. Please retry once.' }
+                ? { timedOut: true, error: timeoutMessage }
                 : { aborted: true, error: 'Request was interrupted. Please retry.' }
             ), {
               status: didTimeout ? 504 : 499,

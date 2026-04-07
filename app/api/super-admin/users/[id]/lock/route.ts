@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { normalizeAppRole, requireRoles } from '@/lib/api-security'
+import { invalidateAuthGuardStateForUser } from '@/lib/auth-guard-state'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { normalizePrismaApiError } from '@/lib/prisma-errors'
+import { markCompanyLiveUpdates, markSuperAdminLiveUpdate, markUserSessionLiveUpdate } from '@/lib/live-update-state'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'User ID is required') })
 const lockSchema = z.object({ locked: z.boolean() }).strict()
@@ -50,6 +52,20 @@ export async function PATCH(
       return NextResponse.json({ error: 'Cannot lock super admin users' }, { status: 403 })
     }
 
+    const linkedCompanyIds = Array.from(new Set([
+      String(existing.companyId || '').trim(),
+      ...(
+        await prisma.userPermission.findMany({
+          where: {
+            userId: existing.id
+          },
+          select: {
+            companyId: true
+          }
+        })
+      ).map((row) => String(row.companyId || '').trim())
+    ].filter(Boolean)))
+
     const updated = await prisma.user.update({
       where: { id: userId },
       data: {
@@ -78,6 +94,14 @@ export async function PATCH(
         password: undefined
       },
       requestMeta: getAuditRequestMeta(request)
+    })
+    markSuperAdminLiveUpdate()
+    markCompanyLiveUpdates(linkedCompanyIds)
+    markUserSessionLiveUpdate(updated)
+    invalidateAuthGuardStateForUser({
+      id: updated.id,
+      traderId: updated.traderId,
+      userId: updated.userId
     })
 
     return NextResponse.json({

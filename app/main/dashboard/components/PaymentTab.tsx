@@ -12,12 +12,14 @@ import { Label } from '@/components/ui/label'
 import { TaskLoader } from '@/components/loaders/task-loader'
 import { Plus, Eye, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { matchesAppDataChange, subscribeAppDataChanged } from '@/lib/app-live-data'
 import {
   getPaymentTypeLabel,
   isIncomingCashflowPaymentType,
   isOutgoingCashflowPaymentType,
   isPaymentEntryType
 } from '@/lib/payment-entry-types'
+import { loadClientPaymentWorkspace } from '@/lib/client-payment-workspace'
 
 interface PurchaseBill {
   id: string
@@ -96,24 +98,24 @@ export default function PaymentTab({
     Array.isArray(initialSalesBills) &&
     Array.isArray(initialPayments)
   const paymentCacheKey = `dashboard-payment:${companyId}`
-  const cachedPaymentData = hasInitialData ? null : getClientCache<PaymentCachePayload>(paymentCacheKey, PAYMENT_CACHE_AGE_MS)
+  const cachedPaymentData = getClientCache<PaymentCachePayload>(paymentCacheKey, PAYMENT_CACHE_AGE_MS)
   const [loading, setLoading] = useState(!hasInitialData && !cachedPaymentData)
 
   const [activeTab, setActiveTab] = useState<'purchase' | 'sales'>('purchase')
-  const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>(cachedPaymentData?.purchaseBills || [])
-  const [salesBills, setSalesBills] = useState<SalesBill[]>(cachedPaymentData?.salesBills || [])
-  const [payments, setPayments] = useState<Payment[]>(cachedPaymentData?.payments || [])
+  const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>(initialPurchaseBills || cachedPaymentData?.purchaseBills || [])
+  const [salesBills, setSalesBills] = useState<SalesBill[]>(initialSalesBills || cachedPaymentData?.salesBills || [])
+  const [payments, setPayments] = useState<Payment[]>(initialPayments || cachedPaymentData?.payments || [])
 
   // Filter states
   const [filterBillType, setFilterBillType] = useState('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
-  const fetchPaymentData = useCallback(async () => {
+  const fetchPaymentData = useCallback(async (force = false) => {
     try {
       setLoading(true)
 
-      const cached = getClientCache<PaymentCachePayload>(paymentCacheKey, PAYMENT_CACHE_AGE_MS)
+      const cached = force ? null : getClientCache<PaymentCachePayload>(paymentCacheKey, PAYMENT_CACHE_AGE_MS)
       if (cached) {
         setPurchaseBills(cached.purchaseBills)
         setSalesBills(cached.salesBills)
@@ -122,15 +124,18 @@ export default function PaymentTab({
         return
       }
 
-      const [purchaseRes, salesRes, paymentsRes] = await Promise.all([
-        fetch(`/api/purchase-bills?companyId=${companyId}`),
-        fetch(`/api/sales-bills?companyId=${companyId}`),
-        fetch(`/api/payments?companyId=${companyId}`)
-      ])
-      
-      const purchaseData = await purchaseRes.json()
-      const salesData = await salesRes.json()
-      const paymentsData = await paymentsRes.json()
+      const workspace = await loadClientPaymentWorkspace(companyId, {
+        force
+      })
+      const purchaseData = Array.isArray((workspace as { purchaseBills?: PurchaseBill[] }).purchaseBills)
+        ? (workspace as { purchaseBills: PurchaseBill[] }).purchaseBills
+        : []
+      const salesData = Array.isArray((workspace as { salesBills?: SalesBill[] }).salesBills)
+        ? (workspace as { salesBills: SalesBill[] }).salesBills
+        : []
+      const paymentsData = Array.isArray((workspace as { payments?: Payment[] }).payments)
+        ? (workspace as { payments: Payment[] }).payments
+        : []
       
       const safePurchaseBills = Array.isArray(purchaseData)
         ? purchaseData.map((bill: PurchaseBill) => ({
@@ -174,6 +179,39 @@ export default function PaymentTab({
   }, [companyId, paymentCacheKey])
 
   useEffect(() => {
+    if (!hasInitialData) return
+
+    const safePurchaseBills = (initialPurchaseBills || []).map((bill) => ({
+      ...bill,
+      totalAmount: clampNonNegative(bill.totalAmount),
+      paidAmount: clampNonNegative(bill.paidAmount),
+      balanceAmount: clampNonNegative(bill.balanceAmount)
+    }))
+    const safeSalesBills = (initialSalesBills || []).map((bill) => ({
+      ...bill,
+      totalAmount: clampNonNegative(bill.totalAmount),
+      receivedAmount: clampNonNegative(bill.receivedAmount),
+      balanceAmount: clampNonNegative(bill.balanceAmount)
+    }))
+    const safePayments = (initialPayments || []).map((payment) => ({
+      ...payment,
+      billType: isPaymentEntryType(payment.billType) ? payment.billType : String(payment.billType || '').trim(),
+      billTypeLabel: payment.billTypeLabel || getPaymentTypeLabel(payment.billType),
+      amount: clampNonNegative(payment.amount)
+    }))
+
+    setPurchaseBills(safePurchaseBills)
+    setSalesBills(safeSalesBills)
+    setPayments(safePayments)
+    setClientCache(paymentCacheKey, {
+      purchaseBills: safePurchaseBills,
+      salesBills: safeSalesBills,
+      payments: safePayments
+    })
+    setLoading(false)
+  }, [hasInitialData, initialPayments, initialPurchaseBills, initialSalesBills, paymentCacheKey])
+
+  useEffect(() => {
     if (hasInitialData) return undefined
     if (companyId) {
       const timer = window.setTimeout(() => {
@@ -184,19 +222,24 @@ export default function PaymentTab({
     return undefined
   }, [companyId, fetchPaymentData, hasInitialData])
 
-  const purchaseBillsData = useMemo(
-    () => (hasInitialData ? initialPurchaseBills || [] : purchaseBills),
-    [hasInitialData, initialPurchaseBills, purchaseBills]
-  )
-  const salesBillsData = useMemo(
-    () => (hasInitialData ? initialSalesBills || [] : salesBills),
-    [hasInitialData, initialSalesBills, salesBills]
-  )
-  const paymentsData = useMemo(
-    () => (hasInitialData ? initialPayments || [] : payments),
-    [hasInitialData, initialPayments, payments]
-  )
-  const isLoading = hasInitialData ? false : loading
+  useEffect(() => {
+    if (!companyId) return undefined
+
+    const unsubscribe = subscribeAppDataChanged((detail) => {
+      if (!matchesAppDataChange(detail, companyId, ['purchase-bills', 'sales-bills', 'payments', 'all'])) {
+        return
+      }
+
+      void fetchPaymentData(true)
+    })
+
+    return unsubscribe
+  }, [companyId, fetchPaymentData])
+
+  const purchaseBillsData = useMemo(() => purchaseBills, [purchaseBills])
+  const salesBillsData = useMemo(() => salesBills, [salesBills])
+  const paymentsData = useMemo(() => payments, [payments])
+  const isLoading = loading
 
   const filteredPayments = useMemo(() => {
     let filtered = paymentsData

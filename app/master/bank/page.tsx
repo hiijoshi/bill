@@ -11,6 +11,7 @@ import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Building, Upload } from 'lucide-react'
+import { APP_COMPANY_CHANGED_EVENT } from '@/lib/company-context'
 import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
 interface Bank {
@@ -63,6 +64,17 @@ export default function BankMasterPage() {
 
   useEffect(() => {
     void fetchBanks()
+
+    const onCompanyChanged = () => {
+      setLoading(true)
+      void fetchBanks()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
   }, [fetchBanks])
 
   const handleSubmit = async (e: React.FormEvent) => {

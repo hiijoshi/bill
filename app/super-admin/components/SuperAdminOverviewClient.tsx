@@ -3,18 +3,33 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
+import { RefreshOverlay } from '@/components/performance/refresh-overlay'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Building2, Lock, RefreshCw, Shield, Store, Unlock, Users } from 'lucide-react'
+import { subscribeSuperAdminDataChanged } from '@/lib/super-admin-live-data'
 
 type SuperAdminOverviewClientProps = {
-  initialStats: {
-    traders: number
-    companies: number
-    users: number
+  initialOverview: {
+    stats: {
+      traders: number
+      companies: number
+      users: number
+    }
+    traders: TraderRow[]
+    companies: CompanyRow[]
+    users: UserRow[]
+    permissionPreview: PermissionPreview | null
   }
+  initialProfile?: {
+    user?: {
+      userId?: string
+      name?: string
+      role?: string
+    }
+  } | null
 }
 
 type TraderRow = {
@@ -49,8 +64,12 @@ type PermissionRow = {
 }
 
 type PermissionPreview = {
+  companyId?: string
+  companyOptions?: Array<{ id: string; name: string; locked: boolean; isPrimary: boolean }>
   permissions: PermissionRow[]
 }
+
+type OverviewSection = 'stats' | 'traders' | 'companies' | 'users' | 'permissionPreview'
 
 type Point = {
   x: number
@@ -64,11 +83,12 @@ function buildConnectorPath(from: Point, to: Point): string {
   return `M ${from.x} ${from.y} C ${controlX1} ${from.y}, ${controlX2} ${to.y}, ${to.x} ${to.y}`
 }
 
-export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOverviewClientProps) {
-  const [traders, setTraders] = useState<TraderRow[]>([])
-  const [companies, setCompanies] = useState<CompanyRow[]>([])
-  const [users, setUsers] = useState<UserRow[]>([])
-  const [permissionPreview, setPermissionPreview] = useState<PermissionPreview | null>(null)
+export default function SuperAdminOverviewClient({ initialOverview, initialProfile = null }: SuperAdminOverviewClientProps) {
+  const [summaryStats, setSummaryStats] = useState(initialOverview.stats)
+  const [traders, setTraders] = useState<TraderRow[]>(initialOverview.traders || [])
+  const [companies, setCompanies] = useState<CompanyRow[]>(initialOverview.companies || [])
+  const [users, setUsers] = useState<UserRow[]>(initialOverview.users || [])
+  const [permissionPreview, setPermissionPreview] = useState<PermissionPreview | null>(initialOverview.permissionPreview || null)
 
   const [selectedTraderId, setSelectedTraderId] = useState<string | null>(null)
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
@@ -85,10 +105,8 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const companiesRequestRef = useRef(0)
-  const usersRequestRef = useRef(0)
-  const permissionsRequestRef = useRef(0)
   const graphContainerRef = useRef<HTMLDivElement | null>(null)
+  const scopedRefreshTimerRef = useRef<number | null>(null)
   const traderListRef = useRef<HTMLDivElement | null>(null)
   const companyListRef = useRef<HTMLDivElement | null>(null)
   const userListRef = useRef<HTMLDivElement | null>(null)
@@ -112,6 +130,9 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     () => users.find((row) => row.id === selectedUserId) || null,
     [users, selectedUserId]
   )
+  const traderSummaryCount = traders.length > 0 ? traders.length : summaryStats.traders
+  const companySummaryCount = selectedTrader ? companies.length : summaryStats.companies
+  const userSummaryCount = selectedCompany ? users.length : summaryStats.users
 
   const filteredTraders = useMemo(() => {
     const query = traderQuery.trim().toLowerCase()
@@ -206,93 +227,134 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     setGraphPoints(nextPoints)
   }, [selectedTraderId, selectedCompanyId, selectedUserId])
 
-  const fetchTraders = useCallback(async () => {
-    setLoadingTraders(true)
+  const fetchOverview = useCallback(async (
+    selection?: {
+      traderId?: string | null
+      companyId?: string | null
+      userId?: string | null
+    },
+    options?: { silent?: boolean; sections?: OverviewSection[] }
+  ) => {
+    const nextTraderId = selection?.traderId?.trim() || ''
+    const nextCompanyId = selection?.companyId?.trim() || ''
+    const nextUserId = selection?.userId?.trim() || ''
+    const requestedSections = options?.sections?.length
+      ? options.sections
+      : (['stats', 'traders', 'companies', 'users', 'permissionPreview'] as OverviewSection[])
+
     setError(null)
+    setLoadingTraders(!options?.silent && requestedSections.includes('traders'))
+    setLoadingCompanies(requestedSections.includes('companies') && Boolean(nextTraderId))
+    setLoadingUsers(requestedSections.includes('users') && Boolean(nextCompanyId))
+    setLoadingPermissions(requestedSections.includes('permissionPreview') && Boolean(nextUserId))
+
     try {
-      const response = await fetch('/api/super-admin/traders')
+      const params = new URLSearchParams()
+      if (nextTraderId) params.set('traderId', nextTraderId)
+      if (nextCompanyId) params.set('companyId', nextCompanyId)
+      if (nextUserId) params.set('userId', nextUserId)
+      if (requestedSections.length > 0) {
+        params.set('sections', requestedSections.join(','))
+      }
+
+      const response = await fetch(
+        `/api/super-admin/overview${params.toString() ? `?${params.toString()}` : ''}`,
+        { cache: 'no-store' }
+      )
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) {
-        throw new Error(payload.error || 'Failed to load traders')
+        throw new Error(String(payload?.error || 'Failed to load super admin overview'))
       }
-      setTraders(Array.isArray(payload) ? payload : [])
+
+      if ('stats' in payload) {
+        setSummaryStats((previous) =>
+          payload.stats && typeof payload.stats === 'object'
+          ? {
+              traders: Number(payload.stats.traders || 0),
+              companies: Number(payload.stats.companies || 0),
+              users: Number(payload.stats.users || 0)
+            }
+          : previous
+        )
+      }
+      if ('traders' in payload) {
+        setTraders(Array.isArray(payload.traders) ? payload.traders : [])
+      }
+      if ('companies' in payload) {
+        setCompanies(Array.isArray(payload.companies) ? payload.companies : [])
+      }
+      if ('users' in payload) {
+        setUsers(Array.isArray(payload.users) ? payload.users : [])
+      }
+      if ('permissionPreview' in payload) {
+        setPermissionPreview(
+          payload.permissionPreview && Array.isArray(payload.permissionPreview.permissions)
+          ? {
+              companyId: payload.permissionPreview.companyId,
+              companyOptions: Array.isArray(payload.permissionPreview.companyOptions)
+                ? payload.permissionPreview.companyOptions
+                : [],
+              permissions: payload.permissionPreview.permissions
+            }
+          : null
+        )
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load traders')
+      setError(err instanceof Error ? err.message : 'Failed to load super admin overview')
     } finally {
       setLoadingTraders(false)
+      setLoadingCompanies(false)
+      setLoadingUsers(false)
+      setLoadingPermissions(false)
     }
   }, [])
 
-  const fetchCompanies = useCallback(async (traderId: string) => {
-    const requestId = ++companiesRequestRef.current
-    setLoadingCompanies(true)
-    try {
-      const response = await fetch(`/api/super-admin/companies?traderId=${encodeURIComponent(traderId)}`)
-      const payload = await response.json().catch(() => ({}))
-      if (requestId !== companiesRequestRef.current) return
-      if (!response.ok) {
-        throw new Error(payload.error || 'Failed to load companies')
-      }
-      setCompanies(Array.isArray(payload) ? payload : [])
-    } catch (err) {
-      if (requestId !== companiesRequestRef.current) return
-      setError(err instanceof Error ? err.message : 'Failed to load companies')
-    } finally {
-      if (requestId === companiesRequestRef.current) {
-        setLoadingCompanies(false)
-      }
-    }
+  const setTraderLockState = useCallback((traderId: string, locked: boolean) => {
+    setTraders((previous) =>
+      previous.map((row) => (row.id === traderId ? { ...row, locked } : row))
+    )
   }, [])
 
-  const fetchUsers = useCallback(async (companyId: string) => {
-    const requestId = ++usersRequestRef.current
-    setLoadingUsers(true)
-    try {
-      const response = await fetch(`/api/super-admin/users?companyId=${encodeURIComponent(companyId)}`)
-      const payload = await response.json().catch(() => ({}))
-      if (requestId !== usersRequestRef.current) return
-      if (!response.ok) {
-        throw new Error(payload.error || 'Failed to load users')
-      }
-      setUsers(Array.isArray(payload) ? payload : [])
-    } catch (err) {
-      if (requestId !== usersRequestRef.current) return
-      setError(err instanceof Error ? err.message : 'Failed to load users')
-    } finally {
-      if (requestId === usersRequestRef.current) {
-        setLoadingUsers(false)
-      }
-    }
+  const setCompanyLockState = useCallback((companyId: string, locked: boolean) => {
+    setCompanies((previous) =>
+      previous.map((row) => (row.id === companyId ? { ...row, locked } : row))
+    )
+    setPermissionPreview((previous) =>
+      previous
+        ? {
+            ...previous,
+            companyOptions: Array.isArray(previous.companyOptions)
+              ? previous.companyOptions.map((row) => (row.id === companyId ? { ...row, locked } : row))
+              : previous.companyOptions
+          }
+        : previous
+    )
   }, [])
 
-  const fetchPermissionPreview = useCallback(async (userId: string, companyId?: string | null) => {
-    const requestId = ++permissionsRequestRef.current
-    setLoadingPermissions(true)
-    try {
-      const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''
-      const response = await fetch(`/api/super-admin/users/${userId}/permissions${qs}`)
-      const payload = await response.json().catch(() => ({}))
-      if (requestId !== permissionsRequestRef.current) return
-      if (!response.ok) {
-        throw new Error(payload.error || 'Failed to load permission preview')
-      }
-      setPermissionPreview({
-        permissions: Array.isArray(payload.permissions) ? payload.permissions : []
-      })
-    } catch (err) {
-      if (requestId !== permissionsRequestRef.current) return
-      setError(err instanceof Error ? err.message : 'Failed to load permission preview')
-    } finally {
-      if (requestId === permissionsRequestRef.current) {
-        setLoadingPermissions(false)
-      }
-    }
+  const setUserLockState = useCallback((userId: string, locked: boolean) => {
+    setUsers((previous) =>
+      previous.map((row) => (row.id === userId ? { ...row, locked } : row))
+    )
   }, [])
 
-  useEffect(() => {
-    void fetchTraders()
-    return () => undefined
-  }, [fetchTraders])
+  const buildRefreshSections = useCallback((mode: 'full' | 'scoped' = 'full'): OverviewSection[] => {
+    if (mode === 'full') {
+      return [
+        'stats',
+        'traders',
+        ...(selectedTraderId ? (['companies'] as OverviewSection[]) : []),
+        ...(selectedCompanyId ? (['users'] as OverviewSection[]) : []),
+        ...(selectedUserId ? (['permissionPreview'] as OverviewSection[]) : [])
+      ]
+    }
+
+    return [
+      'stats',
+      ...(selectedTraderId ? (['companies'] as OverviewSection[]) : (['traders'] as OverviewSection[])),
+      ...(selectedCompanyId ? (['users'] as OverviewSection[]) : []),
+      ...(selectedUserId ? (['permissionPreview'] as OverviewSection[]) : [])
+    ]
+  }, [selectedCompanyId, selectedTraderId, selectedUserId])
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => recalculateGraphPoints())
@@ -329,27 +391,55 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
     }
   }, [recalculateGraphPoints])
 
-  const handleSelectTrader = async (traderId: string) => {
-    setSelectedTraderId(traderId)
+  useEffect(() => {
+    if (!selectedTraderId) return
+    if (traders.some((row) => row.id === selectedTraderId)) return
+    setSelectedTraderId(null)
     setSelectedCompanyId(null)
     setSelectedUserId(null)
     setCompanies([])
     setUsers([])
     setPermissionPreview(null)
-    await fetchCompanies(traderId)
+  }, [selectedTraderId, traders])
+
+  useEffect(() => {
+    if (!selectedCompanyId) return
+    if (companies.some((row) => row.id === selectedCompanyId)) return
+    setSelectedCompanyId(null)
+    setSelectedUserId(null)
+    setUsers([])
+    setPermissionPreview(null)
+  }, [companies, selectedCompanyId])
+
+  useEffect(() => {
+    if (!selectedUserId) return
+    if (users.some((row) => row.id === selectedUserId)) return
+    setSelectedUserId(null)
+    setPermissionPreview(null)
+  }, [selectedUserId, users])
+
+  const handleSelectTrader = async (traderId: string) => {
+    setSelectedTraderId(traderId)
+    setSelectedCompanyId(null)
+    setSelectedUserId(null)
+    setPermissionPreview(null)
+    await fetchOverview({ traderId }, { sections: ['companies'] })
   }
 
   const handleSelectCompany = async (companyId: string) => {
     setSelectedCompanyId(companyId)
     setSelectedUserId(null)
-    setUsers([])
     setPermissionPreview(null)
-    await fetchUsers(companyId)
+    await fetchOverview({ traderId: selectedTraderId, companyId }, { sections: ['users'] })
   }
 
-  const handleSelectUser = async (userId: string, companyId?: string | null) => {
+  const handleSelectUser = async (userId: string) => {
     setSelectedUserId(userId)
-    await fetchPermissionPreview(userId, companyId)
+    setPermissionPreview(null)
+    await fetchOverview(
+      { traderId: selectedTraderId, companyId: selectedCompanyId, userId },
+      { sections: ['permissionPreview'] }
+    )
   }
 
   const toggleTraderLock = async (row: TraderRow) => {
@@ -363,10 +453,7 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
       setError(payload.error || 'Failed to update trader lock')
       return
     }
-    await fetchTraders()
-    if (selectedTraderId === row.id) {
-      await fetchCompanies(row.id)
-    }
+    setTraderLockState(row.id, !row.locked)
   }
 
   const toggleCompanyLock = async (row: CompanyRow) => {
@@ -380,12 +467,7 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
       setError(payload.error || 'Failed to update company lock')
       return
     }
-    if (selectedTraderId) {
-      await fetchCompanies(selectedTraderId)
-    }
-    if (selectedCompanyId === row.id) {
-      await fetchUsers(row.id)
-    }
+    setCompanyLockState(row.id, !row.locked)
   }
 
   const toggleUserLock = async (row: UserRow) => {
@@ -399,33 +481,67 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
       setError(payload.error || 'Failed to update user lock')
       return
     }
-    if (selectedCompanyId) {
-      await fetchUsers(selectedCompanyId)
-    }
-    if (selectedUserId === row.id) {
-      await fetchPermissionPreview(row.id, row.companyId)
-    }
+    setUserLockState(row.id, !row.locked)
   }
 
-  const refreshAll = async () => {
-    setRefreshing(true)
-    await fetchTraders()
-    if (selectedTraderId) {
-      await fetchCompanies(selectedTraderId)
+  const refreshAll = useCallback(async (options?: { silent?: boolean; mode?: 'full' | 'scoped' }) => {
+    if (!options?.silent) {
+      setRefreshing(true)
     }
-    if (selectedCompanyId) {
-      await fetchUsers(selectedCompanyId)
+
+    try {
+      await fetchOverview(
+        {
+          traderId: selectedTraderId,
+          companyId: selectedCompanyId,
+          userId: selectedUserId
+        },
+        {
+          ...options,
+          sections: buildRefreshSections(options?.mode || 'full')
+        }
+      )
+    } finally {
+      if (!options?.silent) {
+        setRefreshing(false)
+      }
     }
-    if (selectedUserId && selectedUser?.companyId) {
-      await fetchPermissionPreview(selectedUserId, selectedUser.companyId)
+  }, [buildRefreshSections, fetchOverview, selectedCompanyId, selectedTraderId, selectedUserId])
+
+  useEffect(() => {
+    return () => {
+      if (scopedRefreshTimerRef.current !== null) {
+        window.clearTimeout(scopedRefreshTimerRef.current)
+      }
     }
-    setRefreshing(false)
-  }
+  }, [])
+
+  useEffect(() => {
+    const unsubscribe = subscribeSuperAdminDataChanged(() => {
+      if (scopedRefreshTimerRef.current !== null) {
+        window.clearTimeout(scopedRefreshTimerRef.current)
+      }
+
+      scopedRefreshTimerRef.current = window.setTimeout(() => {
+        scopedRefreshTimerRef.current = null
+        void refreshAll({ silent: true, mode: 'scoped' })
+      }, 180)
+    })
+
+    return () => {
+      if (scopedRefreshTimerRef.current !== null) {
+        window.clearTimeout(scopedRefreshTimerRef.current)
+        scopedRefreshTimerRef.current = null
+      }
+      unsubscribe()
+    }
+  }, [refreshAll])
 
   return (
     <SuperAdminShell
       title="Super Admin Dashboard"
       subtitle="Tenant graph explorer: Trader -> Company -> User with strict scope visibility"
+      initialProfile={initialProfile}
     >
       <div className="space-y-6">
         {error ? <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
@@ -442,7 +558,7 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
                   </p>
                 </div>
               </div>
-              <Button variant="outline" onClick={() => refreshAll()} disabled={refreshing}>
+              <Button variant="outline" onClick={() => refreshAll({ mode: 'full' })} disabled={refreshing}>
                 {refreshing ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                 Refresh
               </Button>
@@ -450,15 +566,15 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
 
             <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-center">
-                <p className="text-2xl font-semibold text-indigo-600">{traders.length || initialStats.traders}</p>
+                <p className="text-2xl font-semibold text-indigo-600">{traderSummaryCount}</p>
                 <p className="text-xs text-slate-500">Traders</p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-center">
-                <p className="text-2xl font-semibold text-blue-600">{companies.length || initialStats.companies}</p>
+                <p className="text-2xl font-semibold text-blue-600">{companySummaryCount}</p>
                 <p className="text-xs text-slate-500">Companies (selected scope)</p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-center">
-                <p className="text-2xl font-semibold text-emerald-600">{users.length || initialStats.users}</p>
+                <p className="text-2xl font-semibold text-emerald-600">{userSummaryCount}</p>
                 <p className="text-xs text-slate-500">Users (selected scope)</p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-center">
@@ -580,6 +696,8 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
               selectedTrader ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-4 opacity-50'
             }`}
           >
+            <div className="relative">
+              <RefreshOverlay refreshing={loadingCompanies} label="Refreshing companies" />
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base">
                 <Building2 className="h-4 w-4" />
@@ -598,7 +716,26 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
               ) : (
                 <div ref={companyListRef} className="max-h-[430px] space-y-2 overflow-y-auto pr-1">
                   {loadingCompanies ? (
-                    <div className="py-8 text-center text-sm text-slate-500">Loading companies...</div>
+                    filteredCompanies.length === 0 ? (
+                      <div className="py-8 text-center text-sm text-slate-500">Loading companies...</div>
+                    ) : (
+                      filteredCompanies.map((row) => (
+                        <div
+                          key={row.id}
+                          ref={(node) => {
+                            companyNodeRefs.current[row.id] = node
+                          }}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-left"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-semibold">{row.name}</p>
+                              <p className="text-xs opacity-80">{row._count.users} users connected</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )
                   ) : (
                     filteredCompanies.map((row) => (
                       <div
@@ -644,6 +781,7 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
                 </div>
               )}
             </CardContent>
+            </div>
           </Card>
 
           <Card
@@ -651,6 +789,8 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
               selectedCompany ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-4 opacity-50'
             }`}
           >
+            <div className="relative">
+              <RefreshOverlay refreshing={loadingUsers} label="Refreshing users" />
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base">
                 <Users className="h-4 w-4" />
@@ -669,7 +809,28 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
               ) : (
                 <div ref={userListRef} className="max-h-[430px] space-y-2 overflow-y-auto pr-1">
                   {loadingUsers ? (
-                    <div className="py-8 text-center text-sm text-slate-500">Loading users...</div>
+                    filteredUsers.length === 0 ? (
+                      <div className="py-8 text-center text-sm text-slate-500">Loading users...</div>
+                    ) : (
+                      filteredUsers.map((row) => (
+                        <div
+                          key={row.id}
+                          ref={(node) => {
+                            userNodeRefs.current[row.id] = node
+                          }}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-left"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-semibold">{row.userId}</p>
+                              <p className="text-xs opacity-80">
+                                {row.name || '-'} • {row.role || 'company_user'}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )
                   ) : (
                     filteredUsers.map((row) => (
                       <div
@@ -677,11 +838,11 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
                         ref={(node) => {
                           userNodeRefs.current[row.id] = node
                         }}
-                        onClick={() => void handleSelectUser(row.id, row.companyId)}
+                        onClick={() => void handleSelectUser(row.id)}
                         onKeyDown={(event) => {
                           if (event.key === 'Enter' || event.key === ' ') {
                             event.preventDefault()
-                            void handleSelectUser(row.id, row.companyId)
+                            void handleSelectUser(row.id)
                           }
                         }}
                         role="button"
@@ -717,10 +878,12 @@ export default function SuperAdminOverviewClient({ initialStats }: SuperAdminOve
                 </div>
               )}
             </CardContent>
+            </div>
           </Card>
         </div>
 
-        <Card className="transition-all duration-300">
+        <Card className="relative transition-all duration-300">
+          <RefreshOverlay refreshing={loadingPermissions} label="Refreshing privileges" />
           <CardHeader>
             <CardTitle>Selected User Privilege Snapshot</CardTitle>
           </CardHeader>

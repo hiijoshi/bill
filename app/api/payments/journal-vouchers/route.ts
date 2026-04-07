@@ -19,6 +19,11 @@ import {
 } from '@/lib/journal-vouchers'
 import { ensureMandiSchema } from '@/lib/mandi-schema'
 import { prisma } from '@/lib/prisma'
+import {
+  assertFinancialYearOpenForDate,
+  FinancialYearValidationError,
+  getFinancialYearDateFilter
+} from '@/lib/financial-years'
 
 const journalVoucherLineSchema = z.object({
   ledgerType: z.enum(JOURNAL_LEDGER_TYPE_OPTIONS.map((option) => option.value) as [JournalLedgerType, ...JournalLedgerType[]]),
@@ -259,8 +264,14 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
     }
 
+    const financialYearFilter = await getFinancialYearDateFilter({
+      request,
+      auth: authResult.auth,
+      companyId
+    })
+
     const summaryOnly = parseBooleanParam(searchParams.get('summary'), false)
-    const entries = await prisma.ledgerEntry.findMany({
+    const allEntries = await prisma.ledgerEntry.findMany({
       where: {
         companyId,
         billType: JOURNAL_VOUCHER_BILL_TYPE
@@ -275,15 +286,24 @@ export async function GET(request: NextRequest) {
       orderBy: [{ createdAt: 'desc' }]
     })
 
-    const voucherNumbers = [...new Set(entries.map((entry) => String(entry.billId || '').trim()).filter(Boolean))]
+    const voucherNumbers = [...new Set(allEntries.map((entry) => String(entry.billId || '').trim()).filter(Boolean))]
     const nextVoucherNo = getNextJournalVoucherNumber(voucherNumbers)
 
     if (summaryOnly) {
       return NextResponse.json({ nextVoucherNo })
     }
 
+    const entries = allEntries.filter((entry) => {
+      if (financialYearFilter.dateFrom && entry.entryDate < financialYearFilter.dateFrom) return false
+      if (financialYearFilter.dateTo && entry.entryDate > financialYearFilter.dateTo) return false
+      return true
+    })
+
     const vouchers = voucherNumbers.map((voucherNo) => {
       const matchingEntries = entries.filter((entry) => entry.billId === voucherNo)
+      if (matchingEntries.length === 0) {
+        return null
+      }
       return {
         voucherNo,
         voucherDate: matchingEntries[0]?.entryDate || null,
@@ -291,13 +311,16 @@ export async function GET(request: NextRequest) {
         entryCount: matchingEntries.length,
         createdAt: matchingEntries[0]?.createdAt || null
       }
-    })
+    }).filter(Boolean)
 
     return NextResponse.json({
       nextVoucherNo,
       data: vouchers
     })
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
   }
 }
@@ -340,6 +363,13 @@ export async function POST(request: NextRequest) {
     if (!voucherDate) {
       return NextResponse.json({ error: 'Invalid voucher date' }, { status: 400 })
     }
+
+    await assertFinancialYearOpenForDate({
+      auth: authResult.auth,
+      companyId: data.companyId,
+      date: voucherDate,
+      actionLabel: 'Journal voucher'
+    })
 
     const voucherNo = String(data.voucherNo || '').trim().toUpperCase()
     const referenceNo = normalizeOptionalString(data.referenceNo)
@@ -455,6 +485,9 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     )
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
   }
 }

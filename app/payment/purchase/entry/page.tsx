@@ -30,6 +30,8 @@ import {
   isCashPaymentMode,
   type PaymentModeOption
 } from '@/lib/payment-mode-utils'
+import { getDefaultTransactionDateInput, getFinancialYearDateRangeInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 interface PurchaseBill {
   id: string
@@ -193,10 +195,11 @@ function PurchasePaymentEntryPageContent() {
 
   const [companyId, setCompanyId] = useState('')
   const [loading, setLoading] = useState(true)
+  const { financialYear } = useClientFinancialYear()
 
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
-  const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0])
+  const [payDate, setPayDate] = useState('')
 
   const [purchaseBills, setPurchaseBills] = useState<PurchaseBill[]>([])
   const [banks, setBanks] = useState<Bank[]>([])
@@ -213,7 +216,7 @@ function PurchasePaymentEntryPageContent() {
   const [mode, setMode] = useState('cash')
   const [selectedBank, setSelectedBank] = useState('none')
   const [onlinePayAmount, setOnlinePayAmount] = useState('')
-  const [onlinePaymentDate, setOnlinePaymentDate] = useState(new Date().toISOString().split('T')[0])
+  const [onlinePaymentDate, setOnlinePaymentDate] = useState('')
   const [onlineMethod, setOnlineMethod] = useState<'upi' | 'wallet' | 'card' | 'netbanking' | 'other'>('upi')
   const [onlineHandle, setOnlineHandle] = useState('')
   const [ifscCode, setIfscCode] = useState('')
@@ -231,6 +234,15 @@ function PurchasePaymentEntryPageContent() {
   const [multiPaymentAmount, setMultiPaymentAmount] = useState('')
 
   const [hasAppliedBillQuery, setHasAppliedBillQuery] = useState(false)
+  useEffect(() => {
+    const defaultDate = getDefaultTransactionDateInput(financialYear)
+    const range = getFinancialYearDateRangeInput(financialYear)
+    setPayDate(defaultDate)
+    setOnlinePaymentDate(defaultDate)
+    setDateFrom(range.dateFrom)
+    setDateTo(range.dateTo)
+  }, [financialYear?.id])
+
   const paymentModeOptions = useMemo<PaymentMode[]>(() => {
     return paymentModes.length > 0 ? paymentModes : DEFAULT_PAYMENT_MODES
   }, [paymentModes])
@@ -349,7 +361,7 @@ function PurchasePaymentEntryPageContent() {
         const rows = await loadClientCachedValue<PurchaseBill[]>(
           `payment-purchase-bills:${targetCompanyId}:${filterKey}`,
           async () => {
-            let url = `/api/purchase-bills?companyId=${targetCompanyId}`
+            let url = `/api/purchase-bills?companyId=${targetCompanyId}&view=payment`
 
             const params = new URLSearchParams()
             if (dateFrom) params.append('dateFrom', dateFrom)
@@ -460,7 +472,7 @@ function PurchasePaymentEntryPageContent() {
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
       if (!resolvedCompanyId) {
         setLoading(false)
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
 

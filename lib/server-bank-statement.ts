@@ -1,8 +1,10 @@
 import 'server-only'
 
 import { createHash } from 'crypto'
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 
-import { getCsvValue, parseCsvObjects } from '@/lib/master-csv'
+import { getCsvValue, normalizeCsvHeader, parseCsvObjects, parseCsvRows, type CsvImportRow } from '@/lib/master-csv'
 import type { StatementDirection, StatementDocumentKind, StatementDocumentMeta } from '@/lib/bank-statement-types'
 
 export type ParsedStatementEntry = {
@@ -59,6 +61,190 @@ function detectDocumentKind(file: File): StatementDocumentKind | null {
   return null
 }
 
+type ExtractedStatementText = {
+  text: string
+  pageCount: number
+}
+
+type PdfParseModule = typeof import('pdf-parse')
+type TesseractModule = typeof import('tesseract.js')
+type TesseractWorker = Awaited<ReturnType<TesseractModule['createWorker']>>
+
+let pdfCanvasGlobalsReady: Promise<void> | null = null
+let pdfParseModuleReady: Promise<PdfParseModule> | null = null
+let ocrWorkerReady: Promise<TesseractWorker> | null = null
+let ocrWorkerQueue: Promise<unknown> = Promise.resolve()
+let ocrWorkerIdleTimer: ReturnType<typeof setTimeout> | null = null
+
+const OCR_WORKER_IDLE_TIMEOUT_MS = 2 * 60_000
+const OCR_MAX_IMAGE_EDGE_PX = 1800
+const OCR_MAX_IMAGE_PIXELS = 2_400_000
+const PDFJS_WORKER_MODULE_SPECIFIER = 'pdfjs-dist/legacy/build/pdf.worker.mjs'
+
+type StructuredStatementCsvRow = {
+  row: CsvImportRow
+  rowNo: number
+}
+
+const STATEMENT_DATE_HEADERS = new Set(
+  ['Date', 'Txn Date', 'Transaction Date', 'Posted Date', 'Value Date', 'Entry Date'].map(normalizeCsvHeader)
+)
+const STATEMENT_DEBIT_HEADERS = new Set(
+  ['Debit', 'Withdrawal', 'Debit Amount', 'Dr Amount', 'Dr', 'Withdrawals', 'Debit (Rs)'].map(normalizeCsvHeader)
+)
+const STATEMENT_CREDIT_HEADERS = new Set(
+  ['Credit', 'Deposit', 'Credit Amount', 'Cr Amount', 'Cr', 'Deposits', 'Credit (Rs)'].map(normalizeCsvHeader)
+)
+const STATEMENT_AMOUNT_HEADERS = new Set(
+  ['Amount', 'Txn Amount', 'Transaction Amount', 'Amount (Rs)'].map(normalizeCsvHeader)
+)
+const STATEMENT_DESCRIPTION_HEADERS = new Set(
+  ['Description', 'Narration', 'Particular', 'Particulars', 'Details', 'Remarks', 'Remark'].map(normalizeCsvHeader)
+)
+const STATEMENT_REFERENCE_HEADERS = new Set(
+  ['Reference', 'Txn Ref', 'Transaction Ref', 'UTR', 'Ref No', 'Cheque No', 'Chq No', 'Voucher No'].map(normalizeCsvHeader)
+)
+
+function rowHasAnyHeader(headers: string[], candidates: Set<string>): boolean {
+  return headers.some((header) => candidates.has(header))
+}
+
+function buildStructuredCsvRecord(headers: string[], rawRow: string[]): CsvImportRow {
+  const record: CsvImportRow = {}
+
+  headers.forEach((header, index) => {
+    if (!header) return
+    record[header] = String(rawRow[index] || '').trim()
+  })
+
+  return record
+}
+
+function shouldSkipStructuredStatementRow(row: CsvImportRow): boolean {
+  const values = Object.values(row).map((value) => normalizeText(value)).filter(Boolean)
+  if (values.length === 0) return true
+
+  const typeValue = normalizeForCompare(getCsvValue(row, ['Type']))
+  const descriptionValue = normalizeForCompare(
+    getCsvValue(row, ['Description', 'Narration', 'Particular', 'Particulars', 'Details', 'Remarks', 'Remark'])
+  )
+  const dateValue = normalizeText(getCsvValue(row, ['Date', 'Txn Date', 'Transaction Date', 'Posted Date', 'Value Date', 'Entry Date']))
+
+  if (!dateValue && (typeValue === 'total' || descriptionValue === 'total')) {
+    return true
+  }
+
+  return false
+}
+
+function extractStructuredStatementCsvRows(text: string): StructuredStatementCsvRow[] {
+  const rawRows = parseCsvRows(text)
+  if (rawRows.length === 0) return []
+
+  const headerRowIndex = rawRows.findIndex((rawRow) => {
+    const headers = rawRow.map((cell) => normalizeCsvHeader(cell))
+    const hasDate = rowHasAnyHeader(headers, STATEMENT_DATE_HEADERS)
+    const hasAmount =
+      rowHasAnyHeader(headers, STATEMENT_DEBIT_HEADERS) ||
+      rowHasAnyHeader(headers, STATEMENT_CREDIT_HEADERS) ||
+      rowHasAnyHeader(headers, STATEMENT_AMOUNT_HEADERS)
+    const hasNarration =
+      rowHasAnyHeader(headers, STATEMENT_DESCRIPTION_HEADERS) ||
+      rowHasAnyHeader(headers, STATEMENT_REFERENCE_HEADERS) ||
+      headers.includes(normalizeCsvHeader('Type'))
+
+    return hasDate && hasAmount && hasNarration
+  })
+
+  if (headerRowIndex < 0) return []
+
+  const headers = rawRows[headerRowIndex].map((cell) => normalizeCsvHeader(cell))
+
+  return rawRows
+    .slice(headerRowIndex + 1)
+    .map((rawRow, index) => ({
+      row: buildStructuredCsvRecord(headers, rawRow),
+      rowNo: headerRowIndex + index + 2
+    }))
+    .filter(({ row }) => !shouldSkipStructuredStatementRow(row))
+}
+
+function extractInternalLedgerPdfRows(text: string): StructuredStatementCsvRow[] {
+  const rawLines = text
+    .split(/\r?\n/)
+    .map((line) => normalizeText(line).replace(/\s+/g, ' '))
+    .filter(Boolean)
+
+  if (rawLines.length === 0) return []
+
+  const repeatedTitleCandidate = rawLines[0]
+  const repeatedTitle =
+    repeatedTitleCandidate && rawLines.filter((line) => line === repeatedTitleCandidate).length > 1
+      ? repeatedTitleCandidate
+      : ''
+
+  const lines = rawLines.filter((line) => {
+    if (line === repeatedTitle) return false
+    if (/^page \d+$/i.test(line)) return false
+    if (/^--\s*\d+\s+of\s+\d+\s*--$/i.test(line)) return false
+    return true
+  })
+
+  const typeHeaderIndex = lines.findIndex((line) => normalizeForCompare(line) === 'type date voucher no')
+  const descriptionHeaderIndex = lines.findIndex((line) => normalizeForCompare(line) === 'particular')
+  const amountHeaderIndex = lines.findIndex((line) => normalizeForCompare(line) === 'debit (rs) credit (rs) balance')
+
+  if (typeHeaderIndex < 0 || descriptionHeaderIndex <= typeHeaderIndex || amountHeaderIndex <= descriptionHeaderIndex) {
+    return []
+  }
+
+  const typeLines = lines
+    .slice(typeHeaderIndex + 1, descriptionHeaderIndex)
+    .filter((line) => normalizeForCompare(line) !== 'total')
+  const descriptionLines = lines
+    .slice(descriptionHeaderIndex + 1, amountHeaderIndex)
+    .filter((line) => normalizeForCompare(line) !== 'total')
+  const amountLines = lines
+    .slice(amountHeaderIndex + 1)
+    .filter((line) => normalizeForCompare(line) !== 'total')
+
+  const transactionCount = Math.min(typeLines.length, descriptionLines.length, amountLines.length)
+  if (transactionCount === 0) return []
+
+  const rows: StructuredStatementCsvRow[] = []
+
+  for (let index = 0; index < transactionCount; index += 1) {
+    const typeLine = typeLines[index]
+    const descriptionLine = descriptionLines[index]
+    const amountLine = amountLines[index]
+
+    const typeMatch = /^(.*?)\s+(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\s+(.*)$/.exec(typeLine)
+    const amountMatch = /^(-|[\d,]+(?:\.\d{1,2})?)\s+(-|[\d,]+(?:\.\d{1,2})?)\s+(.+)$/.exec(amountLine)
+
+    if (!typeMatch || !amountMatch) {
+      return []
+    }
+
+    const [, typeValue, dateValue, voucherValue] = typeMatch
+    const [, debitValue, creditValue, balanceValue] = amountMatch
+
+    rows.push({
+      rowNo: index + 2,
+      row: {
+        [normalizeCsvHeader('Type')]: normalizeText(typeValue),
+        [normalizeCsvHeader('Date')]: normalizeText(dateValue),
+        [normalizeCsvHeader('Voucher No')]: normalizeText(voucherValue) === '-' ? '' : normalizeText(voucherValue),
+        [normalizeCsvHeader('Particular')]: normalizeText(descriptionLine),
+        [normalizeCsvHeader('Debit (Rs)')]: normalizeText(debitValue) === '-' ? '' : normalizeText(debitValue),
+        [normalizeCsvHeader('Credit (Rs)')]: normalizeText(creditValue) === '-' ? '' : normalizeText(creditValue),
+        [normalizeCsvHeader('Balance')]: normalizeText(balanceValue)
+      }
+    })
+  }
+
+  return rows
+}
+
 function parseAmountValue(raw: string): number | null {
   const normalized = normalizeText(raw)
     .replace(/[,\s₹]/g, '')
@@ -69,6 +255,172 @@ function parseAmountValue(raw: string): number | null {
   const parsed = Number(normalized)
   if (!Number.isFinite(parsed)) return null
   return Math.abs(parsed)
+}
+
+async function ensurePdfCanvasGlobals(): Promise<void> {
+  if (pdfCanvasGlobalsReady) {
+    return pdfCanvasGlobalsReady
+  }
+
+  pdfCanvasGlobalsReady = (async () => {
+    const globalScope = globalThis as typeof globalThis
+    const mutableGlobalScope = globalScope as any
+
+    if (
+      typeof globalScope.DOMMatrix !== 'undefined' &&
+      typeof globalScope.ImageData !== 'undefined' &&
+      typeof globalScope.Path2D !== 'undefined'
+    ) {
+      return
+    }
+
+    const canvasModule = await import('@napi-rs/canvas')
+
+    if (typeof globalScope.DOMMatrix === 'undefined') {
+      mutableGlobalScope.DOMMatrix = canvasModule.DOMMatrix
+    }
+    if (typeof globalScope.ImageData === 'undefined') {
+      mutableGlobalScope.ImageData = canvasModule.ImageData
+    }
+    if (typeof globalScope.Path2D === 'undefined') {
+      mutableGlobalScope.Path2D = canvasModule.Path2D
+    }
+  })()
+
+  try {
+    await pdfCanvasGlobalsReady
+  } catch (error) {
+    pdfCanvasGlobalsReady = null
+    throw error
+  }
+}
+
+async function getPdfParseModule(): Promise<PdfParseModule> {
+  if (pdfParseModuleReady) {
+    return pdfParseModuleReady
+  }
+
+  pdfParseModuleReady = (async () => {
+    // Preload the pdf.js worker so fake-worker mode does not rely on a fragile bundled relative path.
+    const workerModuleSpecifier = PDFJS_WORKER_MODULE_SPECIFIER
+    await import(workerModuleSpecifier)
+
+    const pdfParseModule = await import('pdf-parse')
+
+    try {
+      const requireFromApp = createRequire(`${process.cwd()}/package.json`)
+      const workerPath = requireFromApp.resolve(PDFJS_WORKER_MODULE_SPECIFIER)
+      pdfParseModule.PDFParse.setWorker(pathToFileURL(workerPath).href)
+    } catch {
+      // If path resolution fails in an environment, the preloaded worker above is still available.
+    }
+
+    return pdfParseModule
+  })()
+
+  try {
+    return await pdfParseModuleReady
+  } catch (error) {
+    pdfParseModuleReady = null
+    throw error
+  }
+}
+
+function clearOcrWorkerIdleTimer() {
+  if (!ocrWorkerIdleTimer) return
+  clearTimeout(ocrWorkerIdleTimer)
+  ocrWorkerIdleTimer = null
+}
+
+function scheduleOcrWorkerCleanup() {
+  clearOcrWorkerIdleTimer()
+  ocrWorkerIdleTimer = setTimeout(() => {
+    const workerPromise = ocrWorkerReady
+    ocrWorkerReady = null
+    if (!workerPromise) return
+
+    void workerPromise
+      .then(async (worker) => {
+        await worker.terminate()
+      })
+      .catch(() => {})
+  }, OCR_WORKER_IDLE_TIMEOUT_MS)
+
+  ocrWorkerIdleTimer.unref?.()
+}
+
+async function getSharedOcrWorker(): Promise<TesseractWorker> {
+  clearOcrWorkerIdleTimer()
+
+  if (!ocrWorkerReady) {
+    ocrWorkerReady = (async () => {
+      const tesseractModule = await import('tesseract.js')
+      const worker = await tesseractModule.createWorker('eng', tesseractModule.OEM.LSTM_ONLY, {
+        logger: () => undefined
+      })
+
+      await worker.setParameters({
+        preserve_interword_spaces: '1',
+        tessedit_pageseg_mode: tesseractModule.PSM.SINGLE_BLOCK
+      })
+
+      return worker
+    })()
+  }
+
+  try {
+    return await ocrWorkerReady
+  } catch (error) {
+    ocrWorkerReady = null
+    throw error
+  }
+}
+
+async function optimizeImageBufferForOcr(buffer: Buffer): Promise<Buffer> {
+  const canvasModule = await import('@napi-rs/canvas')
+  const image = await canvasModule.loadImage(buffer)
+
+  const sourceWidth = Math.max(1, Math.round(Number(image.width || 0)))
+  const sourceHeight = Math.max(1, Math.round(Number(image.height || 0)))
+  if (!sourceWidth || !sourceHeight) return buffer
+
+  const longestEdge = Math.max(sourceWidth, sourceHeight)
+  const totalPixels = sourceWidth * sourceHeight
+  const edgeScale = OCR_MAX_IMAGE_EDGE_PX / longestEdge
+  const areaScale = Math.sqrt(OCR_MAX_IMAGE_PIXELS / totalPixels)
+  const scale = Math.min(1, edgeScale, areaScale)
+
+  if (scale >= 0.995) {
+    return buffer
+  }
+
+  const targetWidth = Math.max(1, Math.round(sourceWidth * scale))
+  const targetHeight = Math.max(1, Math.round(sourceHeight * scale))
+  const canvas = canvasModule.createCanvas(targetWidth, targetHeight)
+  const context = canvas.getContext('2d')
+
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
+  context.filter = 'grayscale(1) contrast(1.08)'
+  context.drawImage(image, 0, 0, targetWidth, targetHeight)
+
+  return canvas.toBuffer('image/jpeg', 0.82)
+}
+
+async function recognizeTextWithSharedOcrWorker(buffer: Buffer): Promise<string> {
+  const task = ocrWorkerQueue.then(async () => {
+    const worker = await getSharedOcrWorker()
+    const result = await worker.recognize(buffer)
+    return normalizeText(result.data?.text || '')
+  })
+
+  ocrWorkerQueue = task.then(() => undefined, () => undefined)
+
+  try {
+    return await task
+  } finally {
+    scheduleOcrWorkerCleanup()
+  }
 }
 
 function parseStatementDate(raw: string): string | null {
@@ -145,10 +497,10 @@ function parseStatementRow(
   }
 
   const debitAmount = parseAmountValue(
-    getCsvValue(row, ['Debit', 'Withdrawal', 'Debit Amount', 'Dr Amount', 'Dr', 'Withdrawals'])
+    getCsvValue(row, ['Debit', 'Withdrawal', 'Debit Amount', 'Dr Amount', 'Dr', 'Withdrawals', 'Debit (Rs)'])
   )
   const creditAmount = parseAmountValue(
-    getCsvValue(row, ['Credit', 'Deposit', 'Credit Amount', 'Cr Amount', 'Cr', 'Deposits'])
+    getCsvValue(row, ['Credit', 'Deposit', 'Credit Amount', 'Cr Amount', 'Cr', 'Deposits', 'Credit (Rs)'])
   )
 
   let amount: number | null = null
@@ -162,7 +514,7 @@ function parseStatementRow(
     direction = 'in'
   } else {
     const signedAmount = Number(
-      normalizeText(getCsvValue(row, ['Amount', 'Txn Amount', 'Transaction Amount'])).replace(/[,\s₹]/g, '')
+      normalizeText(getCsvValue(row, ['Amount', 'Txn Amount', 'Transaction Amount', 'Amount (Rs)'])).replace(/[,\s₹]/g, '')
     )
     const directionRaw = normalizeForCompare(getCsvValue(row, ['Direction', 'Type', 'Txn Type']))
 
@@ -181,10 +533,10 @@ function parseStatementRow(
   }
 
   const description = normalizeText(
-    getCsvValue(row, ['Description', 'Narration', 'Particulars', 'Details', 'Remarks', 'Remark'])
+    getCsvValue(row, ['Description', 'Narration', 'Particular', 'Particulars', 'Details', 'Remarks', 'Remark'])
   )
   const reference = normalizeText(
-    getCsvValue(row, ['Reference', 'Txn Ref', 'Transaction Ref', 'UTR', 'Ref No', 'Cheque No', 'Chq No'])
+    getCsvValue(row, ['Reference', 'Txn Ref', 'Transaction Ref', 'UTR', 'Ref No', 'Cheque No', 'Chq No', 'Voucher No'])
   ) || null
 
   const entryBase = {
@@ -362,32 +714,83 @@ async function parseExcelStatement(buffer: Buffer, bankId: string): Promise<Pars
   return rows.map((row, index) => parseStatementRow(normalizeWorksheetRow(row), index + 2, bankId))
 }
 
-async function extractPdfText(buffer: Buffer): Promise<string> {
-  const pdfParseModule = await import('pdf-parse')
+async function extractPdfText(buffer: Buffer): Promise<ExtractedStatementText> {
+  await ensurePdfCanvasGlobals()
+  const pdfParseModule = await getPdfParseModule()
   const parser = new pdfParseModule.PDFParse({ data: buffer })
 
   try {
     const parsed = await parser.getText()
-    return normalizeText(parsed.text || '')
+
+    return {
+      text: normalizeText(parsed.text || ''),
+      pageCount: Number(parsed.total || parsed.pages.length || 0)
+    }
+  } finally {
+    await parser.destroy()
+  }
+}
+
+async function recognizeTextFromImages(buffers: Buffer[]): Promise<string> {
+  const pageTexts: string[] = []
+
+  for (const buffer of buffers) {
+    if (!buffer || buffer.length === 0) continue
+    const text = await recognizeTextWithSharedOcrWorker(buffer)
+    if (text) {
+      pageTexts.push(text)
+    }
+  }
+
+  return pageTexts.join('\n\n')
+}
+
+async function extractPdfOcrText(buffer: Buffer): Promise<ExtractedStatementText> {
+  await ensurePdfCanvasGlobals()
+  const pdfParseModule = await getPdfParseModule()
+  const parser = new pdfParseModule.PDFParse({ data: buffer })
+
+  try {
+    const screenshots = await parser.getScreenshot({
+      desiredWidth: 1400,
+      imageBuffer: true,
+      imageDataUrl: false
+    })
+
+    const pageBuffers = (screenshots.pages || []).flatMap((page) => {
+      const bytes = page?.data
+      if (!bytes || bytes.length === 0) {
+        return []
+      }
+      return [Buffer.from(bytes)]
+    })
+
+    return {
+      text: await recognizeTextFromImages(pageBuffers),
+      pageCount: Number(screenshots.total || pageBuffers.length || 0)
+    }
   } finally {
     await parser.destroy()
   }
 }
 
 async function extractImageText(buffer: Buffer): Promise<string> {
-  const tesseractModule = await import('tesseract.js')
-  const worker = await tesseractModule.createWorker('eng')
-
-  try {
-    const result = await worker.recognize(buffer)
-    return normalizeText(result.data?.text || '')
-  } finally {
-    await worker.terminate()
-  }
+  const optimizedBuffer = await optimizeImageBufferForOcr(buffer)
+  return recognizeTextFromImages([optimizedBuffer])
 }
 
 async function parseTextStatement(text: string, bankId: string): Promise<ParsedStatementResult[]> {
-  const csvRows = parseCsvObjects(text)
+  const structuredCsvRows = extractStructuredStatementCsvRows(text)
+  if (structuredCsvRows.length > 0) {
+    return structuredCsvRows.map(({ row, rowNo }) => parseStatementRow(row, rowNo, bankId))
+  }
+
+  const internalLedgerPdfRows = extractInternalLedgerPdfRows(text)
+  if (internalLedgerPdfRows.length > 0) {
+    return internalLedgerPdfRows.map(({ row, rowNo }) => parseStatementRow(row, rowNo, bankId))
+  }
+
+  const csvRows = parseCsvObjects(text).filter((row) => !shouldSkipStructuredStatementRow(row))
   if (csvRows.length > 0 && Object.keys(csvRows[0] || {}).length > 1) {
     return csvRows.map((row, index) => parseStatementRow(row, index + 2, bankId))
   }
@@ -418,7 +821,13 @@ export async function parseBankStatementFile(file: File, bankId: string): Promis
   switch (kind) {
     case 'csv': {
       const text = normalizeText(await file.text())
-      const rows = parseCsvObjects(text)
+      const structuredCsvRows = extractStructuredStatementCsvRows(text)
+      const rows = structuredCsvRows.length > 0
+        ? structuredCsvRows
+        : parseCsvObjects(text)
+            .filter((row) => !shouldSkipStructuredStatementRow(row))
+            .map((row, index) => ({ row, rowNo: index + 2 }))
+
       if (rows.length === 0) {
         throw new Error('Uploaded CSV statement is empty')
       }
@@ -427,9 +836,14 @@ export async function parseBankStatementFile(file: File, bankId: string): Promis
         document: {
           kind,
           parser: 'CSV table parser',
-          fileName: file.name
+          fileName: file.name,
+          recognitionMode: 'structured',
+          note:
+            structuredCsvRows.length > 0
+              ? 'Detected the exported ledger table and read rows directly from the uploaded CSV file.'
+              : 'Rows were read directly from the uploaded CSV file.'
         },
-        entries: rows.map((row, index) => parseStatementRow(row, index + 2, bankId))
+        entries: rows.map(({ row, rowNo }) => parseStatementRow(row, rowNo, bankId))
       }
     }
 
@@ -438,24 +852,54 @@ export async function parseBankStatementFile(file: File, bankId: string): Promis
         document: {
           kind,
           parser: 'Excel worksheet parser',
-          fileName: file.name
+          fileName: file.name,
+          recognitionMode: 'structured',
+          note: 'Rows were read directly from the uploaded worksheet.'
         },
         entries: await parseExcelStatement(buffer, bankId)
       }
 
     case 'pdf': {
-      const text = await extractPdfText(buffer)
-      if (!text) {
-        throw new Error('Could not read text from PDF statement. Try a searchable PDF or upload statement image.')
+      const pdfTextResult = await extractPdfText(buffer)
+      const pdfText = pdfTextResult.text
+
+      if (pdfText) {
+        try {
+          return {
+            document: {
+              kind,
+              parser: 'PDF text parser',
+              fileName: file.name,
+              recognitionMode: 'text',
+              pageCount: pdfTextResult.pageCount,
+              note: 'This PDF included readable text, so rows were parsed directly from the document.'
+            },
+            entries: await parseTextStatement(pdfText, bankId)
+          }
+        } catch {
+          // Fall back to OCR for scanned/poorly structured PDFs that have text but no readable rows.
+        }
+      }
+
+      const pdfOcrResult = await extractPdfOcrText(buffer)
+      if (!pdfOcrResult.text) {
+        throw new Error(
+          'This PDF could not be recognized into readable statement rows. Upload a clearer PDF/image or use CSV/Excel for the fastest result.'
+        )
       }
 
       return {
         document: {
           kind,
-          parser: 'PDF text parser',
-          fileName: file.name
+          parser: pdfText ? 'PDF OCR fallback parser' : 'PDF OCR parser',
+          fileName: file.name,
+          recognitionMode: 'ocr',
+          pageCount: pdfOcrResult.pageCount || pdfTextResult.pageCount,
+          note: pdfText
+            ? 'The PDF text was not structured enough for statement rows, so OCR scan was used automatically.'
+            : 'This scanned PDF was recognized using OCR page scanning.'
         },
-        entries: await parseTextStatement(text, bankId)
+        entries: await parseTextStatement(pdfOcrResult.text, bankId)
       }
     }
 
@@ -469,7 +913,10 @@ export async function parseBankStatementFile(file: File, bankId: string): Promis
         document: {
           kind,
           parser: 'OCR image parser',
-          fileName: file.name
+          fileName: file.name,
+          recognitionMode: 'ocr',
+          pageCount: 1,
+          note: 'The uploaded image was scanned with OCR to detect statement rows.'
         },
         entries: await parseTextStatement(text, bankId)
       }
@@ -485,7 +932,9 @@ export async function parseBankStatementFile(file: File, bankId: string): Promis
         document: {
           kind,
           parser: 'Plain text parser',
-          fileName: file.name
+          fileName: file.name,
+          recognitionMode: 'text',
+          note: 'Rows were read directly from the uploaded text file.'
         },
         entries: await parseTextStatement(text, bankId)
       }

@@ -9,6 +9,7 @@ import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { syncSupabaseForLegacyUserMutationWithTimeout } from '@/lib/supabase/legacy-user-sync'
 import { normalizePrismaApiError } from '@/lib/prisma-errors'
+import { markCompanyLiveUpdates, markSuperAdminLiveUpdate, markUserSessionLiveUpdate } from '@/lib/live-update-state'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'User ID is required') })
 
@@ -196,6 +197,13 @@ export async function PUT(
         return NextResponse.json({ error: 'Trader is locked' }, { status: 403 })
       }
 
+      if (!traderCapacity.canManageUsers) {
+        return NextResponse.json(
+          { error: traderCapacity.subscriptionMessage || 'Trader subscription does not allow user changes' },
+          { status: 403 }
+        )
+      }
+
       if (
         traderCapacity.maxUsers !== null &&
         traderCapacity.currentUsers >= traderCapacity.maxUsers
@@ -243,6 +251,17 @@ export async function PUT(
       )
     }
 
+    const existingPermissionCompanyIds = (
+      await prisma.userPermission.findMany({
+        where: {
+          userId
+        },
+        select: {
+          companyId: true
+        }
+      })
+    ).map((row) => row.companyId)
+
     const updateData: {
       traderId?: string
       companyId?: string | null
@@ -261,23 +280,57 @@ export async function PUT(
       updateData.password = await bcrypt.hash(parsedBody.data.password, 12)
     }
 
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: updateData,
-      include: {
-        trader: {
+    const user = await prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: updateData
+      })
+
+      if (nextTraderId !== existingUser.traderId) {
+        const stalePermissionIds = await tx.userPermission.findMany({
+          where: {
+            userId,
+            company: {
+              is: {
+                traderId: {
+                  not: nextTraderId
+                }
+              }
+            }
+          },
           select: {
-            id: true,
-            name: true
+            id: true
           }
-        },
-        company: {
-          select: {
-            id: true,
-            name: true
-          }
+        })
+
+        if (stalePermissionIds.length > 0) {
+          await tx.userPermission.deleteMany({
+            where: {
+              id: {
+                in: stalePermissionIds.map((row) => row.id)
+              }
+            }
+          })
         }
       }
+
+      return tx.user.findFirstOrThrow({
+        where: { id: updatedUser.id },
+        include: {
+          trader: {
+            select: {
+              id: true,
+              name: true
+            }
+          },
+          company: {
+            select: {
+              id: true,
+              name: true
+            }
+          }
+        }
+      })
     })
 
     const userWithoutPassword = omitPassword(user)
@@ -311,6 +364,10 @@ export async function PUT(
       },
       requestMeta: getAuditRequestMeta(request)
     })
+    markSuperAdminLiveUpdate()
+    markCompanyLiveUpdates([existingUser.companyId, user.companyId, ...existingPermissionCompanyIds])
+    markUserSessionLiveUpdate(existingUser)
+    markUserSessionLiveUpdate(user)
 
     let cloudSyncWarning: string | null = null
     if (isSupabaseConfigured()) {
@@ -420,6 +477,9 @@ export async function DELETE(
       },
       requestMeta: getAuditRequestMeta(request)
     })
+    markSuperAdminLiveUpdate()
+    markCompanyLiveUpdates([existingUser.companyId, deletedUser.companyId])
+    markUserSessionLiveUpdate(deletedUser)
 
     invalidateAuthGuardStateForUser({
       id: deletedUser.id,
