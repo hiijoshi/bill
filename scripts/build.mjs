@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process'
+import { mkdirSync } from 'node:fs'
+import path from 'node:path'
 
 const env = { ...process.env }
 
@@ -7,7 +9,9 @@ const env = { ...process.env }
 // only configured database in Vercel, provide a harmless fallback DATABASE_URL
 // so `prisma generate` and `next build` do not fail on missing sqlite config.
 if (!env.DATABASE_URL && env.TURSO_DATABASE_URL) {
-  env.DATABASE_URL = 'file:./dev.db'
+  const buildDbDirectory = path.join(process.cwd(), 'var')
+  mkdirSync(buildDbDirectory, { recursive: true })
+  env.DATABASE_URL = `file:${path.join(buildDbDirectory, 'prisma-build.db')}`
 }
 
 const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx'

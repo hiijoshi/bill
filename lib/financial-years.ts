@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server'
 
 import { normalizeId, type RequestAuthContext } from '@/lib/api-security'
 import { prisma } from '@/lib/prisma'
+import { isUniqueConstraintError } from '@/lib/prisma-errors'
 import { isPrismaSchemaMismatchError } from '@/lib/prisma-schema-guard'
 import { clearServerCacheByPrefix, getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
 import { getFinancialYearCookieNameCandidates } from '@/lib/session-cookies'
@@ -10,6 +11,7 @@ import { getFinancialYearCookieNameCandidates } from '@/lib/session-cookies'
 export const FINANCIAL_YEAR_START_MONTH_INDEX = 3
 export const FINANCIAL_YEAR_START_DAY = 1
 const FINANCIAL_YEAR_CACHE_TTL_MS = 30_000
+const financialYearBootstrapPromises = new Map<string, Promise<void>>()
 
 export const FINANCIAL_YEAR_STATUSES = ['open', 'closed', 'locked'] as const
 
@@ -65,6 +67,10 @@ type DateSpan = {
 type FinancialYearLoadResult = {
   financialYears: FinancialYearSummary[]
   schemaAvailable: boolean
+}
+
+function isTransactionClient(client: DbClient): client is Prisma.TransactionClient {
+  return !('$transaction' in client)
 }
 
 function normalizeFinancialYearSummary(row: FinancialYear): FinancialYearSummary {
@@ -473,12 +479,38 @@ async function bootstrapFinancialYearsForTrader(client: DbClient, traderId: stri
     })
   }
 
-  await client.financialYear.createMany({
-    data: rows
-  })
+  try {
+    await client.financialYear.createMany({
+      data: rows
+    })
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) {
+      throw error
+    }
+  }
 }
 
-async function loadFinancialYearsForTrader(client: DbClient, traderId: string): Promise<FinancialYearLoadResult> {
+async function runFinancialYearBootstrapOnce(client: DbClient, traderId: string): Promise<void> {
+  const existingPromise = financialYearBootstrapPromises.get(traderId)
+  if (existingPromise) {
+    return existingPromise
+  }
+
+  const bootstrapPromise = bootstrapFinancialYearsForTrader(client, traderId).finally(() => {
+    financialYearBootstrapPromises.delete(traderId)
+  })
+
+  financialYearBootstrapPromises.set(traderId, bootstrapPromise)
+  return bootstrapPromise
+}
+
+async function loadFinancialYearsForTrader(
+  client: DbClient,
+  traderId: string,
+  options?: {
+    bootstrapIfMissing?: boolean
+  }
+): Promise<FinancialYearLoadResult> {
   const normalizedTraderId = normalizeId(traderId)
   if (!normalizedTraderId) {
     return {
@@ -488,7 +520,10 @@ async function loadFinancialYearsForTrader(client: DbClient, traderId: string): 
   }
 
   try {
-    await bootstrapFinancialYearsForTrader(client, normalizedTraderId)
+    const shouldBootstrap = options?.bootstrapIfMissing ?? !isTransactionClient(client)
+    if (shouldBootstrap) {
+      await runFinancialYearBootstrapOnce(client, normalizedTraderId)
+    }
 
     const cacheKey = makeServerCacheKey('financial-years:list', [normalizedTraderId])
     const financialYears = await getOrSetServerCache(cacheKey, FINANCIAL_YEAR_CACHE_TTL_MS, async () => {

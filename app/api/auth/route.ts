@@ -19,8 +19,7 @@ import { isPrismaSchemaMismatchError } from '@/lib/prisma-schema-guard'
 // Simple in-memory rate limiting store
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
 const accountLockoutStore = new Map<string, { count: number; lockedUntil: number }>()
-const ENFORCE_LOGIN_GUARDS = false
-const isDev = env.NODE_ENV === 'development' || !ENFORCE_LOGIN_GUARDS
+const isDev = env.NODE_ENV === 'development'
 
 async function checkRateLimit(identifier: string, windowMs: number, maxRequests: number) {
   const now = Date.now()
@@ -514,7 +513,7 @@ export async function POST(request: NextRequest) {
     )
 
     const errorMessage = isPrismaSchemaMismatchError(error)
-      ? 'Database schema mismatch. Run: npx prisma db push && npx prisma generate'
+      ? 'Database schema mismatch. Run: npm run prisma:migrate:deploy && npx prisma generate'
       : 'Internal server error'
     
     return NextResponse.json({ 

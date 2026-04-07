@@ -11,7 +11,8 @@ CREATE TABLE "Bank" (
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
 
-  CONSTRAINT "Bank_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "Bank_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "Bank_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE "Marka" (
@@ -23,7 +24,8 @@ CREATE TABLE "Marka" (
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
 
-  CONSTRAINT "Marka_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "Marka_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "Marka_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE "PaymentMode" (
@@ -36,7 +38,8 @@ CREATE TABLE "PaymentMode" (
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
 
-  CONSTRAINT "PaymentMode_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "PaymentMode_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "PaymentMode_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE UNIQUE INDEX "Bank_companyId_name_ifscCode_key" ON "Bank"("companyId", "name", "ifscCode");
@@ -47,7 +50,3 @@ CREATE INDEX "idx_markas_company_number" ON "Marka"("companyId", "markaNumber");
 
 CREATE UNIQUE INDEX "PaymentMode_companyId_code_key" ON "PaymentMode"("companyId", "code");
 CREATE INDEX "idx_payment_modes_company_name" ON "PaymentMode"("companyId", "name");
-
-ALTER TABLE "Bank" ADD CONSTRAINT "Bank_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "Marka" ADD CONSTRAINT "Marka_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "PaymentMode" ADD CONSTRAINT "PaymentMode_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE;

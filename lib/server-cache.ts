@@ -9,22 +9,39 @@ const serverCache = new Map<string, CacheEntry<unknown>>()
 const pendingLoads = new Map<string, Promise<unknown>>()
 
 let redisClient: RedisClientType | null = null
+let redisDisabled = false
+
+function logCacheWarning(message: string, error?: unknown) {
+  if (process.env.NODE_ENV !== 'development') {
+    return
+  }
+
+  if (error) {
+    console.error(message, error)
+    return
+  }
+
+  console.warn(message)
+}
 
 async function getRedisClient(): Promise<RedisClientType | null> {
+  if (redisDisabled) {
+    return null
+  }
+
   if (redisClient) return redisClient
 
   if (!process.env.REDIS_URL) {
-    console.log('REDIS_URL not set, using in-memory cache')
     return null
   }
 
   try {
     redisClient = createClient({ url: process.env.REDIS_URL })
     await redisClient.connect()
-    console.log('Connected to Redis for caching')
     return redisClient
   } catch (error) {
-    console.error('Failed to connect to Redis:', error)
+    redisDisabled = true
+    logCacheWarning('Failed to connect to Redis for caching. Falling back to in-memory cache.', error)
     return null
   }
 }
@@ -47,7 +64,7 @@ async function getRedisCache<T>(key: string): Promise<T | null> {
     }
     return entry.data
   } catch (error) {
-    console.error('Redis cache get error:', error)
+    logCacheWarning('Redis cache get error', error)
     return null
   }
 }
@@ -59,7 +76,7 @@ async function setRedisCache<T>(key: string, entry: CacheEntry<T>): Promise<void
   try {
     await client.setEx(key, Math.ceil((entry.expiresAt - Date.now()) / 1000), JSON.stringify(entry))
   } catch (error) {
-    console.error('Redis cache set error:', error)
+    logCacheWarning('Redis cache set error', error)
   }
 }
 
@@ -118,10 +135,10 @@ export async function clearServerCacheByPrefix(prefix: string): Promise<void> {
     try {
       const keys = await client.keys(`${prefix}*`)
       if (keys.length > 0) {
-        await client.del(keys)
+        await (client.del as (...values: string[]) => Promise<number>)(...keys)
       }
     } catch (error) {
-      console.error('Redis cache clear error:', error)
+      logCacheWarning('Redis cache clear error', error)
     }
   }
 

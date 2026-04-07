@@ -13,13 +13,12 @@
     "postinstall": "prisma generate",
     "start": "next start",
     "lint": "eslint",
-    "supabase:export-local": "tsx scripts/export-local-data-for-supabase.ts",
+    "prisma:dbpush": "prisma db push",
+    "prisma:migrate:deploy": "node scripts/prisma-migrate-deploy.mjs",
+    "prisma:migrate:baseline": "node scripts/prisma-migrate-baseline.mjs",
     "test:security": "tsx --test tests/security-upgrade.test.ts",
-    "migrate:master-store": "tsx scripts/migrate-master-store-to-db.ts",
     "turso:setup-test-data": "tsx scripts/setup-turso-test-data.ts",
-    "prisma:generate:postgres": "prisma generate --schema prisma/schema.postgres.prisma",
-    "prisma:dbpush:postgres": "prisma db push --schema prisma/schema.postgres.prisma",
-    "prisma:migrate:deploy:postgres": "prisma migrate deploy --schema prisma/schema.postgres.prisma"
+    "bootstrap:super-admin": "tsx scripts/bootstrap-super-admin.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

@@ -25,7 +25,7 @@ export function authHeaders(namespace: 'super_admin' | 'app' = 'app'): HeadersIn
 
 /**
  * Scoped cookie name may include host suffix like:
- * super-admin-csrf-token__mbill-hiijoshi-in
+ * super-admin-csrf-token__example-com
  * This helper finds whichever variant exists.
  */
 export function getCsrfTokenScoped(namespace: 'super_admin' | 'app' = 'app'): string {

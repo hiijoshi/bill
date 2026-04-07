@@ -184,9 +184,18 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
         userId: normalizedUserId,
         deletedAt: null
       },
-      include: {
+      select: {
+        id: true,
+        userId: true,
+        traderId: true,
+        companyId: true,
+        password: true,
+        name: true,
+        role: true,
+        locked: true,
         trader: true,
-        company: true
+        createdAt: true,
+        updatedAt: true
       }
     })
 
@@ -371,7 +380,7 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
     if (isPrismaSchemaMismatchError(error)) {
       return {
         success: false,
-        error: 'Database schema mismatch. Run: npx prisma db push && npx prisma generate'
+        error: 'Database schema mismatch. Run: npm run prisma:migrate:deploy && npx prisma generate'
       }
     }
 

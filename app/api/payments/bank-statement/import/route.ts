@@ -26,6 +26,7 @@ import {
 import { assertFinancialYearOpenForDate, FinancialYearValidationError } from '@/lib/financial-years'
 
 export const runtime = 'nodejs'
+export const maxDuration = 60
 
 type RouteAction = 'preview' | 'import'
 
@@ -454,11 +455,30 @@ export async function POST(request: NextRequest) {
     }
 
     const parsedStatement = await parseBankStatementFile(file, bank.id)
+    const statementEntryDates = parsedStatement.entries
+      .filter((entry): entry is ParsedStatementEntry => !('reason' in entry))
+      .map((entry) => new Date(`${entry.postedAt}T00:00:00.000Z`))
+      .filter((value) => Number.isFinite(value.getTime()))
+      .sort((left, right) => left.getTime() - right.getTime())
+
+    const existingPaymentsDateFilter =
+      statementEntryDates.length > 0
+        ? {
+            gte: new Date(statementEntryDates[0].getTime() - 7 * 86_400_000),
+            lte: new Date(statementEntryDates[statementEntryDates.length - 1].getTime() + 7 * 86_400_000)
+          }
+        : undefined
+
     const [existingPayments, accountingHeads, parties, suppliers] = await Promise.all([
       prisma.payment.findMany({
         where: {
           companyId,
-          deletedAt: null
+          deletedAt: null,
+          ...(existingPaymentsDateFilter
+            ? {
+                payDate: existingPaymentsDateFilter
+              }
+            : {})
         },
         select: {
           id: true,
@@ -621,46 +641,56 @@ export async function POST(request: NextRequest) {
     const importedIds = new Set<string>()
 
     if (rowsToImport.length > 0) {
-      await prisma.$transaction(async (tx) => {
-        for (const entry of rowsToImport) {
-          const payDate = new Date(`${entry.postedAt}T00:00:00.000Z`)
-          const paymentMode = inferStatementPaymentMode(entry)
+      const uniquePostingDates = Array.from(
+        new Set(rowsToImport.map((entry) => normalizeText(entry.postedAt)).filter(Boolean))
+      )
 
-          await assertFinancialYearOpenForDate({
+      await Promise.all(
+        uniquePostingDates.map((postedAt) =>
+          assertFinancialYearOpenForDate({
             auth: authResult.auth,
             companyId,
-            date: payDate,
+            date: new Date(`${postedAt}T00:00:00.000Z`),
             actionLabel: 'Bank statement import'
           })
+        )
+      )
 
-          await tx.payment.create({
-            data: {
-              companyId,
-              billType: entry.direction === 'out' ? CASH_BANK_PAYMENT_TYPE : CASH_BANK_RECEIPT_TYPE,
-              billId: buildCashBankPaymentReference(entry.selectedTarget.targetType, entry.selectedTarget.targetId),
-              billDate: payDate,
-              payDate,
-              amount: entry.amount,
-              mode: paymentMode,
-              cashAmount: null,
-              cashPaymentDate: null,
-              onlinePayAmount: entry.amount,
-              onlinePaymentDate: payDate,
-              ifscCode: bank.ifscCode || null,
-              beneficiaryBankAccount: bank.accountNumber || null,
-              bankNameSnapshot: bank.name,
-              bankBranchSnapshot: bank.branch || null,
-              txnRef: entry.reference,
-              note: buildImportNote(entry, parsedStatement.document.fileName),
-              partyId: entry.selectedTarget.targetType === 'party' ? entry.selectedTarget.targetId : null,
-              status: 'paid'
-            }
-          })
+      const paymentRows = rowsToImport.map((entry) => {
+        const payDate = new Date(`${entry.postedAt}T00:00:00.000Z`)
+        const paymentMode = inferStatementPaymentMode(entry)
 
-          imported += 1
-          importedIds.add(entry.externalId)
+        return {
+          companyId,
+          billType: entry.direction === 'out' ? CASH_BANK_PAYMENT_TYPE : CASH_BANK_RECEIPT_TYPE,
+          billId: buildCashBankPaymentReference(entry.selectedTarget.targetType, entry.selectedTarget.targetId),
+          billDate: payDate,
+          payDate,
+          amount: entry.amount,
+          mode: paymentMode,
+          cashAmount: null,
+          cashPaymentDate: null,
+          onlinePayAmount: entry.amount,
+          onlinePaymentDate: payDate,
+          ifscCode: bank.ifscCode || null,
+          beneficiaryBankAccount: bank.accountNumber || null,
+          bankNameSnapshot: bank.name,
+          bankBranchSnapshot: bank.branch || null,
+          txnRef: entry.reference,
+          note: buildImportNote(entry, parsedStatement.document.fileName),
+          partyId: entry.selectedTarget.targetType === 'party' ? entry.selectedTarget.targetId : null,
+          status: 'paid' as const
         }
       })
+
+      const createResult = await prisma.payment.createMany({
+        data: paymentRows
+      })
+
+      imported = createResult.count
+      for (const entry of rowsToImport) {
+        importedIds.add(entry.externalId)
+      }
 
       await writeAuditLog({
         actor: {

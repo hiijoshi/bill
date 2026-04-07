@@ -18,7 +18,7 @@ const SUBSCRIPTION_MANAGEMENT_SCHEMA_IDENTIFIERS = [
 export const SUBSCRIPTION_SCHEMA_READY_HEADER = 'x-subscription-schema-ready'
 export const SUBSCRIPTION_SCHEMA_WARNING_HEADER = 'x-subscription-schema-warning'
 export const SUBSCRIPTION_SCHEMA_WARNING_MESSAGE =
-  'Subscription management schema is not initialized yet. Run: npx prisma db push && npx prisma generate'
+  'Subscription management schema is not initialized yet. Run: npm run prisma:migrate:deploy && npx prisma generate'
 
 const SUBSCRIPTION_SCHEMA_CACHE_TTL_MS = 30_000
 

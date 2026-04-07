@@ -51,9 +51,6 @@ function normalizePath(p: string) {
 
 function isPublicApi(pathname: string): boolean {
   if (alwaysPublicApiRoutes.has(pathname)) return true
-  if (env.NODE_ENV === 'development') {
-    return pathname.startsWith('/api/debug') || pathname.startsWith('/api/test') || pathname === '/api/super-admin/test'
-  }
   return false
 }
 
