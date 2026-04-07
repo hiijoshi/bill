@@ -1,31 +1,27 @@
-'use client'
+import { redirect } from 'next/navigation'
 
-import { Suspense, useEffect } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
-import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
-
-function StockDashboardRedirect() {
-  const router = useRouter()
-  const searchParams = useSearchParams()
-
-  useEffect(() => {
-    const query = searchParams.toString()
-    router.replace(query ? `/stock/adjustment?${query}` : '/stock/adjustment')
-  }, [router, searchParams])
-
-  return (
-    <AppLoaderShell
-      kind="stock"
-      title="Opening stock dashboard"
-      message="Routing you into the live stock adjustment workspace."
-    />
-  )
+type PageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }
 
-export default function StockDashboardPage() {
-  return (
-    <Suspense fallback={<AppLoaderShell kind="stock" fullscreen />}>
-      <StockDashboardRedirect />
-    </Suspense>
-  )
+function toQueryString(params: Record<string, string | string[] | undefined>) {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === 'string' && value) {
+      search.set(key, value)
+      continue
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (entry) search.append(key, entry)
+      }
+    }
+  }
+  return search.toString()
+}
+
+export default async function StockDashboardPage({ searchParams }: PageProps) {
+  const params = await searchParams
+  const query = toQueryString(params)
+  redirect(query ? `/stock/adjustment?${query}` : '/stock/adjustment')
 }

@@ -11,7 +11,10 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { getFinancialYearDateRangeInput } from '@/lib/client-financial-years'
+import { loadShellCompanies } from '@/lib/client-shell-data'
 import { printHtmlDocument } from '@/lib/report-print'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 type ReportView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'bank-ledger' | 'cash-ledger'
 type OutstandingSort = 'highest' | 'lowest'
@@ -178,6 +181,11 @@ type OperationsReportPayload = {
       activeProvider?: string
       providers?: BankSyncProviderStatus[]
     }
+    openingBalances?: {
+      bankLedger?: number
+      cashLedger?: number
+      bankLedgerByBank?: Record<string, number>
+    }
     dateFrom?: string
     dateTo?: string
     generatedAt?: string
@@ -189,10 +197,18 @@ interface OperationsReportWorkspaceProps {
   initialView?: ReportView
   embedded?: boolean
   onBackToDashboard?: () => void
+  companyOptions?: CompanyRecord[]
+  initialReportData?: OperationsReportPayload | null
+  initialDateFrom?: string
+  initialDateTo?: string
+  initialLastGeneratedAt?: string
+  initialSelectedPartyId?: string
 }
 
 const surfaceCardClass = 'rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]'
 const OPERATIONS_REPORT_CACHE_AGE_MS = 20_000
+const SHELL_COMPANIES_CACHE_KEY = 'shell:companies'
+const SHELL_COMPANIES_CACHE_AGE_MS = 5 * 60_000
 const operationsViewOptions: Array<{ value: ReportView; label: string }> = [
   { value: 'outstanding', label: 'Outstanding' },
   { value: 'ledger', label: 'Party Ledger' },
@@ -234,20 +250,16 @@ function absoluteCurrencyText(value: number): string {
   return currencyText(Math.abs(Number(value || 0)))
 }
 
+function roundAmount(value: number): number {
+  return Number(Number(value || 0).toFixed(2))
+}
+
 function formatFlowSummaryText(value: number, positiveLabel = 'Inflow', negativeLabel = 'Outflow'): string {
   const normalized = Number(value || 0)
   if (Math.abs(normalized) < 0.005) {
     return `Balanced ${currencyText(0)}`
   }
   return `${normalized >= 0 ? positiveLabel : negativeLabel} ${absoluteCurrencyText(normalized)}`
-}
-
-function formatLedgerBalanceSummary(value: number): string {
-  const normalized = Number(value || 0)
-  if (Math.abs(normalized) < 0.005) {
-    return `Balanced ${currencyText(0)}`
-  }
-  return `${normalized >= 0 ? 'Debit' : 'Credit'} ${absoluteCurrencyText(normalized)}`
 }
 
 function csvEscape(value: string | number): string {
@@ -527,32 +539,42 @@ export default function OperationsReportWorkspace({
   initialCompanyId,
   initialView = 'outstanding',
   embedded = false,
-  onBackToDashboard
+  onBackToDashboard,
+  companyOptions,
+  initialReportData = null,
+  initialDateFrom = '',
+  initialDateTo = '',
+  initialLastGeneratedAt = '',
+  initialSelectedPartyId = ''
 }: OperationsReportWorkspaceProps) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const today = useMemo(() => new Date(), [])
-  const firstDay = useMemo(() => new Date(today.getFullYear(), today.getMonth(), 1), [today])
 
-  const [companies, setCompanies] = useState<CompanyRecord[]>([])
+  const [companies, setCompanies] = useState<CompanyRecord[]>(companyOptions || [])
   const [scope] = useState<ReportScope>('company')
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>(initialCompanyId ? [initialCompanyId] : [])
-  const [dateFrom, setDateFrom] = useState(toDateInputValue(firstDay))
-  const [dateTo, setDateTo] = useState(toDateInputValue(today))
-  const [selectedPartyId, setSelectedPartyId] = useState('')
+  const [dateFrom, setDateFrom] = useState(initialDateFrom)
+  const [dateTo, setDateTo] = useState(initialDateTo)
+  const [selectedPartyId, setSelectedPartyId] = useState(initialSelectedPartyId)
   const [activeView, setActiveView] = useState<ReportView>(initialView)
   const [outstandingSort, setOutstandingSort] = useState<OutstandingSort>('highest')
   const [outstandingBucketFilter, setOutstandingBucketFilter] = useState<'all' | OutstandingAgeBucket>('all')
   const [bankFilter, setBankFilter] = useState('all')
   const [bankDirectionFilter, setBankDirectionFilter] = useState<LedgerDirectionFilter>('all')
   const [searchTerm, setSearchTerm] = useState('')
-  const [loadingCompanies, setLoadingCompanies] = useState(true)
+  const [loadingCompanies, setLoadingCompanies] = useState(!(Array.isArray(companyOptions) && companyOptions.length > 0))
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
-  const [lastGeneratedAt, setLastGeneratedAt] = useState('')
-  const [reportData, setReportData] = useState<OperationsReportPayload | null>(null)
+  const [lastGeneratedAt, setLastGeneratedAt] = useState(initialLastGeneratedAt)
+  const [reportData, setReportData] = useState<OperationsReportPayload | null>(initialReportData)
+  const { financialYear } = useClientFinancialYear()
   const companyFilterRef = useRef<HTMLDetailsElement | null>(null)
+  const skipInitialFinancialYearSyncRef = useRef(Boolean(initialDateFrom || initialDateTo))
+  const skipPreparedGenerationRef = useRef(
+    Boolean(initialReportData && (initialCompanyId || initialDateFrom || initialDateTo))
+  )
   const selectedCompanyId = selectedCompanyIds[0] || ''
   const canAggregateCompanies = reportData?.meta?.canAggregateCompanies ?? true
 
@@ -569,17 +591,27 @@ export default function OperationsReportWorkspace({
   const loadCompanies = useCallback(async () => {
     setLoadingCompanies(true)
     try {
-      const response = await fetch('/api/companies', { cache: 'no-store' })
-      if (!response.ok) {
-        throw new Error('Unable to load companies')
+      if (Array.isArray(companyOptions) && companyOptions.length > 0) {
+        setCompanies(companyOptions)
+        setSelectedCompanyIds((previous) => {
+          if (initialCompanyId && companyOptions.some((company) => company.id === initialCompanyId)) {
+            return [initialCompanyId]
+          }
+
+          const validPrevious = previous.filter((companyId) => companyOptions.some((company) => company.id === companyId))
+          if (validPrevious.length > 0) {
+            return validPrevious
+          }
+
+          return companyOptions[0]?.id ? [companyOptions[0].id] : []
+        })
+        return
       }
 
-      const payload = await response.json().catch(() => [])
-      const rows = Array.isArray(payload) ? payload : []
-      const normalized = rows
+      const normalized = (await loadShellCompanies())
         .map((row) => ({
-          id: String(row?.id || ''),
-          name: String(row?.name || '')
+          id: String(row.id || ''),
+          name: String(row.name || '')
         }))
         .filter((row) => row.id && row.name)
 
@@ -598,11 +630,11 @@ export default function OperationsReportWorkspace({
       })
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to load companies')
-      setCompanies([])
+      setCompanies(getClientCache<CompanyRecord[]>(SHELL_COMPANIES_CACHE_KEY, SHELL_COMPANIES_CACHE_AGE_MS) || [])
     } finally {
       setLoadingCompanies(false)
     }
-  }, [initialCompanyId])
+  }, [companyOptions, initialCompanyId])
 
   useEffect(() => {
     void loadCompanies()
@@ -613,6 +645,16 @@ export default function OperationsReportWorkspace({
       setSelectedCompanyIds([companies[0].id])
     }
   }, [companies, scope, selectedCompanyIds.length])
+
+  useEffect(() => {
+    if (skipInitialFinancialYearSyncRef.current) {
+      skipInitialFinancialYearSyncRef.current = false
+      return
+    }
+    const range = getFinancialYearDateRangeInput(financialYear)
+    setDateFrom(range.dateFrom)
+    setDateTo(range.dateTo)
+  }, [financialYear?.id])
 
   useEffect(() => {
     if (canAggregateCompanies || selectedCompanyIds.length <= 1) return
@@ -721,6 +763,10 @@ export default function OperationsReportWorkspace({
   useEffect(() => {
     if (loadingCompanies) return
     if (scope === 'company' && selectedCompanyIds.length === 0) return
+    if (skipPreparedGenerationRef.current) {
+      skipPreparedGenerationRef.current = false
+      return
+    }
     void generateReport()
   }, [generateReport, loadingCompanies, scope, selectedCompanyIds.length, dateFrom, dateTo])
 
@@ -866,9 +912,43 @@ export default function OperationsReportWorkspace({
     return parties.find((party) => party.id === targetId) || null
   }, [parties, reportData?.partyLedger?.selectedPartyId, selectedPartyId])
 
+  const buildSearchText = (row: BankLedgerRow): string => {
+    return [
+      row.date,
+      row.refNo,
+      row.billNo,
+      row.partyName,
+      row.bankName,
+      row.mode,
+      row.txnRef,
+      row.ifscCode,
+      row.accountNo,
+      row.companyName,
+      row.direction,
+      row.note
+    ]
+      .filter(Boolean)
+      .join(' | ')
+      .toLowerCase()
+  }
+
+  const bankLedgerRowsWithSearch = useMemo(() => {
+    return (reportData?.bankLedger || []).map((row) => ({
+      ...row,
+      searchText: buildSearchText(row)
+    }))
+  }, [reportData?.bankLedger])
+
+  const cashLedgerRowsWithSearch = useMemo(() => {
+    return (reportData?.cashLedger || []).map((row) => ({
+      ...row,
+      searchText: buildSearchText(row)
+    }))
+  }, [reportData?.cashLedger])
+
   const filteredBankLedger = useMemo(() => {
     const query = searchTerm.trim().toLowerCase()
-    return (reportData?.bankLedger || []).filter((row) => {
+    return bankLedgerRowsWithSearch.filter((row) => {
       const rowBankFilters =
         Array.isArray(row.bankFilterValues) && row.bankFilterValues.length > 0
           ? row.bankFilterValues
@@ -876,41 +956,18 @@ export default function OperationsReportWorkspace({
       if (bankFilter !== 'all' && !rowBankFilters.includes(bankFilter)) return false
       if (bankDirectionFilter !== 'all' && row.direction.toLowerCase() !== bankDirectionFilter) return false
       if (!query) return true
-      return (
-        row.date.toLowerCase().includes(query) ||
-        row.refNo.toLowerCase().includes(query) ||
-        row.billNo.toLowerCase().includes(query) ||
-        row.partyName.toLowerCase().includes(query) ||
-        row.bankName.toLowerCase().includes(query) ||
-        row.mode.toLowerCase().includes(query) ||
-        row.txnRef.toLowerCase().includes(query) ||
-        row.ifscCode.toLowerCase().includes(query) ||
-        row.accountNo.toLowerCase().includes(query) ||
-        row.companyName.toLowerCase().includes(query) ||
-        row.direction.toLowerCase().includes(query)
-      )
+      return row.searchText.includes(query)
     })
-  }, [bankDirectionFilter, bankFilter, reportData?.bankLedger, searchTerm])
+  }, [bankDirectionFilter, bankFilter, bankLedgerRowsWithSearch, searchTerm])
 
   const filteredCashLedger = useMemo(() => {
     const query = searchTerm.trim().toLowerCase()
-    return (reportData?.cashLedger || []).filter((row) => {
+    return cashLedgerRowsWithSearch.filter((row) => {
       if (bankDirectionFilter !== 'all' && row.direction.toLowerCase() !== bankDirectionFilter) return false
       if (!query) return true
-      return (
-        row.date.toLowerCase().includes(query) ||
-        row.refNo.toLowerCase().includes(query) ||
-        row.billNo.toLowerCase().includes(query) ||
-        row.partyName.toLowerCase().includes(query) ||
-        row.bankName.toLowerCase().includes(query) ||
-        row.mode.toLowerCase().includes(query) ||
-        row.txnRef.toLowerCase().includes(query) ||
-        row.companyName.toLowerCase().includes(query) ||
-        row.direction.toLowerCase().includes(query) ||
-        row.note.toLowerCase().includes(query)
-      )
+      return row.searchText.includes(query)
     })
-  }, [bankDirectionFilter, reportData?.cashLedger, searchTerm])
+  }, [bankDirectionFilter, cashLedgerRowsWithSearch, searchTerm])
 
   const partyLedgerStatementRows = useMemo(
     () =>
@@ -926,18 +983,53 @@ export default function OperationsReportWorkspace({
     [filteredLedgerRows]
   )
 
+  const bankLedgerOpeningBalance = useMemo(() => {
+    if (bankFilter !== 'all') {
+      return roundAmount(reportData?.meta?.openingBalances?.bankLedgerByBank?.[bankFilter] || 0)
+    }
+    return roundAmount(reportData?.meta?.openingBalances?.bankLedger || 0)
+  }, [bankFilter, reportData?.meta?.openingBalances?.bankLedger, reportData?.meta?.openingBalances?.bankLedgerByBank])
+  const bankLedgerClosingBalance = useMemo(
+    () => roundAmount(bankLedgerOpeningBalance + filteredBankLedger.reduce((sum, row) => sum + row.amountIn - row.amountOut, 0)),
+    [bankLedgerOpeningBalance, filteredBankLedger]
+  )
+  const bankLedgerTotalDebit = useMemo(
+    () => roundAmount(filteredBankLedger.reduce((sum, row) => sum + row.amountOut, 0)),
+    [filteredBankLedger]
+  )
+  const bankLedgerTotalCredit = useMemo(
+    () => roundAmount(filteredBankLedger.reduce((sum, row) => sum + row.amountIn, 0)),
+    [filteredBankLedger]
+  )
+  const cashLedgerOpeningBalance = useMemo(
+    () => roundAmount(reportData?.meta?.openingBalances?.cashLedger || 0),
+    [reportData?.meta?.openingBalances?.cashLedger]
+  )
+  const cashLedgerClosingBalance = useMemo(
+    () => roundAmount(cashLedgerOpeningBalance + filteredCashLedger.reduce((sum, row) => sum + row.amountIn - row.amountOut, 0)),
+    [cashLedgerOpeningBalance, filteredCashLedger]
+  )
+  const cashLedgerTotalDebit = useMemo(
+    () => roundAmount(filteredCashLedger.reduce((sum, row) => sum + row.amountOut, 0)),
+    [filteredCashLedger]
+  )
+  const cashLedgerTotalCredit = useMemo(
+    () => roundAmount(filteredCashLedger.reduce((sum, row) => sum + row.amountIn, 0)),
+    [filteredCashLedger]
+  )
+
   const bankLedgerStatementRows = useMemo(() => {
     const sortedRows = [...filteredBankLedger].sort(
       (a, b) =>
-        new Date(a.date).getTime() - new Date(b.date).getTime() ||
+        a.date.localeCompare(b.date) ||
         a.refNo.localeCompare(b.refNo) ||
         a.id.localeCompare(b.id)
     )
 
-    let runningBalance = 0
+    let runningBalance = bankLedgerOpeningBalance
 
     return sortedRows.map((row) => {
-      runningBalance += Number(row.amountIn || 0) - Number(row.amountOut || 0)
+      runningBalance = roundAmount(runningBalance + Number(row.amountIn || 0) - Number(row.amountOut || 0))
       return {
         type: row.direction === 'IN' ? 'Receipt' : row.direction === 'OUT' ? 'Payment' : 'Transfer',
         date: formatDateLabel(row.date),
@@ -956,20 +1048,20 @@ export default function OperationsReportWorkspace({
         balance: formatLedgerBalance(runningBalance)
       }
     })
-  }, [filteredBankLedger, showCompanyColumn])
+  }, [bankLedgerOpeningBalance, filteredBankLedger, showCompanyColumn])
 
   const cashLedgerStatementRows = useMemo(() => {
     const sortedRows = [...filteredCashLedger].sort(
       (a, b) =>
-        new Date(a.date).getTime() - new Date(b.date).getTime() ||
+        a.date.localeCompare(b.date) ||
         a.refNo.localeCompare(b.refNo) ||
         a.id.localeCompare(b.id)
     )
 
-    let runningBalance = 0
+    let runningBalance = cashLedgerOpeningBalance
 
     return sortedRows.map((row) => {
-      runningBalance += Number(row.amountIn || 0) - Number(row.amountOut || 0)
+      runningBalance = roundAmount(runningBalance + Number(row.amountIn || 0) - Number(row.amountOut || 0))
       return {
         type: row.direction === 'IN' ? 'Receipt' : row.direction === 'OUT' ? 'Payment' : 'Transfer',
         date: formatDateLabel(row.date),
@@ -988,46 +1080,25 @@ export default function OperationsReportWorkspace({
         balance: formatLedgerBalance(runningBalance)
       }
     })
-  }, [filteredCashLedger, showCompanyColumn])
+  }, [cashLedgerOpeningBalance, filteredCashLedger, showCompanyColumn])
 
-  const bankLedgerOpeningBalance = 0
-  const bankLedgerClosingBalance = useMemo(
-    () => filteredBankLedger.reduce((sum, row) => sum + row.amountIn - row.amountOut, 0),
-    [filteredBankLedger]
-  )
-  const bankLedgerTotalDebit = useMemo(
-    () => filteredBankLedger.reduce((sum, row) => sum + row.amountOut, 0),
-    [filteredBankLedger]
-  )
-  const bankLedgerTotalCredit = useMemo(
-    () => filteredBankLedger.reduce((sum, row) => sum + row.amountIn, 0),
-    [filteredBankLedger]
-  )
-  const cashLedgerOpeningBalance = 0
-  const cashLedgerClosingBalance = useMemo(
-    () => filteredCashLedger.reduce((sum, row) => sum + row.amountIn - row.amountOut, 0),
-    [filteredCashLedger]
-  )
-  const cashLedgerTotalDebit = useMemo(
-    () => filteredCashLedger.reduce((sum, row) => sum + row.amountOut, 0),
-    [filteredCashLedger]
-  )
-  const cashLedgerTotalCredit = useMemo(
-    () => filteredCashLedger.reduce((sum, row) => sum + row.amountIn, 0),
-    [filteredCashLedger]
-  )
   const selectedBankLabel = bankFilter === 'all' ? 'All Banks' : bankFilter
+  const companyNameById = useMemo(
+    () => new Map(companies.map((company) => [company.id, company.name])),
+    [companies]
+  )
+
   const selectedCompanySummary = useMemo(() => {
     const targetIds = reportData?.meta?.companyIds?.length ? reportData.meta.companyIds : selectedCompanyIds
     const targetNames = targetIds
-      .map((companyId) => companies.find((company) => company.id === companyId)?.name || companyId)
+      .map((companyId) => companyNameById.get(companyId) || companyId)
       .filter(Boolean)
 
     if (targetNames.length === 0) return 'No company selected'
     if (targetNames.length === 1) return targetNames[0]
     if (targetNames.length === 2) return targetNames.join(', ')
     return `${targetNames[0]}, ${targetNames[1]} +${targetNames.length - 2} more`
-  }, [companies, reportData?.meta?.companyIds, selectedCompanyIds])
+  }, [companyNameById, reportData?.meta?.companyIds, selectedCompanyIds])
 
   const closeCompanyFilter = useCallback(() => {
     if (companyFilterRef.current) {

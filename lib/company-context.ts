@@ -1,4 +1,4 @@
-import { getClientCache, setClientCache } from './client-fetch-cache'
+import { getClientCache, getOrLoadClientCache, setClientCache } from './client-fetch-cache'
 import { getCompanyCookieNameCandidates } from './session-cookies'
 
 export const APP_COMPANY_CHANGED_EVENT = 'app-company-changed'
@@ -90,31 +90,46 @@ export async function resolveCompanyId(search: string): Promise<string> {
       8000,
       Math.min(60000, Number(process.env.NEXT_PUBLIC_API_TIMEOUT_MS || defaultApiTimeoutMs))
     )
-    const activeCompanyResponse = await fetchWithTimeout('/api/auth/company', { cache: 'no-store' }, timeoutMs)
-    if (activeCompanyResponse.ok) {
-      const activeData = await activeCompanyResponse.json().catch(() => null)
-      const activeCompanyId = activeData?.company?.id
-      if (typeof activeCompanyId === 'string' && activeCompanyId.trim()) {
-        const normalizedActiveCompanyId = activeCompanyId.trim()
-        setClientCache(ACTIVE_COMPANY_CACHE_KEY, normalizedActiveCompanyId, { persist: true })
-        return normalizedActiveCompanyId
+    return await getOrLoadClientCache<string>(
+      ACTIVE_COMPANY_CACHE_KEY,
+      ACTIVE_COMPANY_CACHE_AGE_MS,
+      async () => {
+        const activeCompanyResponse = await fetchWithTimeout('/api/auth/company', { cache: 'no-store' }, timeoutMs)
+        if (activeCompanyResponse.ok) {
+          const activeData = await activeCompanyResponse.json().catch(() => null)
+          const activeCompanyId = activeData?.company?.id
+          if (typeof activeCompanyId === 'string' && activeCompanyId.trim()) {
+            return activeCompanyId.trim()
+          }
+        }
+
+        const data = await getOrLoadClientCache<AuthMeCachePayload | null>(
+          AUTH_ME_CACHE_KEY,
+          AUTH_ME_CACHE_AGE_MS,
+          async () => {
+            const response = await fetchWithTimeout('/api/auth/me', { cache: 'no-store' }, timeoutMs)
+            if (!response.ok) {
+              throw new Error('Failed to resolve company from auth session')
+            }
+            return (await response.json().catch(() => null)) as AuthMeCachePayload | null
+          },
+          {
+            persist: true,
+            shouldCache: (payload) => Boolean(payload && (payload.user || payload.company))
+          }
+        )
+
+        const resolvedCompanyId = String(data?.user?.companyId || data?.company?.id || '').trim()
+        if (!resolvedCompanyId) {
+          throw new Error('No active company found')
+        }
+        return resolvedCompanyId
+      },
+      {
+        persist: true,
+        shouldCache: (value) => Boolean(String(value || '').trim())
       }
-    }
-
-    const response = await fetchWithTimeout('/api/auth/me', { cache: 'no-store' }, timeoutMs)
-    if (!response.ok) return ''
-
-    const data = await response.json()
-    setClientCache(AUTH_ME_CACHE_KEY, data, { persist: true })
-    const resolvedCompanyId = (
-      data?.user?.companyId ||
-      data?.company?.id ||
-      ''
     )
-    if (typeof resolvedCompanyId === 'string' && resolvedCompanyId.trim()) {
-      setClientCache(ACTIVE_COMPANY_CACHE_KEY, resolvedCompanyId.trim(), { persist: true })
-    }
-    return resolvedCompanyId
   } catch {
     return ''
   }

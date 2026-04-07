@@ -14,7 +14,9 @@ import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-da
 import { loadClientCachedValue } from '@/lib/client-cached-value'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { DEFAULT_PAYMENT_MODES, isCashPaymentMode, type PaymentModeOption } from '@/lib/payment-mode-utils'
+import { getDefaultTransactionDateInput } from '@/lib/client-financial-years'
 import { getPartyOpeningBalanceReference } from '@/lib/party-opening-balance'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 import { openWhatsappChat } from '@/lib/whatsapp'
 
 interface SalesBill {
@@ -86,6 +88,7 @@ function SalesPaymentEntryPageContent() {
   const [salesBills, setSalesBills] = useState<SalesBill[]>([])
   const [banks, setBanks] = useState<Bank[]>([])
   const [paymentModes, setPaymentModes] = useState<PaymentMode[]>([])
+  const { financialYear } = useClientFinancialYear()
   const [selectedBill, setSelectedBill] = useState('')
   const [selectedPartyName, setSelectedPartyName] = useState('')
   const [partySearch, setPartySearch] = useState('')
@@ -94,20 +97,27 @@ function SalesPaymentEntryPageContent() {
   const [multiBillFilter, setMultiBillFilter] = useState('')
 
   // Receipt form state
-  const [receiptDate, setReceiptDate] = useState(new Date().toISOString().split('T')[0])
+  const [receiptDate, setReceiptDate] = useState('')
   const [amount, setAmount] = useState('')
   const [selectedPaymentMode, setSelectedPaymentMode] = useState('')
   const [selectedBank, setSelectedBank] = useState('')
   const [cashAmount, setCashAmount] = useState('')
-  const [cashPaymentDate, setCashPaymentDate] = useState(new Date().toISOString().split('T')[0])
+  const [cashPaymentDate, setCashPaymentDate] = useState('')
   const [onlinePayAmount, setOnlinePayAmount] = useState('')
-  const [onlinePaymentDate, setOnlinePaymentDate] = useState(new Date().toISOString().split('T')[0])
+  const [onlinePaymentDate, setOnlinePaymentDate] = useState('')
   const [bankNameSnapshot, setBankNameSnapshot] = useState('')
   const [bankBranchSnapshot, setBankBranchSnapshot] = useState('')
   const [asFlag, setAsFlag] = useState('A')
   const [txnRef, setTxnRef] = useState('')
   const [note, setNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  useEffect(() => {
+    const defaultDate = getDefaultTransactionDateInput(financialYear)
+    setReceiptDate(defaultDate)
+    setCashPaymentDate(defaultDate)
+    setOnlinePaymentDate(defaultDate)
+  }, [financialYear?.id])
+
   const toNonNegative = (value: string) => {
     if (value === '') return ''
     const parsed = Number(value)
@@ -252,7 +262,7 @@ function SalesPaymentEntryPageContent() {
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
       if (!resolvedCompanyId) {
         setLoading(false)
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
       setCompanyId(resolvedCompanyId)
@@ -423,7 +433,7 @@ function SalesPaymentEntryPageContent() {
         `payment-sales-bills:${targetCompanyId}`,
         async () => {
           const [salesResponse, partiesResponse] = await Promise.all([
-            fetch(`/api/sales-bills?companyId=${targetCompanyId}`),
+            fetch(`/api/sales-bills?companyId=${targetCompanyId}&view=payment`),
             fetch(`/api/parties?companyId=${targetCompanyId}`)
           ])
 

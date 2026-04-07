@@ -18,6 +18,8 @@ import {
   clearDefaultPurchaseProductId,
   getDefaultPurchaseProductId
 } from '@/lib/default-product'
+import { getDefaultTransactionDateInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 interface Product {
   id: string
@@ -45,9 +47,10 @@ export default function SpecialPurchaseEntryPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [userUnits, setUserUnits] = useState<UserUnit[]>([])
   const [loading, setLoading] = useState(true)
+  const { financialYear } = useClientFinancialYear()
 
   // Form state
-  const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0])
+  const [billDate, setBillDate] = useState('')
   const [supplierInvoiceNo, setSupplierInvoiceNo] = useState('')
   const [selectedSupplier, setSelectedSupplier] = useState('')
   const [supplierName, setSupplierName] = useState('')
@@ -66,6 +69,10 @@ export default function SpecialPurchaseEntryPage() {
   const [balance, setBalance] = useState('')
   const [paidAmountError, setPaidAmountError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  useEffect(() => {
+    setBillDate(getDefaultTransactionDateInput(financialYear))
+  }, [financialYear?.id])
+
   const toNonNegative = (value: string) => {
     if (value === '') return ''
     const parsed = Number(value)
@@ -112,7 +119,7 @@ export default function SpecialPurchaseEntryPage() {
       if (!companyId) {
         alert('Company not selected')
         setLoading(false)
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
       stripCompanyParamsFromUrl()
@@ -243,7 +250,7 @@ export default function SpecialPurchaseEntryPage() {
       const companyId = await resolveCompanyId(window.location.search)
       if (!companyId) {
         alert('Company not selected')
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
       stripCompanyParamsFromUrl()
@@ -323,7 +330,7 @@ export default function SpecialPurchaseEntryPage() {
       const companyId = await resolveCompanyId(window.location.search)
       if (!companyId) {
         alert('Company not selected')
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
       stripCompanyParamsFromUrl()

@@ -4,6 +4,11 @@ import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess, parseBooleanParam, parseJsonWithSchema, requireAuthContext } from '@/lib/api-security'
 import { cleanString, normalizeTenDigitPhone, parseNonNegativeNumber } from '@/lib/field-validation'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
+import {
+  assertFinancialYearOpenForDate,
+  FinancialYearValidationError,
+  getFinancialYearDateFilter
+} from '@/lib/financial-years'
 import { buildPurchasePaymentSyncNote } from '@/lib/purchase-payment-sync'
 
 const writeSchema = z.object({
@@ -143,6 +148,15 @@ export async function POST(request: NextRequest) {
     const normalizedStatus = deriveStatus(paidAmount, grossAmount)
 
     const billDateValue = new Date(body.billDate)
+    if (!Number.isFinite(billDateValue.getTime())) {
+      return NextResponse.json({ error: 'Invalid bill date' }, { status: 400 })
+    }
+
+    await assertFinancialYearOpenForDate({
+      companyId: body.companyId,
+      date: billDateValue,
+      actionLabel: 'Special purchase bill'
+    })
 
     const specialPurchaseBill = await prisma.$transaction(async (tx) => {
       let supplier = await tx.supplier.findFirst({
@@ -252,6 +266,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, specialPurchaseBill })
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     console.error('Error creating special purchase bill:', error)
     const errorMessage = error instanceof Error ? error.message : 'Internal server error'
     return NextResponse.json({ error: errorMessage }, { status: 500 })
@@ -263,8 +280,6 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const companyId = searchParams.get('companyId')
     const billId = searchParams.get('billId')
-    const dateFrom = searchParams.get('dateFrom')
-    const dateTo = searchParams.get('dateTo')
     const includeCancelled = parseBooleanParam(searchParams.get('includeCancelled'))
 
     if (!companyId) {
@@ -310,13 +325,18 @@ export async function GET(request: NextRequest) {
       ...(includeCancelled ? {} : { status: { not: 'cancelled' } })
     }
 
-    if (dateFrom || dateTo) {
+    const financialYearFilter = await getFinancialYearDateFilter({
+      request,
+      companyId
+    })
+
+    if (financialYearFilter.dateFrom || financialYearFilter.dateTo) {
       whereClause.billDate = {}
-      if (dateFrom) {
-        whereClause.billDate.gte = new Date(dateFrom)
+      if (financialYearFilter.dateFrom) {
+        whereClause.billDate.gte = financialYearFilter.dateFrom
       }
-      if (dateTo) {
-        whereClause.billDate.lte = new Date(dateTo)
+      if (financialYearFilter.dateTo) {
+        whereClause.billDate.lte = financialYearFilter.dateTo
       }
     }
 
@@ -335,6 +355,9 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(specialPurchaseBills.map((bill) => sanitizeSpecialPurchaseBill(bill)))
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     console.error('Error fetching special purchase bills:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
@@ -395,6 +418,15 @@ export async function PUT(request: NextRequest) {
     const normalizedStatus = deriveStatus(paidAmount, grossAmount)
 
     const billDateValue = new Date(body.billDate)
+    if (!Number.isFinite(billDateValue.getTime())) {
+      return NextResponse.json({ error: 'Invalid bill date' }, { status: 400 })
+    }
+
+    await assertFinancialYearOpenForDate({
+      companyId: body.companyId,
+      date: billDateValue,
+      actionLabel: 'Special purchase bill update'
+    })
 
     const specialPurchaseBill = await prisma.$transaction(async (tx) => {
       const existingBill = await tx.specialPurchaseBill.findFirst({
@@ -592,6 +624,9 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json({ success: true, specialPurchaseBill })
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     console.error('Error updating special purchase bill:', error)
     const errorMessage = error instanceof Error ? error.message : 'Internal server error'
     const status =

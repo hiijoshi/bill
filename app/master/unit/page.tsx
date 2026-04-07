@@ -12,6 +12,7 @@ import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Ruler, Upload } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
 import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
@@ -65,17 +66,25 @@ export default function UnitMasterPage() {
     })
   }, [])
 
-  const fetchUnits = useCallback(async () => {
+  const fetchUnits = useCallback(async (targetCompanyId: string) => {
+    if (!targetCompanyId) {
+      setUnits([])
+      setLoading(false)
+      return
+    }
+
     const cached = getClientCache<{ companyId?: string; units?: Unit[] }>(UNIT_MASTER_CACHE_KEY, UNIT_MASTER_CACHE_AGE_MS)
-    if (cached && Array.isArray(cached.units) && cached.units.length > 0) {
-      applyUnits(cached.units, typeof cached.companyId === 'string' ? cached.companyId : '')
+    const cachedCompanyId = typeof cached?.companyId === 'string' ? cached.companyId : ''
+
+    if (cachedCompanyId === targetCompanyId && Array.isArray(cached?.units) && cached.units.length > 0) {
+      applyUnits(cached.units, cachedCompanyId)
       setLoading(false)
     }
 
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const response = await fetch('/api/units', { cache: 'no-store' })
+          const response = await fetch(`/api/units?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' })
           const payload = (await response.json().catch(() => ({}))) as UnitResponsePayload | Unit[]
           const rows = (Array.isArray((payload as UnitResponsePayload)?.units)
             ? (payload as UnitResponsePayload).units
@@ -84,8 +93,8 @@ export default function UnitMasterPage() {
               : []) as Unit[]
           const resolvedCompanyId =
             typeof (payload as UnitResponsePayload)?.companyId === 'string'
-              ? (payload as UnitResponsePayload).companyId || ''
-              : ''
+              ? (payload as UnitResponsePayload).companyId || targetCompanyId
+              : targetCompanyId
 
           if (response.ok) {
             applyUnits(rows, resolvedCompanyId)
@@ -105,11 +114,11 @@ export default function UnitMasterPage() {
           }
 
           setErrorMessage(
-            cached?.units?.length
+            cachedCompanyId === targetCompanyId && cached?.units?.length
               ? 'Unit list is taking longer than expected. Showing the last loaded data.'
               : 'Unable to load units right now. Please refresh and try again.'
           )
-          if (!cached?.units?.length) {
+          if (!(cachedCompanyId === targetCompanyId && cached?.units?.length)) {
             setUnits([])
           }
           return
@@ -120,11 +129,11 @@ export default function UnitMasterPage() {
           }
           if (isAbortError(error)) {
             setErrorMessage(
-              cached?.units?.length
+              cachedCompanyId === targetCompanyId && cached?.units?.length
                 ? 'Unit list is taking longer than expected. Showing the last loaded data.'
                 : 'Unit list took too long to load. Please refresh once.'
             )
-            if (!cached?.units?.length) {
+            if (!(cachedCompanyId === targetCompanyId && cached?.units?.length)) {
               setUnits([])
             }
             return
@@ -136,7 +145,7 @@ export default function UnitMasterPage() {
       if (isAbortError(error)) return
       console.error('Error fetching units:', error)
       setErrorMessage('Unable to load units right now. Please refresh and try again.')
-      if (!cached?.units?.length) {
+      if (!(cachedCompanyId === targetCompanyId && cached?.units?.length)) {
         setUnits([])
       }
     } finally {
@@ -145,7 +154,38 @@ export default function UnitMasterPage() {
   }, [applyUnits])
 
   useEffect(() => {
-    void fetchUnits()
+    let cancelled = false
+
+    const loadUnitScope = async () => {
+      setLoading(true)
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (cancelled) return
+
+      if (!resolvedCompanyId) {
+        setCompanyId('')
+        setUnits([])
+        setErrorMessage('Company not selected. Please select company once.')
+        setLoading(false)
+        return
+      }
+
+      setCompanyId(resolvedCompanyId)
+      stripCompanyParamsFromUrl()
+      await fetchUnits(resolvedCompanyId)
+    }
+
+    void loadUnitScope()
+
+    const onCompanyChanged = () => {
+      void loadUnitScope()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
   }, [fetchUnits])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -179,7 +219,7 @@ export default function UnitMasterPage() {
       if (response.ok) {
         alert(editingUnit ? 'Unit updated successfully!' : 'Unit created successfully!')
         resetForm()
-        fetchUnits()
+        void fetchUnits(companyId)
       } else {
         const errorText = await response.text()
         console.error('Error Response:', errorText)
@@ -227,7 +267,7 @@ export default function UnitMasterPage() {
 
       if (response.ok) {
         alert('Unit deleted successfully!')
-        fetchUnits()
+        void fetchUnits(companyId)
       } else {
         const error = await response.json()
         alert(error.error || 'Delete failed')
@@ -243,7 +283,7 @@ export default function UnitMasterPage() {
     const response = await fetch(`/api/units?all=true`, { method: 'DELETE' })
     const result = await response.json().catch(() => ({}))
     alert(result.message || result.error || 'Operation completed')
-    if (response.ok) fetchUnits()
+    if (response.ok) void fetchUnits(companyId)
   }
 
   const handleExportCsv = () => {
@@ -268,7 +308,7 @@ export default function UnitMasterPage() {
     }
 
     alert(formatMasterImportSummary('Unit', result))
-    await fetchUnits()
+    await fetchUnits(companyId)
   }
 
   const resetForm = () => {

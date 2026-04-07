@@ -11,6 +11,7 @@ import {
 } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { isCashPaymentMode } from '@/lib/payment-mode-utils'
+import { assertFinancialYearOpenForDate, FinancialYearValidationError } from '@/lib/financial-years'
 
 const allocateSchema = z
   .object({
@@ -146,6 +147,14 @@ export async function POST(request: NextRequest) {
     if (!Number.isFinite(payDate.getTime())) {
       return NextResponse.json({ error: 'Invalid pay date' }, { status: 400 })
     }
+
+    await assertFinancialYearOpenForDate({
+      auth: authResult.auth,
+      companyId: data.companyId,
+      date: payDate,
+      actionLabel: 'Payment allocation'
+    })
+
     const normalizedMode = String(data.mode || '').trim().toLowerCase()
     const paymentModes = await prisma.paymentMode.findMany({
       where: {
@@ -352,6 +361,9 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     )
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     const message = error instanceof Error ? error.message : 'Internal server error'
     const normalizedMessage = message.toLowerCase()
 

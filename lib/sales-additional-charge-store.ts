@@ -1,15 +1,13 @@
 import { randomUUID } from 'crypto'
 
-import type { PrismaClient } from '@prisma/client'
-
-import { ensureSalesAdditionalChargeSchema } from '@/lib/sales-additional-charge-schema'
+import type { Prisma, PrismaClient } from '@prisma/client'
 import {
   normalizeSalesAdditionalCharges,
   type SalesAdditionalChargeInput,
   type SalesAdditionalChargeRecord,
 } from '@/lib/sales-additional-charges'
 
-type SalesAdditionalChargeStoreClient = Pick<PrismaClient, '$queryRawUnsafe' | '$executeRawUnsafe'>
+type SalesAdditionalChargeStoreClient = PrismaClient | Prisma.TransactionClient
 
 type RawSalesAdditionalChargeRow = {
   id?: unknown
@@ -42,31 +40,29 @@ export async function listSalesAdditionalChargesByBillIds(
   prisma: SalesAdditionalChargeStoreClient,
   salesBillIds: string[]
 ) {
-  await ensureSalesAdditionalChargeSchema(prisma)
-
   const uniqueIds = Array.from(new Set(salesBillIds.map((value) => String(value || '').trim()).filter(Boolean)))
   if (uniqueIds.length === 0) {
     return new Map<string, SalesAdditionalChargeRecord[]>()
   }
 
-  const placeholders = uniqueIds.map(() => '?').join(', ')
-  const rows = await prisma.$queryRawUnsafe<RawSalesAdditionalChargeRow[]>(
-    `
-      SELECT
-        "id",
-        "companyId",
-        "salesBillId",
-        "transportBillId",
-        "chargeType",
-        "amount",
-        "remark",
-        "sortOrder"
-      FROM "SalesAdditionalCharge"
-      WHERE "salesBillId" IN (${placeholders})
-      ORDER BY "salesBillId" ASC, "sortOrder" ASC, "createdAt" ASC
-    `,
-    ...uniqueIds
-  )
+  const rows = await prisma.salesAdditionalCharge.findMany({
+    where: {
+      salesBillId: {
+        in: uniqueIds
+      }
+    },
+    select: {
+      id: true,
+      companyId: true,
+      salesBillId: true,
+      transportBillId: true,
+      chargeType: true,
+      amount: true,
+      remark: true,
+      sortOrder: true
+    },
+    orderBy: [{ salesBillId: 'asc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }]
+  })
 
   const grouped = new Map<string, SalesAdditionalChargeRecord[]>()
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -89,41 +85,29 @@ export async function replaceSalesAdditionalChargesForBill(
     charges?: SalesAdditionalChargeInput[] | null
   }
 ) {
-  await ensureSalesAdditionalChargeSchema(prisma)
-
   const normalizedCharges = normalizeSalesAdditionalCharges(args.charges)
-  await prisma.$executeRawUnsafe('DELETE FROM "SalesAdditionalCharge" WHERE "salesBillId" = ?', args.salesBillId)
+  await prisma.salesAdditionalCharge.deleteMany({
+    where: {
+      salesBillId: args.salesBillId
+    }
+  })
 
   if (normalizedCharges.length === 0) {
     return []
   }
 
-  for (const charge of normalizedCharges) {
-    await prisma.$executeRawUnsafe(
-      `
-        INSERT INTO "SalesAdditionalCharge" (
-          "id",
-          "companyId",
-          "salesBillId",
-          "transportBillId",
-          "chargeType",
-          "amount",
-          "remark",
-          "sortOrder",
-          "createdAt",
-          "updatedAt"
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `,
-      randomUUID(),
-      args.companyId,
-      args.salesBillId,
-      args.transportBillId || null,
-      charge.chargeType,
-      charge.amount,
-      charge.remark || null,
-      charge.sortOrder
-    )
-  }
+  await prisma.salesAdditionalCharge.createMany({
+    data: normalizedCharges.map((charge) => ({
+      id: randomUUID(),
+      companyId: args.companyId,
+      salesBillId: args.salesBillId,
+      transportBillId: args.transportBillId || null,
+      chargeType: charge.chargeType,
+      amount: charge.amount,
+      remark: charge.remark || null,
+      sortOrder: charge.sortOrder
+    }))
+  })
 
   return normalizedCharges
 }

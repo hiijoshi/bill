@@ -1,5 +1,8 @@
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { getTraderSubscriptionEntitlement } from '@/lib/subscription-core'
+import { ensureSubscriptionManagementSchemaReady } from '@/lib/subscription-schema'
+import { getTraderDataLifecycleSummary } from '@/lib/trader-retention'
 
 type DbClient = typeof prisma | Prisma.TransactionClient
 
@@ -11,6 +14,12 @@ export type TraderCapacitySnapshot = {
   maxUsers: number | null
   currentCompanies: number
   currentUsers: number
+  limitSource: 'subscription' | 'legacy' | 'hybrid' | 'none'
+  subscriptionState: 'none' | 'pending' | 'trial' | 'active' | 'expired' | 'cancelled' | 'suspended'
+  subscriptionMessage: string | null
+  subscriptionConfigured: boolean
+  canManageCompanies: boolean
+  canManageUsers: boolean
 }
 
 export function normalizeTraderLimitInput(value: unknown): number | undefined {
@@ -34,6 +43,7 @@ export async function getTraderCapacitySnapshot(
       id: true,
       name: true,
       locked: true,
+      deletedAt: true,
       maxCompanies: true,
       maxUsers: true
     }
@@ -57,11 +67,52 @@ export async function getTraderCapacitySnapshot(
     })
   ])
 
+  const schemaReady = await ensureSubscriptionManagementSchemaReady(db)
+  if (!schemaReady) {
+    return {
+      ...trader,
+      maxCompanies: trader.maxCompanies,
+      maxUsers: trader.maxUsers,
+      currentCompanies,
+      currentUsers,
+      limitSource: 'legacy',
+      subscriptionState: 'none',
+      subscriptionMessage: null,
+      subscriptionConfigured: false,
+      canManageCompanies: true,
+      canManageUsers: true
+    }
+  }
+
+  const entitlement = await getTraderSubscriptionEntitlement(db, traderId, new Date(), trader)
+  const dataLifecycle = await getTraderDataLifecycleSummary(db, traderId, new Date(), {
+    entitlement,
+    traderDeletedAt: trader.deletedAt
+  })
+  const lifecycleAllowsWrites = dataLifecycle ? dataLifecycle.allowWriteOperations : true
+  const lifecycleMessage = dataLifecycle?.message || null
+
   return {
     ...trader,
-    maxCompanies: trader.maxCompanies,
-    maxUsers: trader.maxUsers,
+    maxCompanies: entitlement?.limits.maxCompanies ?? trader.maxCompanies,
+    maxUsers: entitlement?.limits.maxUsers ?? trader.maxUsers,
     currentCompanies,
-    currentUsers
+    currentUsers,
+    limitSource: entitlement?.limits.source || 'legacy',
+    subscriptionState: entitlement?.lifecycleState || 'none',
+    subscriptionMessage: lifecycleMessage || entitlement?.message || null,
+    subscriptionConfigured: entitlement?.isConfigured || false,
+    canManageCompanies:
+      lifecycleAllowsWrites &&
+      (!entitlement ||
+        !entitlement.isConfigured ||
+        entitlement.lifecycleState === 'trial' ||
+        entitlement.lifecycleState === 'active'),
+    canManageUsers:
+      lifecycleAllowsWrites &&
+      (!entitlement ||
+        !entitlement.isConfigured ||
+        entitlement.lifecycleState === 'trial' ||
+        entitlement.lifecycleState === 'active')
   }
 }

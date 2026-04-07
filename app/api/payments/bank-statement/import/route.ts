@@ -23,8 +23,10 @@ import {
   parseBankStatementFile,
   type ParsedStatementEntry
 } from '@/lib/server-bank-statement'
+import { assertFinancialYearOpenForDate, FinancialYearValidationError } from '@/lib/financial-years'
 
 export const runtime = 'nodejs'
+export const maxDuration = 60
 
 type RouteAction = 'preview' | 'import'
 
@@ -385,6 +387,28 @@ function summarizeRows(rows: StatementPreviewRow[]): StatementSummary {
   }
 }
 
+function getRouteErrorStatus(message: string): number {
+  const normalized = normalizeForCompare(message)
+
+  if (
+    normalized.includes('upload a bank statement file first') ||
+    normalized.includes('bank is required') ||
+    normalized.includes('company id is required') ||
+    normalized.includes('unsupported statement file') ||
+    normalized.includes('uploaded csv statement is empty') ||
+    normalized.includes('uploaded excel statement is empty') ||
+    normalized.includes('uploaded statement text file is empty') ||
+    normalized.includes('could not detect any transaction rows') ||
+    normalized.includes('could not recognize text') ||
+    normalized.includes('could not read text from pdf') ||
+    normalized.includes('could not be recognized into readable statement rows')
+  ) {
+    return 400
+  }
+
+  return 500
+}
+
 export async function POST(request: NextRequest) {
   const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin', 'company_user'])
   if (!authResult.ok) return authResult.response
@@ -431,11 +455,30 @@ export async function POST(request: NextRequest) {
     }
 
     const parsedStatement = await parseBankStatementFile(file, bank.id)
+    const statementEntryDates = parsedStatement.entries
+      .filter((entry): entry is ParsedStatementEntry => !('reason' in entry))
+      .map((entry) => new Date(`${entry.postedAt}T00:00:00.000Z`))
+      .filter((value) => Number.isFinite(value.getTime()))
+      .sort((left, right) => left.getTime() - right.getTime())
+
+    const existingPaymentsDateFilter =
+      statementEntryDates.length > 0
+        ? {
+            gte: new Date(statementEntryDates[0].getTime() - 7 * 86_400_000),
+            lte: new Date(statementEntryDates[statementEntryDates.length - 1].getTime() + 7 * 86_400_000)
+          }
+        : undefined
+
     const [existingPayments, accountingHeads, parties, suppliers] = await Promise.all([
       prisma.payment.findMany({
         where: {
           companyId,
-          deletedAt: null
+          deletedAt: null,
+          ...(existingPaymentsDateFilter
+            ? {
+                payDate: existingPaymentsDateFilter
+              }
+            : {})
         },
         select: {
           id: true,
@@ -598,39 +641,56 @@ export async function POST(request: NextRequest) {
     const importedIds = new Set<string>()
 
     if (rowsToImport.length > 0) {
-      await prisma.$transaction(async (tx) => {
-        for (const entry of rowsToImport) {
-          const payDate = new Date(`${entry.postedAt}T00:00:00.000Z`)
-          const paymentMode = inferStatementPaymentMode(entry)
+      const uniquePostingDates = Array.from(
+        new Set(rowsToImport.map((entry) => normalizeText(entry.postedAt)).filter(Boolean))
+      )
 
-          await tx.payment.create({
-            data: {
-              companyId,
-              billType: entry.direction === 'out' ? CASH_BANK_PAYMENT_TYPE : CASH_BANK_RECEIPT_TYPE,
-              billId: buildCashBankPaymentReference(entry.selectedTarget.targetType, entry.selectedTarget.targetId),
-              billDate: payDate,
-              payDate,
-              amount: entry.amount,
-              mode: paymentMode,
-              cashAmount: null,
-              cashPaymentDate: null,
-              onlinePayAmount: entry.amount,
-              onlinePaymentDate: payDate,
-              ifscCode: bank.ifscCode || null,
-              beneficiaryBankAccount: bank.accountNumber || null,
-              bankNameSnapshot: bank.name,
-              bankBranchSnapshot: bank.branch || null,
-              txnRef: entry.reference,
-              note: buildImportNote(entry, parsedStatement.document.fileName),
-              partyId: entry.selectedTarget.targetType === 'party' ? entry.selectedTarget.targetId : null,
-              status: 'paid'
-            }
+      await Promise.all(
+        uniquePostingDates.map((postedAt) =>
+          assertFinancialYearOpenForDate({
+            auth: authResult.auth,
+            companyId,
+            date: new Date(`${postedAt}T00:00:00.000Z`),
+            actionLabel: 'Bank statement import'
           })
+        )
+      )
 
-          imported += 1
-          importedIds.add(entry.externalId)
+      const paymentRows = rowsToImport.map((entry) => {
+        const payDate = new Date(`${entry.postedAt}T00:00:00.000Z`)
+        const paymentMode = inferStatementPaymentMode(entry)
+
+        return {
+          companyId,
+          billType: entry.direction === 'out' ? CASH_BANK_PAYMENT_TYPE : CASH_BANK_RECEIPT_TYPE,
+          billId: buildCashBankPaymentReference(entry.selectedTarget.targetType, entry.selectedTarget.targetId),
+          billDate: payDate,
+          payDate,
+          amount: entry.amount,
+          mode: paymentMode,
+          cashAmount: null,
+          cashPaymentDate: null,
+          onlinePayAmount: entry.amount,
+          onlinePaymentDate: payDate,
+          ifscCode: bank.ifscCode || null,
+          beneficiaryBankAccount: bank.accountNumber || null,
+          bankNameSnapshot: bank.name,
+          bankBranchSnapshot: bank.branch || null,
+          txnRef: entry.reference,
+          note: buildImportNote(entry, parsedStatement.document.fileName),
+          partyId: entry.selectedTarget.targetType === 'party' ? entry.selectedTarget.targetId : null,
+          status: 'paid' as const
         }
       })
+
+      const createResult = await prisma.payment.createMany({
+        data: paymentRows
+      })
+
+      imported = createResult.count
+      for (const entry of rowsToImport) {
+        importedIds.add(entry.externalId)
+      }
 
       await writeAuditLog({
         actor: {
@@ -674,9 +734,16 @@ export async function POST(request: NextRequest) {
       entries: responseRows
     })
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.statusCode }
+      )
+    }
+    const message = error instanceof Error ? error.message : 'Internal server error'
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Internal server error' },
-      { status: 500 }
+      { error: message },
+      { status: getRouteErrorStatus(message) }
     )
   }
 }

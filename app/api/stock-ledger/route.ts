@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { z } from 'zod'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
+import { assertFinancialYearOpenForDate, FinancialYearValidationError, getFinancialYearDateFilter } from '@/lib/financial-years'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 
 const stockLedgerCreateSchema = z.object({
@@ -157,6 +158,17 @@ export async function POST(request: NextRequest) {
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
+    const entryDateValue = new Date(entryDate)
+    if (!Number.isFinite(entryDateValue.getTime())) {
+      return NextResponse.json({ error: 'Invalid entry date' }, { status: 400 })
+    }
+
+    await assertFinancialYearOpenForDate({
+      companyId,
+      date: entryDateValue,
+      actionLabel: 'Stock ledger entry'
+    })
+
     const [product, summary] = await Promise.all([
       prisma.product.findFirst({
         where: {
@@ -204,7 +216,7 @@ export async function POST(request: NextRequest) {
     const stockLedger = await prisma.stockLedger.create({
       data: {
         companyId,
-        entryDate: new Date(entryDate),
+        entryDate: entryDateValue,
         productId,
         type,
         qtyIn: Number(qtyIn) || 0,
@@ -226,8 +238,6 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const companyId = searchParams.get('companyId')
     const productId = searchParams.get('productId')
-    const dateFrom = searchParams.get('dateFrom')
-    const dateTo = searchParams.get('dateTo')
     const type = parseLedgerType(searchParams.get('type'))
     const mode = searchParams.get('mode')
     const recentLimit = parsePositiveLimit(
@@ -248,6 +258,11 @@ export async function GET(request: NextRequest) {
     const denied = await ensureCompanyAccess(request, companyId)
     if (denied) return denied
 
+    const financialYearFilter = await getFinancialYearDateFilter({
+      request,
+      companyId
+    })
+
     const whereClause: {
       companyId: string
       productId?: string
@@ -263,20 +278,10 @@ export async function GET(request: NextRequest) {
     if (type) {
       whereClause.type = type
     }
-    if (dateFrom || dateTo) {
+    if (financialYearFilter.dateFrom || financialYearFilter.dateTo) {
       const entryDate: { gte?: Date; lte?: Date } = {}
-      if (dateFrom) {
-        const parsedFrom = new Date(`${dateFrom}T00:00:00`)
-        if (Number.isFinite(parsedFrom.getTime())) {
-          entryDate.gte = parsedFrom
-        }
-      }
-      if (dateTo) {
-        const parsedTo = new Date(`${dateTo}T23:59:59.999`)
-        if (Number.isFinite(parsedTo.getTime())) {
-          entryDate.lte = parsedTo
-        }
-      }
+      if (financialYearFilter.dateFrom) entryDate.gte = financialYearFilter.dateFrom
+      if (financialYearFilter.dateTo) entryDate.lte = financialYearFilter.dateTo
       if (entryDate.gte || entryDate.lte) {
         whereClause.entryDate = entryDate
       }
@@ -422,7 +427,9 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(rows)
   } catch (error) {
-    void error
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

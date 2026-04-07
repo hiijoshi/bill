@@ -16,6 +16,9 @@ export type StatementDocumentMeta = {
   kind: StatementDocumentKind
   parser: string
   fileName: string
+  recognitionMode?: 'structured' | 'text' | 'ocr'
+  pageCount?: number | null
+  note?: string | null
 }
 
 export type StatementPreviewRow = {

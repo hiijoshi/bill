@@ -12,6 +12,7 @@ import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { Plus, Edit, Trash2, Package } from 'lucide-react'
 import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { isAbortError } from '@/lib/http'
 
 interface Product {
@@ -53,6 +54,7 @@ const UNIT_MASTER_CACHE_KEY = 'master-units:active'
 const UNIT_MASTER_CACHE_AGE_MS = 60_000
 
 export default function PurchaseItemMasterPage() {
+  const [companyId, setCompanyId] = useState('')
   const [products, setProducts] = useState<Product[]>([])
   const [units, setUnits] = useState<Unit[]>([])
   const [loading, setLoading] = useState(true)
@@ -66,30 +68,43 @@ export default function PurchaseItemMasterPage() {
     unit: ''
   })
 
-  const applyUnits = useCallback((rows: Unit[]) => {
+  const applyUnits = useCallback((rows: Unit[], resolvedCompanyId: string) => {
     setUnits(rows)
-    setClientCache(UNIT_MASTER_CACHE_KEY, { units: rows })
+    if (resolvedCompanyId) {
+      setCompanyId((prev) => prev || resolvedCompanyId)
+    }
+    setClientCache(UNIT_MASTER_CACHE_KEY, { companyId: resolvedCompanyId, units: rows })
   }, [])
 
-  const fetchUnits = useCallback(async () => {
-    const cached = getClientCache<{ units?: Unit[] }>(UNIT_MASTER_CACHE_KEY, UNIT_MASTER_CACHE_AGE_MS)
-    if (cached && Array.isArray(cached.units) && cached.units.length > 0) {
-      applyUnits(cached.units)
+  const fetchUnits = useCallback(async (targetCompanyId: string) => {
+    if (!targetCompanyId) {
+      setUnits([])
+      return
+    }
+
+    const cached = getClientCache<{ companyId?: string; units?: Unit[] }>(UNIT_MASTER_CACHE_KEY, UNIT_MASTER_CACHE_AGE_MS)
+    const cachedCompanyId = typeof cached?.companyId === 'string' ? cached.companyId : ''
+    if (cachedCompanyId === targetCompanyId && Array.isArray(cached?.units) && cached.units.length > 0) {
+      applyUnits(cached.units, cachedCompanyId)
     }
 
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const response = await fetch('/api/units', { cache: 'no-store' })
+          const response = await fetch(`/api/units?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' })
           const payload = (await response.json().catch(() => ({}))) as UnitResponsePayload | Unit[]
           const rows = (Array.isArray((payload as UnitResponsePayload)?.units)
             ? (payload as UnitResponsePayload).units
             : Array.isArray(payload)
               ? payload
               : []) as Unit[]
+          const resolvedCompanyId =
+            typeof (payload as UnitResponsePayload)?.companyId === 'string'
+              ? (payload as UnitResponsePayload).companyId || targetCompanyId
+              : targetCompanyId
 
           if (response.ok) {
-            applyUnits(rows)
+            applyUnits(rows, resolvedCompanyId)
             return
           }
 
@@ -106,11 +121,11 @@ export default function PurchaseItemMasterPage() {
           }
 
           setErrorMessage(
-            cached?.units?.length
+            cachedCompanyId === targetCompanyId && cached?.units?.length
               ? 'Unit list is taking longer than expected. Showing the last loaded data.'
               : 'Unable to load units right now. Please refresh and try again.'
           )
-          if (!cached?.units?.length) {
+          if (!(cachedCompanyId === targetCompanyId && cached?.units?.length)) {
             setUnits([])
           }
           return
@@ -121,11 +136,11 @@ export default function PurchaseItemMasterPage() {
           }
           if (isAbortError(error)) {
             setErrorMessage(
-              cached?.units?.length
+              cachedCompanyId === targetCompanyId && cached?.units?.length
                 ? 'Unit list is taking longer than expected. Showing the last loaded data.'
                 : 'Unit list took too long to load. Please refresh once.'
             )
-            if (!cached?.units?.length) {
+            if (!(cachedCompanyId === targetCompanyId && cached?.units?.length)) {
               setUnits([])
             }
             return
@@ -137,29 +152,39 @@ export default function PurchaseItemMasterPage() {
       if (isAbortError(error)) return
       console.error('Error fetching units:', error)
       setErrorMessage('Unable to load units right now. Please refresh and try again.')
-      if (!cached?.units?.length) {
+      if (!(cachedCompanyId === targetCompanyId && cached?.units?.length)) {
         setUnits([])
       }
     }
   }, [applyUnits])
 
-  const applyProducts = useCallback((rows: Product[]) => {
+  const applyProducts = useCallback((rows: Product[], resolvedCompanyId: string) => {
     setProducts(rows)
-    setClientCache(PRODUCT_MASTER_CACHE_KEY, { products: rows })
+    if (resolvedCompanyId) {
+      setCompanyId(resolvedCompanyId)
+    }
+    setClientCache(PRODUCT_MASTER_CACHE_KEY, { companyId: resolvedCompanyId, products: rows })
     setErrorMessage('')
   }, [])
 
-  const fetchProducts = useCallback(async () => {
-    const cached = getClientCache<{ products?: Product[] }>(PRODUCT_MASTER_CACHE_KEY, PRODUCT_MASTER_CACHE_AGE_MS)
-    if (cached && Array.isArray(cached.products) && cached.products.length > 0) {
-      applyProducts(cached.products)
+  const fetchProducts = useCallback(async (targetCompanyId: string) => {
+    if (!targetCompanyId) {
+      setProducts([])
+      setLoading(false)
+      return
+    }
+
+    const cached = getClientCache<{ companyId?: string; products?: Product[] }>(PRODUCT_MASTER_CACHE_KEY, PRODUCT_MASTER_CACHE_AGE_MS)
+    const cachedCompanyId = typeof cached?.companyId === 'string' ? cached.companyId : ''
+    if (cachedCompanyId === targetCompanyId && Array.isArray(cached?.products) && cached.products.length > 0) {
+      applyProducts(cached.products, cachedCompanyId)
       setLoading(false)
     }
 
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const response = await fetch('/api/products', { cache: 'no-store' })
+          const response = await fetch(`/api/products?companyId=${encodeURIComponent(targetCompanyId)}`, { cache: 'no-store' })
           const payload = (await response.json().catch(() => ({}))) as ProductResponsePayload | Product[]
           const rows = (Array.isArray((payload as ProductResponsePayload)?.products)
             ? (payload as ProductResponsePayload).products
@@ -168,9 +193,13 @@ export default function PurchaseItemMasterPage() {
               : Array.isArray(payload)
                 ? payload
                 : []) as Product[]
+          const resolvedCompanyId =
+            typeof (payload as ProductResponsePayload)?.companyId === 'string'
+              ? (payload as ProductResponsePayload).companyId || targetCompanyId
+              : targetCompanyId
 
           if (response.ok) {
-            applyProducts(rows)
+            applyProducts(rows, resolvedCompanyId)
             return
           }
 
@@ -187,11 +216,11 @@ export default function PurchaseItemMasterPage() {
           }
 
           setErrorMessage(
-            cached?.products?.length
+            cachedCompanyId === targetCompanyId && cached?.products?.length
               ? 'Product list is taking longer than expected. Showing the last loaded data.'
               : 'Unable to load products right now. Please refresh and try again.'
           )
-          if (!cached?.products?.length) {
+          if (!(cachedCompanyId === targetCompanyId && cached?.products?.length)) {
             setProducts([])
           }
           return
@@ -202,11 +231,11 @@ export default function PurchaseItemMasterPage() {
           }
           if (isAbortError(error)) {
             setErrorMessage(
-              cached?.products?.length
+              cachedCompanyId === targetCompanyId && cached?.products?.length
                 ? 'Product list is taking longer than expected. Showing the last loaded data.'
                 : 'Product list took too long to load. Please refresh once.'
             )
-            if (!cached?.products?.length) {
+            if (!(cachedCompanyId === targetCompanyId && cached?.products?.length)) {
               setProducts([])
             }
             return
@@ -218,7 +247,7 @@ export default function PurchaseItemMasterPage() {
       if (isAbortError(error)) return
       console.error('Error fetching products:', error)
       setErrorMessage('Unable to load products right now. Please refresh and try again.')
-      if (!cached?.products?.length) {
+      if (!(cachedCompanyId === targetCompanyId && cached?.products?.length)) {
         setProducts([])
       }
     } finally {
@@ -227,7 +256,39 @@ export default function PurchaseItemMasterPage() {
   }, [applyProducts])
 
   useEffect(() => {
-    void Promise.all([fetchProducts(), fetchUnits()])
+    let cancelled = false
+
+    const loadPurchaseItemScope = async () => {
+      setLoading(true)
+      const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      if (cancelled) return
+
+      if (!resolvedCompanyId) {
+        setCompanyId('')
+        setProducts([])
+        setUnits([])
+        setErrorMessage('Company not selected. Please select company once.')
+        setLoading(false)
+        return
+      }
+
+      setCompanyId(resolvedCompanyId)
+      stripCompanyParamsFromUrl()
+      await Promise.all([fetchProducts(resolvedCompanyId), fetchUnits(resolvedCompanyId)])
+    }
+
+    void loadPurchaseItemScope()
+
+    const onCompanyChanged = () => {
+      void loadPurchaseItemScope()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
   }, [fetchProducts, fetchUnits])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -255,7 +316,7 @@ export default function PurchaseItemMasterPage() {
       if (response.ok) {
         alert(editingProduct ? 'Product updated successfully!' : 'Product created successfully!')
         resetForm()
-        fetchProducts()
+        void fetchProducts(companyId)
       } else {
         const error = await response.json()
         alert(error.error || 'Operation failed')
@@ -285,7 +346,7 @@ export default function PurchaseItemMasterPage() {
 
       if (response.ok) {
         alert('Product deleted successfully!')
-        fetchProducts()
+        void fetchProducts(companyId)
       } else {
         const error = await response.json()
         alert(error.error || 'Delete failed')
@@ -306,7 +367,7 @@ export default function PurchaseItemMasterPage() {
     return (
       <AppLoaderShell
         kind="master"
-        companyId=""
+        companyId={companyId}
         fullscreen
         title="Loading purchase items"
         message="Fetching purchase item mappings, product references, and billing setup."
@@ -315,7 +376,7 @@ export default function PurchaseItemMasterPage() {
   }
 
   return (
-    <DashboardLayout companyId="">
+    <DashboardLayout companyId={companyId}>
       <div className="p-6">
         <div className="max-w-6xl mx-auto">
           {errorMessage && (

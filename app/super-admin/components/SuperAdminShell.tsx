@@ -6,13 +6,20 @@ import { Button } from '@/components/ui/button'
 import HeaderAccountPanel from '@/components/account/HeaderAccountPanel'
 import { LayoutDashboard, Store, Building2, Users, ShieldCheck, Settings2, ArrowLeft, ScrollText, PanelLeftClose, PanelLeftOpen, LogOut, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { clearClientCache, getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 
 type SuperAdminShellProps = {
   title: string
   subtitle?: string
   children: React.ReactNode
+  initialProfile?: {
+    user?: {
+      userId?: string
+      name?: string
+      role?: string
+    }
+  } | null
 }
 
 const navItems = [
@@ -21,20 +28,23 @@ const navItems = [
   { href: '/super-admin/masters', label: 'Masters', icon: Settings2 },
   { href: '/super-admin/masters?resource=buyer-limits', label: 'Buyer Limits', icon: Users },
   { href: '/super-admin/traders', label: 'Traders', icon: Store },
+  { href: '/super-admin/subscriptions', label: 'Subscriptions', icon: ScrollText },
+  { href: '/super-admin/subscriptions/plans', label: 'Plan Catalog', icon: Settings2 },
   { href: '/super-admin/companies', label: 'Companies', icon: Building2 },
   { href: '/super-admin/users', label: 'Users', icon: Users },
   { href: '/super-admin/audit-logs', label: 'Audit Logs', icon: ScrollText }
 ]
 
-export default function SuperAdminShell({ title, subtitle, children }: SuperAdminShellProps) {
+export default function SuperAdminShell({ title, subtitle, children, initialProfile = null }: SuperAdminShellProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true)
-  const [currentUserId, setCurrentUserId] = useState('')
-  const [currentUserName, setCurrentUserName] = useState('')
-  const [currentUserRole, setCurrentUserRole] = useState('')
+  const [currentUserId, setCurrentUserId] = useState(String(initialProfile?.user?.userId || ''))
+  const [currentUserName, setCurrentUserName] = useState(String(initialProfile?.user?.name || ''))
+  const [currentUserRole, setCurrentUserRole] = useState(String(initialProfile?.user?.role || ''))
   const profileCacheKey = 'super-admin:profile'
   const profileCacheAgeMs = 30_000
+  const skipPreparedProfileFetchRef = useRef(Boolean(initialProfile?.user?.userId))
 
   const loadCurrentUser = useCallback(async (force = false) => {
     try {
@@ -63,10 +73,20 @@ export default function SuperAdminShell({ title, subtitle, children }: SuperAdmi
   }, [])
 
   useEffect(() => {
+    if (initialProfile?.user?.userId) {
+      setClientCache(profileCacheKey, initialProfile)
+    }
+  }, [initialProfile, profileCacheKey])
+
+  useEffect(() => {
     let cancelled = false
 
     const run = (force = false) => {
       if (cancelled) return
+      if (!force && skipPreparedProfileFetchRef.current) {
+        skipPreparedProfileFetchRef.current = false
+        return
+      }
       void loadCurrentUser(force)
     }
 

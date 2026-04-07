@@ -5,6 +5,8 @@ import { prisma } from '@/lib/prisma'
 import { normalizeOptionalString, normalizePhone, requireRoles } from '@/lib/api-security'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { generateUniqueMandiAccountNumber } from '@/lib/mandi-account-number'
+import { createTraderInitialSubscription, traderInitialSubscriptionSchema } from '@/lib/trader-subscription-assignment'
+import { SubscriptionMutationError } from '@/lib/subscription-mutations'
 
 const onboardingSchema = z
   .object({
@@ -37,7 +39,8 @@ const onboardingSchema = z
           })
           .strict()
       )
-      .min(1, 'At least one company is required')
+      .min(1, 'At least one company is required'),
+    subscription: traderInitialSubscriptionSchema.optional().nullable()
   })
   .strict()
 
@@ -101,6 +104,7 @@ export async function POST(request: NextRequest) {
       userIds.add(normalized)
     }
 
+    const actorId = authResult.auth.userDbId || authResult.auth.userId
     const result = await prisma.$transaction(async (tx) => {
       const trader = await tx.trader.create({
         data: {
@@ -182,15 +186,24 @@ export async function POST(request: NextRequest) {
         })
       }
 
+      const subscription = parsed.data.subscription
+        ? await createTraderInitialSubscription(tx, {
+            traderId: trader.id,
+            actorId,
+            subscription: parsed.data.subscription
+          })
+        : null
+
       return {
         trader,
         companies: createdCompanies,
-        users: createdUsers
+        users: createdUsers,
+        subscription
       }
     })
 
     const actor = {
-      id: authResult.auth.userDbId || authResult.auth.userId,
+      id: actorId,
       role: authResult.auth.role
     }
     const requestMeta = getAuditRequestMeta(request)
@@ -235,6 +248,30 @@ export async function POST(request: NextRequest) {
       })
     }
 
+    if (result.subscription) {
+      await writeAuditLog({
+        actor,
+        action: 'CREATE',
+        resourceType: 'TRADER_SUBSCRIPTION',
+        resourceId: result.subscription.subscription.id,
+        scope: { traderId: result.trader.id },
+        after: result.subscription.subscription,
+        requestMeta
+      })
+
+      if (result.subscription.payment) {
+        await writeAuditLog({
+          actor,
+          action: 'CREATE',
+          resourceType: 'SUBSCRIPTION_PAYMENT',
+          resourceId: result.subscription.payment.id,
+          scope: { traderId: result.trader.id },
+          after: result.subscription.payment,
+          requestMeta
+        })
+      }
+    }
+
     return NextResponse.json(
       {
         success: true,
@@ -242,12 +279,22 @@ export async function POST(request: NextRequest) {
         data: {
           trader: result.trader,
           users: result.users,
-          companies: result.companies
+          companies: result.companies,
+          currentSubscription: result.subscription?.subscription || null
         }
       },
       { status: 201 }
     )
   } catch (error) {
+    if (error instanceof SubscriptionMutationError) {
+      return NextResponse.json(
+        {
+          error: error.message
+        },
+        { status: error.status }
+      )
+    }
+
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : 'Failed to create trader setup'

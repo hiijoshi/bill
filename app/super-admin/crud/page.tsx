@@ -584,17 +584,21 @@ export default function SuperAdminCrudPage() {
 
   const deleteModalRecord = async () => {
     if (!modal || modal.mode !== 'edit' || !modal.recordId) return
+    if (modal.section === 'traders') {
+      setModalError(
+        'Direct trader deletion is disabled. Use trader subscriptions page to create backup, mark deletion pending, and confirm final closure.'
+      )
+      return
+    }
     const confirmDelete = window.confirm('Delete this record?')
     if (!confirmDelete) return
 
     try {
       setModalError(null)
       const endpoint =
-        modal.section === 'traders'
-          ? `/api/super-admin/traders/${modal.recordId}`
-          : modal.section === 'companies'
-            ? `/api/super-admin/companies/${modal.recordId}`
-            : `/api/super-admin/users/${modal.recordId}`
+        modal.section === 'companies'
+          ? `/api/super-admin/companies/${modal.recordId}`
+          : `/api/super-admin/users/${modal.recordId}`
 
       const response = await fetch(endpoint, { method: 'DELETE' })
       const responsePayload = await response.json().catch(() => ({}))
@@ -782,10 +786,19 @@ export default function SuperAdminCrudPage() {
                   {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   Refresh
                 </Button>
-                <Button type="button" size="sm" onClick={() => openCreateModal(activeTab)}>
-                  <Plus className="h-4 w-4" />
-                  Add {activeTabLabel.slice(0, -1)}
-                </Button>
+                {activeTab === 'traders' ? (
+                  <Button type="button" size="sm" asChild>
+                    <Link href="/super-admin/traders">
+                      <Plus className="h-4 w-4" />
+                      Add Trader
+                    </Link>
+                  </Button>
+                ) : (
+                  <Button type="button" size="sm" onClick={() => openCreateModal(activeTab)}>
+                    <Plus className="h-4 w-4" />
+                    Add {activeTabLabel.slice(0, -1)}
+                  </Button>
+                )}
               </div>
             </div>
           </CardContent>
@@ -805,6 +818,9 @@ export default function SuperAdminCrudPage() {
                 Super-admin can increase or decrease trader limits at any time. If a limit is not set, it defaults to
                 0. Lowering a limit does not remove existing companies or users; it only blocks new additions until
                 usage comes under the limit.
+              </p>
+              <p className="text-sm text-slate-600">
+                Use the dedicated <Link href="/super-admin/traders" className="underline underline-offset-4">Trader Management</Link> page to create a trader and assign trial or paid subscription in the same step.
               </p>
             </CardHeader>
             <CardContent>

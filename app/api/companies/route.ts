@@ -10,6 +10,7 @@ import {
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { generateUniqueMandiAccountNumber } from '@/lib/mandi-account-number'
 import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
+import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
 
 function setCORSHeaders() {
   const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000']
@@ -189,6 +190,32 @@ export async function POST(request: NextRequest) {
 
     if (!trader) {
       return NextResponse.json({ error: 'Trader not found' }, { status: 404, headers: setCORSHeaders() })
+    }
+
+    const traderCapacity = await getTraderCapacitySnapshot(prisma, targetTraderId)
+    if (!traderCapacity) {
+      return NextResponse.json({ error: 'Trader not found' }, { status: 404, headers: setCORSHeaders() })
+    }
+
+    if (traderCapacity.locked) {
+      return NextResponse.json({ error: 'Trader is locked' }, { status: 403, headers: setCORSHeaders() })
+    }
+
+    if (!traderCapacity.canManageCompanies) {
+      return NextResponse.json(
+        { error: traderCapacity.subscriptionMessage || 'Trader subscription does not allow company creation' },
+        { status: 403, headers: setCORSHeaders() }
+      )
+    }
+
+    if (
+      traderCapacity.maxCompanies !== null &&
+      traderCapacity.currentCompanies >= traderCapacity.maxCompanies
+    ) {
+      return NextResponse.json(
+        { error: `Trader company limit reached (${traderCapacity.currentCompanies}/${traderCapacity.maxCompanies})` },
+        { status: 409, headers: setCORSHeaders() }
+      )
     }
 
     const mandiAccountNumberValue =

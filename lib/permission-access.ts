@@ -1,7 +1,9 @@
 import type { PermissionAccessRow } from '@/lib/app-default-route'
 import type { AppRole } from '@/lib/api-security'
-import { PERMISSION_MODULES } from '@/lib/permissions'
+import { PERMISSION_MODULES, type PermissionModule } from '@/lib/permissions'
 import { prisma } from '@/lib/prisma'
+import { getCompanySubscriptionAccess, isModuleEnabledForEntitlement } from '@/lib/subscription-core'
+import { getTraderDataLifecycleSummary } from '@/lib/trader-retention'
 
 export type PermissionAccessPayload = {
   permissions: PermissionAccessRow[]
@@ -33,6 +35,39 @@ function summarize(rows: PermissionAccessRow[]): PermissionAccessPayload {
   }
 }
 
+function applySubscriptionOverlay(rows: PermissionAccessRow[], companyId: string, role: AppRole) {
+  return async () => {
+    const subscriptionAccess = await getCompanySubscriptionAccess(prisma, companyId)
+    if (!subscriptionAccess || role === 'super_admin') {
+      return rows
+    }
+
+    const dataLifecycle = await getTraderDataLifecycleSummary(prisma, subscriptionAccess.traderId, new Date(), {
+      entitlement: subscriptionAccess.entitlement
+    })
+
+    return rows.map((row) => {
+      const module = row.module as PermissionModule | undefined
+      if (!module) return row
+
+      const canRead =
+        Boolean(row.canRead) &&
+        isModuleEnabledForEntitlement(subscriptionAccess.entitlement, module, 'read') &&
+        (dataLifecycle ? dataLifecycle.allowReadOperations : true)
+      const canWrite =
+        Boolean(row.canWrite) &&
+        isModuleEnabledForEntitlement(subscriptionAccess.entitlement, module, 'write') &&
+        (dataLifecycle ? dataLifecycle.allowWriteOperations : true)
+
+      return {
+        module,
+        canRead,
+        canWrite
+      }
+    })
+  }
+}
+
 export async function loadPermissionAccessForCompany(params: {
   role: AppRole
   userDbId?: string | null
@@ -44,11 +79,13 @@ export async function loadPermissionAccessForCompany(params: {
   }
 
   if (params.role === 'super_admin' || params.role === 'trader_admin' || params.role === 'company_admin') {
-    return summarize(buildFullAccessRows())
+    const permissions = await applySubscriptionOverlay(buildFullAccessRows(), normalizedCompanyId, params.role)()
+    return summarize(permissions)
   }
 
   if (!params.userDbId) {
-    return summarize(buildDefaultRows())
+    const permissions = await applySubscriptionOverlay(buildDefaultRows(), normalizedCompanyId, params.role)()
+    return summarize(permissions)
   }
 
   const rows = await prisma.userPermission.findMany({
@@ -73,5 +110,6 @@ export async function loadPermissionAccessForCompany(params: {
     }
   })
 
-  return summarize(permissions)
+  const withSubscription = await applySubscriptionOverlay(permissions, normalizedCompanyId, params.role)()
+  return summarize(withSubscription)
 }

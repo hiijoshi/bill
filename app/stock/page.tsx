@@ -1,31 +1,27 @@
-'use client'
+import { redirect } from 'next/navigation'
 
-import { Suspense, useEffect } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
-import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
-
-function StockRedirect() {
-  const router = useRouter()
-  const searchParams = useSearchParams()
-
-  useEffect(() => {
-    const query = searchParams.toString()
-    router.replace(query ? `/stock/adjustment?${query}` : '/stock/adjustment')
-  }, [router, searchParams])
-
-  return (
-    <AppLoaderShell
-      kind="stock"
-      title="Opening stock workspace"
-      message="Routing you into stock adjustment with the right company scope."
-    />
-  )
+type PageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }
 
-export default function StockPage() {
-  return (
-    <Suspense fallback={<AppLoaderShell kind="stock" fullscreen />}>
-      <StockRedirect />
-    </Suspense>
-  )
+function toQueryString(params: Record<string, string | string[] | undefined>) {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === 'string' && value) {
+      search.set(key, value)
+      continue
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (entry) search.append(key, entry)
+      }
+    }
+  }
+  return search.toString()
+}
+
+export default async function StockPage({ searchParams }: PageProps) {
+  const params = await searchParams
+  const query = toQueryString(params)
+  redirect(query ? `/stock/adjustment?${query}` : '/stock/adjustment')
 }

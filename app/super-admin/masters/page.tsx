@@ -15,6 +15,7 @@ import {
   getNestedValue,
   type MasterFieldDefinition
 } from '@/lib/super-admin-master-registry'
+import { loadShellCompanies } from '@/lib/client-shell-data'
 
 type CompanyOption = {
   id: string
@@ -145,10 +146,7 @@ function SuperAdminMastersPageContent() {
   }, [resource.fields, resource.key])
 
   const loadCompanies = useCallback(async () => {
-    const response = await fetch('/api/companies', { cache: 'no-store' })
-    if (!response.ok) throw new Error('Unable to load companies')
-    const payload = await response.json().catch(() => [])
-    const nextCompanies = normalizeRows(payload)
+    const nextCompanies = normalizeRows(await loadShellCompanies())
       .map((row) => ({
         id: String(row.id || ''),
         name: String(row.name || '')

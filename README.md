@@ -97,7 +97,8 @@ GET /api/products?companyId=<COMPANY_ID>&page=1&pageSize=50&search=soy&withMeta=
 - TypeScript
 - Tailwind + Shadcn UI
 - Prisma ORM
-- SQLite (dev) / PostgreSQL (recommended for production, shared multi-device)
+- SQLite (local dev) / Turso libSQL (current production runtime)
+- Optional Supabase auth bridge, kept isolated behind env configuration
 
 ## Multi-Device Permanent Data (Important)
 
@@ -106,18 +107,21 @@ If you run this app separately on different laptops with local SQLite, each devi
 To make users/traders/companies/passwords permanent and shared across all devices:
 
 1. Deploy one central app server (VPS/Render/Railway/Vercel + Node runtime).
-2. Use one shared PostgreSQL database (Neon/Supabase/RDS/Railway).
+2. Use one shared Turso database for the Prisma libSQL adapter.
 3. Point all devices to the same hosted app URL.
 
 ### Required Production Env
 
 ```env
-DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/DB?sslmode=require"
+TURSO_DATABASE_URL="libsql://your-db-name-your-org.turso.io"
+TURSO_AUTH_TOKEN="your-turso-auth-token"
+USE_TURSO="true"
 JWT_SECRET="long-random-32+"
 REFRESH_SECRET="long-random-32+"
 ALLOWED_ORIGINS="https://your-app-domain.com"
-NEXT_PUBLIC_LIVE_SYNC_MS="20000"
 ```
+
+Copy [`.env.example`](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/.env.example) and fill only the values you actually use.
 
 ### Development Env (current local)
 
@@ -130,7 +134,7 @@ DATABASE_URL="file:./dev.db"
 ```bash
 npm install
 npx prisma generate
-npx prisma db push
+npm run prisma:migrate:deploy
 npm run dev
 ```
 
@@ -138,17 +142,17 @@ App URLs:
 
 - `http://localhost:3000` (or next available port)
 
-## Production Setup (Shared Web App)
+## Production Setup (Vercel + Turso)
 
 ```bash
 # 1) install
 npm install
 
 # 2) generate prisma client
-npm run prisma:generate:postgres
+npx prisma generate
 
-# 3) apply schema to production database
-npm run prisma:dbpush:postgres
+# 3) apply migrations to Turso
+npm run prisma:migrate:deploy
 
 # 4) build and run
 npm run build
@@ -156,12 +160,6 @@ npm run start
 ```
 
 Then open the same deployed URL from all devices. Super Admin changes will persist in the shared DB.
-
-## Real-Time Sync Behavior
-
-- Sidebar privileges auto-refresh (default every 60s)
-- Top user/company context auto-refresh (default every 60s)
-- Configure refresh interval with `NEXT_PUBLIC_LIVE_SYNC_MS`
 
 ## Developer Commands
 
@@ -175,12 +173,17 @@ npm run lint
 # Prisma client regenerate
 npx prisma generate
 
-# Sync schema to DB (dev)
-npx prisma db push
+# Safe migration deploy for local SQLite or Turso
+npm run prisma:migrate:deploy
 
-# PostgreSQL (shared web app) commands
-npm run prisma:generate:postgres
-npm run prisma:dbpush:postgres
+# Baseline an old existing database that has schema but no _prisma_migrations history
+npm run prisma:migrate:baseline
+
+# Emergency dev-only schema sync (prefer migrations first)
+npm run prisma:dbpush
+
+# Bootstrap or rotate the super admin account
+npm run bootstrap:super-admin -- <userId> <password> [name]
 ```
 
 ## Troubleshooting
@@ -215,6 +218,10 @@ API request hit an HTML/error route instead of JSON endpoint. Check route URL, a
 - Data is stored in the database and survives relogin/restart
 - If data appears missing, check active `companyId` context and user scope first
 
-## Next Recommended Step
+## Deployment Notes
 
-For very high volume (100k+ rows), move production DB to PostgreSQL and add cursor-based pagination on ledger/report endpoints.
+- Vercel builds only need a safe fallback SQLite path for Prisma generation; runtime writes should go to Turso.
+- Run `npm run prisma:migrate:deploy` against the production Turso database before or during deployment rollout.
+- The migration deploy command now works for both fresh databases and verified old databases that need migration history baselined.
+- Keep `ALLOWED_ORIGINS` in sync with your public app URLs so auth cookies and server actions stay valid.
+- Do not set any Supabase env variables unless you intentionally want the optional Supabase auth bridge enabled.

@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { requireRoles } from '@/lib/api-security'
+import { invalidateAuthGuardStateForUser } from '@/lib/auth-guard-state'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { normalizePrismaApiError } from '@/lib/prisma-errors'
+import { markCompanyLiveUpdates, markSuperAdminLiveUpdate, markUserSessionLiveUpdates } from '@/lib/live-update-state'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'Trader ID is required') })
 const lockSchema = z.object({ locked: z.boolean() }).strict()
@@ -41,6 +43,29 @@ export async function PATCH(
     if (parsedBody.data.locked && authResult.auth.traderId === traderId) {
       return NextResponse.json({ error: 'Cannot lock current session trader' }, { status: 403 })
     }
+
+    const affectedUsers = await prisma.user.findMany({
+      where: {
+        traderId,
+        deletedAt: null
+      },
+      select: {
+        id: true,
+        traderId: true,
+        userId: true
+      }
+    })
+    const affectedCompanyIds = (
+      await prisma.company.findMany({
+        where: {
+          traderId,
+          deletedAt: null
+        },
+        select: {
+          id: true
+        }
+      })
+    ).map((company) => company.id)
 
     const updated = await prisma.$transaction(async (tx) => {
       const trader = await tx.trader.update({
@@ -83,6 +108,12 @@ export async function PATCH(
       before: existing,
       after: updated,
       requestMeta: getAuditRequestMeta(request)
+    })
+    markSuperAdminLiveUpdate()
+    markCompanyLiveUpdates(affectedCompanyIds)
+    markUserSessionLiveUpdates(affectedUsers)
+    affectedUsers.forEach((user) => {
+      invalidateAuthGuardStateForUser(user)
     })
 
     return NextResponse.json({ success: true, trader: updated })

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
+import { assertFinancialYearOpenForDate, FinancialYearValidationError } from '@/lib/financial-years'
 
 const cancelSpecialPurchaseBillSchema = z.object({
   companyId: z.string().trim().min(1, 'Company ID is required'),
@@ -24,7 +25,8 @@ export async function POST(request: NextRequest) {
       },
       select: {
         id: true,
-        status: true
+        status: true,
+        billDate: true
       }
     })
 
@@ -35,6 +37,12 @@ export async function POST(request: NextRequest) {
     if (String(specialPurchaseBill.status || '').toLowerCase() === 'cancelled') {
       return NextResponse.json({ success: true, message: 'Special purchase bill already cancelled' })
     }
+
+    await assertFinancialYearOpenForDate({
+      companyId,
+      date: specialPurchaseBill.billDate,
+      actionLabel: 'Special purchase bill cancellation'
+    })
 
     await prisma.$transaction(async (tx) => {
       const cancelledAt = new Date()
@@ -70,6 +78,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, message: 'Special purchase bill cancelled successfully' })
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 }

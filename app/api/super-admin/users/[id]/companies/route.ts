@@ -7,6 +7,7 @@ import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { syncSupabaseForLegacyUserMutationWithTimeout } from '@/lib/supabase/legacy-user-sync'
 import { getLinkedCompaniesForUser } from '@/lib/super-admin-user-companies'
+import { markCompanyLiveUpdates, markSuperAdminLiveUpdate, markUserSessionLiveUpdate } from '@/lib/live-update-state'
 
 const paramsSchema = z.object({
   id: z.string().trim().min(1, 'User ID is required')
@@ -116,6 +117,9 @@ export async function DELETE(
       requestMeta: getAuditRequestMeta(request),
       notes: 'Removed linked company from user'
     })
+    markSuperAdminLiveUpdate()
+    markCompanyLiveUpdates([companyId, nextPrimaryCompanyId, ...remainingCompanies.map((company) => company.id)])
+    markUserSessionLiveUpdate(user)
 
     let cloudSyncWarning: string | null = null
     if (isSupabaseConfigured()) {

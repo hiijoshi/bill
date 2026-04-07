@@ -18,15 +18,18 @@ export type SalesAdditionalChargeRecord = {
 }
 
 export const DEFAULT_SALES_ADDITIONAL_CHARGE_TYPES = [
+  'Mandi tax %',
+  'Labour',
+  'Loading labour',
+  'Bardan',
+  'Commission',
+  'Miscellaneous',
   'Other Amount',
   'Insurance',
   'Packing',
   'Loading',
   'Unloading',
-  'Commission',
-  'Handling',
-  'Labour',
-  'Miscellaneous'
+  'Handling'
 ] as const
 
 function normalizeText(value: unknown): string {

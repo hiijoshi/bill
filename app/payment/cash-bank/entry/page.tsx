@@ -23,6 +23,8 @@ import {
 import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
 import { loadClientCachedValue } from '@/lib/client-cached-value'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
+import { getDefaultTransactionDateInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 
 type AccountingHeadRecord = {
   id: string
@@ -129,8 +131,9 @@ function CashBankPaymentEntryPageContent() {
   const [companyId, setCompanyId] = useState('')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const { financialYear } = useClientFinancialYear()
 
-  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0])
+  const [paymentDate, setPaymentDate] = useState('')
   const [mode, setMode] = useState('cash')
   const [selectedReferenceValue, setSelectedReferenceValue] = useState('')
   const [selectedBankId, setSelectedBankId] = useState('')
@@ -149,6 +152,10 @@ function CashBankPaymentEntryPageContent() {
   const [paymentModes, setPaymentModes] = useState<PaymentModeRecord[]>([])
 
   useEffect(() => {
+    setPaymentDate(getDefaultTransactionDateInput(financialYear))
+  }, [financialYear?.id])
+
+  useEffect(() => {
     let cancelled = false
 
     ;(async () => {
@@ -156,7 +163,7 @@ function CashBankPaymentEntryPageContent() {
       if (cancelled) return
       if (!resolvedCompanyId) {
         setLoading(false)
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
 

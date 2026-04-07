@@ -1,6 +1,20 @@
-import { createClient } from '@supabase/supabase-js'
+import { createRequire } from 'node:module'
 
 import { getSupabaseServiceRoleKey, getSupabaseBrowserConfig } from './shared'
+
+type SupabaseModule = typeof import('@supabase/supabase-js')
+
+const require = createRequire(import.meta.url)
+
+let cachedCreateClient: SupabaseModule['createClient'] | null = null
+
+function getSupabaseCreateClient(): SupabaseModule['createClient'] {
+  if (!cachedCreateClient) {
+    cachedCreateClient = (require('@supabase/supabase-js') as SupabaseModule).createClient
+  }
+
+  return cachedCreateClient
+}
 
 export function createSupabaseAdminClient() {
   const config = getSupabaseBrowserConfig()
@@ -12,7 +26,7 @@ export function createSupabaseAdminClient() {
 
   // Do NOT cache the admin client as a singleton — on Vercel serverless
   // each invocation should get a fresh client to avoid stale auth state.
-  return createClient(config.url, serviceRoleKey, {
+  return getSupabaseCreateClient()(config.url, serviceRoleKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false

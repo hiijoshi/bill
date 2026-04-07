@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -21,6 +22,8 @@ import {
   normalizeSalesAdditionalCharges,
   summarizeSalesAdditionalCharges,
 } from '@/lib/sales-additional-charges'
+import { getDefaultTransactionDateInput } from '@/lib/client-financial-years'
+import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 import { openWhatsappChat } from '@/lib/whatsapp'
 
 interface Party {
@@ -114,6 +117,23 @@ const createEmptyAdditionalChargeBucket = (): SalesAdditionalChargeBucket => ({
   amount: '',
   remark: ''
 })
+
+const PERMANENT_ADDITIONAL_CHARGE_TYPES = [
+  'Mandi tax %',
+  'Labour',
+  'Loading labour',
+  'Bardan',
+  'Commission',
+  'Miscellaneous'
+] as const
+
+const createPermanentAdditionalChargeBuckets = (): SalesAdditionalChargeBucket[] =>
+  PERMANENT_ADDITIONAL_CHARGE_TYPES.map((chargeType) => ({
+    id: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+    chargeType,
+    amount: '',
+    remark: '',
+  }))
 
 interface ExistingSalesBill {
   id: string
@@ -223,6 +243,7 @@ export default function SalesEntryPage() {
   const [accountingHeads, setAccountingHeads] = useState<AccountingHeadCharge[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const { financialYear } = useClientFinancialYear()
 
   const [transports, setTransports] = useState<TransportOption[]>([])
   const [selectedTransportId, setSelectedTransportId] = useState('')
@@ -234,7 +255,7 @@ export default function SalesEntryPage() {
 
   // Invoice Tab 1 - Basic Info
   const [invoiceNo, setInvoiceNo] = useState('')
-  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0])
+  const [invoiceDate, setInvoiceDate] = useState('')
   const [selectedParty, setSelectedParty] = useState('')
   const [partyName, setPartyName] = useState('') // For display only
   const [partyAddress, setPartyAddress] = useState('')
@@ -248,6 +269,9 @@ export default function SalesEntryPage() {
   const [advance, setAdvance] = useState('')
   const [toPay, setToPay] = useState('')
   const [advanceError, setAdvanceError] = useState('')
+  useEffect(() => {
+    setInvoiceDate(getDefaultTransactionDateInput(financialYear))
+  }, [financialYear?.id])
 
   // Invoice Tab 3 - Items
   const [currentItem, setCurrentItem] = useState(createEmptyCurrentItem)
@@ -257,9 +281,9 @@ export default function SalesEntryPage() {
   const [totalNoOfBags, setTotalNoOfBags] = useState(0)
   const [totalWeight, setTotalWeight] = useState(0)
   const [totalAmount, setTotalAmount] = useState(0)
-  const [additionalChargeBuckets, setAdditionalChargeBuckets] = useState<SalesAdditionalChargeBucket[]>([
-    createEmptyAdditionalChargeBucket()
-  ])
+  const [additionalChargeBuckets, setAdditionalChargeBuckets] = useState<SalesAdditionalChargeBucket[]>(
+    createPermanentAdditionalChargeBuckets()
+  )
   const [manualGrandTotal, setManualGrandTotal] = useState('')
   const [manualGrandTotalTouched, setManualGrandTotalTouched] = useState(false)
   const [partyRisk, setPartyRisk] = useState<PartyRiskResponse | null>(null)
@@ -726,7 +750,7 @@ export default function SalesEntryPage() {
                 }]
               : [])
           ]
-    setAdditionalChargeBuckets(nextAdditionalCharges.length > 0 ? nextAdditionalCharges : [createEmptyAdditionalChargeBucket()])
+    setAdditionalChargeBuckets(nextAdditionalCharges.length > 0 ? nextAdditionalCharges : createPermanentAdditionalChargeBuckets())
 
     const mappedItems: SalesItem[] = Array.isArray(bill.salesItems)
       ? bill.salesItems.map((item, index) => {
@@ -772,7 +796,7 @@ export default function SalesEntryPage() {
 
       if (!resolvedCompanyId) {
         alert('Company not selected')
-        router.push('/company/select')
+        router.push('/main/profile')
         return
       }
       setCompanyId(resolvedCompanyId)
@@ -1745,27 +1769,9 @@ export default function SalesEntryPage() {
                 {/* Section 4 - Additional Charges */}
                 <div className="mt-2">
                   <h3 className="text-lg font-semibold mb-2 pb-2 border-b">4. Additional Charges</h3>
-                  <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_2.1fr_0.9fr]">
-                    <div className="rounded-lg border bg-slate-50 p-4">
-                      <Label htmlFor="freightAmountTotal">Freight Advance</Label>
-                      <Input
-                        id="freightAmountTotal"
-                        value={freightAdvanceTotal.toFixed(2)}
-                        readOnly
-                        className="mt-2 bg-gray-100"
-                      />
-                      <p className="mt-2 text-xs text-slate-500">
-                        Transport section ka advance amount yahan summary ke liye dikh raha hai.
-                      </p>
-                    </div>
+                  <div className="grid grid-cols-1 gap-4">
                     <div className="rounded-lg border p-4">
                       <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">Charge Buckets</p>
-                          <p className="text-xs text-slate-500">
-                            Type, amount, and remark ke saath multiple extra charges add karein.
-                          </p>
-                        </div>
                         <Button type="button" variant="outline" onClick={handleAddAdditionalChargeRow}>
                           Add Charge
                         </Button>
@@ -1844,25 +1850,7 @@ export default function SalesEntryPage() {
                         </div>
                       ) : null}
                     </div>
-                    <div className="rounded-lg border bg-slate-50 p-4">
-                      <Label htmlFor="additionalTotal">Additional Total</Label>
-                      <Input
-                        id="additionalTotal"
-                        value={additionalTotal.toFixed(2)}
-                        readOnly
-                        className="mt-2 bg-gray-100"
-                      />
-                      <div className="mt-3 space-y-2 text-sm text-slate-600">
-                        <div className="flex items-center justify-between">
-                          <span>Freight Advance</span>
-                          <span>₹{freightAdvanceTotal.toFixed(2)}</span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span>Charge Buckets</span>
-                          <span>₹{extraChargesTotal.toFixed(2)}</span>
-                        </div>
-                      </div>
-                    </div>
+                    
                   </div>
                 </div>
 

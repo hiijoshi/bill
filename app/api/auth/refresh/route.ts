@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifyRefreshTokenWithMetadata, generateRefreshToken, generateToken, normalizeRole } from '@/lib/auth'
 import { setSession, clearSession } from '@/lib/session'
 import { getRequestIp } from '@/lib/api-security'
+import { env } from '@/lib/config'
 import { prisma } from '@/lib/prisma'
 import { getSessionCookieNameCandidates } from '@/lib/session-cookies'
 
 const refreshRateLimit = new Map<string, { count: number; resetTime: number }>()
-const ENABLE_REFRESH_RATE_LIMIT = false
+const ENABLE_REFRESH_RATE_LIMIT = env.NODE_ENV === 'production'
 
 function isRefreshAllowed(ip: string): { allowed: boolean; retryAfter?: number } {
   const now = Date.now()

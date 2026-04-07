@@ -7,7 +7,13 @@ type CacheOptions = {
   persist?: boolean
 }
 
+type LoadCacheOptions<T> = CacheOptions & {
+  force?: boolean
+  shouldCache?: (data: T) => boolean
+}
+
 const cacheStore = new Map<string, CacheEntry<unknown>>()
+const pendingLoads = new Map<string, Promise<unknown>>()
 const STORAGE_PREFIX = 'mbill-cache:'
 
 function getSessionStorage(): Storage | null {
@@ -100,8 +106,45 @@ export function setClientCache<T>(key: string, data: T, options: CacheOptions = 
   }
 }
 
+export async function getOrLoadClientCache<T>(
+  key: string,
+  maxAgeMs: number,
+  loader: () => Promise<T>,
+  options: LoadCacheOptions<T> = {}
+): Promise<T> {
+  if (!options.force) {
+    const cached = getClientCache<T>(key, maxAgeMs)
+    if (cached !== null) {
+      return cached
+    }
+  }
+
+  const pending = pendingLoads.get(key)
+  if (pending) {
+    return pending as Promise<T>
+  }
+
+  const nextLoad = loader()
+    .then((data) => {
+      const shouldCache = options.shouldCache ? options.shouldCache(data) : data !== null
+      if (shouldCache) {
+        setClientCache(key, data, options)
+      }
+      return data
+    })
+    .finally(() => {
+      if (pendingLoads.get(key) === nextLoad) {
+        pendingLoads.delete(key)
+      }
+    })
+
+  pendingLoads.set(key, nextLoad)
+  return nextLoad
+}
+
 export function deleteClientCache(key: string): void {
   cacheStore.delete(key)
+  pendingLoads.delete(key)
   removePersistedEntry(key)
 }
 
@@ -109,6 +152,12 @@ export function deleteClientCacheByPrefix(prefix: string): void {
   for (const key of cacheStore.keys()) {
     if (key.startsWith(prefix)) {
       cacheStore.delete(key)
+    }
+  }
+
+  for (const key of pendingLoads.keys()) {
+    if (key.startsWith(prefix)) {
+      pendingLoads.delete(key)
     }
   }
 
@@ -131,6 +180,7 @@ export function deleteClientCacheByPrefix(prefix: string): void {
 
 export function clearClientCache(): void {
   cacheStore.clear()
+  pendingLoads.clear()
 
   const storage = getSessionStorage()
   if (!storage) return

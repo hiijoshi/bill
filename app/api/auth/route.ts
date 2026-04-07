@@ -14,12 +14,12 @@ import { getAppCompanyCookieOptions } from '@/lib/supabase/app-session'
 import { getCompanyCookieName } from '@/lib/session-cookies'
 import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
 import { loadPermissionAccessForCompany } from '@/lib/permission-access'
+import { isPrismaSchemaMismatchError } from '@/lib/prisma-schema-guard'
 
 // Simple in-memory rate limiting store
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
 const accountLockoutStore = new Map<string, { count: number; lockedUntil: number }>()
-const ENFORCE_LOGIN_GUARDS = false
-const isDev = env.NODE_ENV === 'development' || !ENFORCE_LOGIN_GUARDS
+const isDev = env.NODE_ENV === 'development'
 
 async function checkRateLimit(identifier: string, windowMs: number, maxRequests: number) {
   const now = Date.now()
@@ -138,7 +138,7 @@ async function buildLoginBootstrap(
       : authResult.company,
     defaultRoute: companyId
       ? resolveFirstAccessibleAppRoute(permissionAccess.permissions, companyId)
-      : '/company/select',
+      : '/main/profile',
     permissions: permissionAccess.permissions,
     grantedReadModules: permissionAccess.grantedReadModules,
     grantedWriteModules: permissionAccess.grantedWriteModules,
@@ -511,9 +511,13 @@ export async function POST(request: NextRequest) {
       userAgent,
       error instanceof Error ? error.message : 'Unknown error'
     )
+
+    const errorMessage = isPrismaSchemaMismatchError(error)
+      ? 'Database schema mismatch. Run: npm run prisma:migrate:deploy && npx prisma generate'
+      : 'Internal server error'
     
     return NextResponse.json({ 
-      error: 'Internal server error'
+      error: errorMessage
     }, { 
       status: 500,
       headers: {

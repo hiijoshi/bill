@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { normalizeOptionalString, normalizePhone, parseBooleanParam, requireRoles } from '@/lib/api-security'
+import { invalidateAuthGuardStateForUser } from '@/lib/auth-guard-state'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { generateUniqueMandiAccountNumber } from '@/lib/mandi-account-number'
 import { getTraderCapacitySnapshot } from '@/lib/trader-limits'
 import { normalizePrismaApiError } from '@/lib/prisma-errors'
+import { markCompanyLiveUpdate, markSuperAdminLiveUpdate, markUserSessionLiveUpdates } from '@/lib/live-update-state'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'Company ID is required') })
 
@@ -95,10 +97,6 @@ async function getCompanyById(id: string, includeDeleted: boolean) {
           name: true
         }
       },
-      users: {
-        where: includeDeleted ? undefined : { deletedAt: null },
-        select: { id: true, userId: true, role: true, locked: true }
-      },
       parties: { select: { id: true } },
       farmers: { select: { id: true } },
       suppliers: { select: { id: true } },
@@ -109,6 +107,33 @@ async function getCompanyById(id: string, includeDeleted: boolean) {
   })
 
   if (!company) return null
+
+  const connectedUsers = await prisma.user.findMany({
+    where: {
+      ...(includeDeleted ? {} : { deletedAt: null }),
+      ...(company.traderId ? { traderId: company.traderId } : {}),
+      NOT: [{ role: 'SUPER_ADMIN' }, { role: 'super_admin' }],
+      OR: [
+        {
+          companyId: company.id
+        },
+        {
+          permissions: {
+            some: {
+              companyId: company.id
+            }
+          }
+        }
+      ]
+    },
+    select: {
+      id: true,
+      userId: true,
+      role: true,
+      locked: true
+    }
+  })
+
   let mandiAccountNumber = company.mandiAccountNumber
 
   if (!company.deletedAt && (!mandiAccountNumber || !mandiAccountNumber.trim())) {
@@ -131,9 +156,9 @@ async function getCompanyById(id: string, includeDeleted: boolean) {
     createdAt: company.createdAt,
     updatedAt: company.updatedAt,
     trader: company.trader,
-    users: company.users,
+    users: connectedUsers,
     _count: {
-      users: company.users.length,
+      users: connectedUsers.length,
       parties: company.parties.length,
       farmers: company.farmers.length,
       suppliers: company.suppliers.length,
@@ -223,16 +248,74 @@ export async function PUT(
       if (traderCapacity.locked) {
         return NextResponse.json({ error: 'Trader is locked' }, { status: 403 })
       }
+
+      if (!traderCapacity.canManageCompanies) {
+        return NextResponse.json(
+          { error: traderCapacity.subscriptionMessage || 'Trader subscription does not allow company changes' },
+          { status: 403 }
+        )
+      }
     }
 
     const nextName = normalized.name ?? existingCompany.name
     const nextTraderId =
       normalized.traderId === undefined ? existingCompany.traderId : normalized.traderId
+    const affectedUsers = await prisma.user.findMany({
+      where: {
+        deletedAt: null,
+        NOT: [{ role: 'SUPER_ADMIN' }, { role: 'super_admin' }],
+        OR: [
+          {
+            companyId
+          },
+          {
+            permissions: {
+              some: {
+                companyId
+              }
+            }
+          }
+        ]
+      },
+      select: {
+        id: true,
+        traderId: true,
+        userId: true
+      }
+    })
+    const movingUsers =
+      nextTraderId && nextTraderId !== existingCompany.traderId
+        ? await prisma.user.findMany({
+            where: {
+              companyId,
+              deletedAt: null,
+              NOT: [{ role: 'SUPER_ADMIN' }, { role: 'super_admin' }]
+            },
+            select: {
+              id: true,
+              userId: true
+            }
+          })
+        : []
 
     if (nextTraderId && nextTraderId !== existingCompany.traderId) {
       const traderCapacity = await getTraderCapacitySnapshot(prisma, nextTraderId)
       if (!traderCapacity) {
         return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
+      }
+
+      if (!traderCapacity.canManageCompanies) {
+        return NextResponse.json(
+          { error: traderCapacity.subscriptionMessage || 'Trader subscription does not allow company changes' },
+          { status: 403 }
+        )
+      }
+
+      if (!traderCapacity.canManageUsers && movingUsers.length > 0) {
+        return NextResponse.json(
+          { error: traderCapacity.subscriptionMessage || 'Trader subscription does not allow user allocation changes' },
+          { status: 403 }
+        )
       }
 
       if (
@@ -244,18 +327,6 @@ export async function PUT(
           { status: 409 }
         )
       }
-
-      const movingUsers = await prisma.user.findMany({
-        where: {
-          companyId,
-          deletedAt: null,
-          NOT: [{ role: 'SUPER_ADMIN' }, { role: 'super_admin' }]
-        },
-        select: {
-          id: true,
-          userId: true
-        }
-      })
 
       if (
         traderCapacity.maxUsers !== null &&
@@ -373,6 +444,66 @@ export async function PUT(
             traderId: normalized.traderId
           }
         })
+
+        if (movingUsers.length > 0) {
+          const movingUserIds = movingUsers.map((user) => user.id)
+          const stalePermissionIds = await tx.userPermission.findMany({
+            where: {
+              userId: {
+                in: movingUserIds
+              },
+              companyId: {
+                not: companyId
+              },
+              company: {
+                is: {
+                  traderId: {
+                    not: normalized.traderId
+                  }
+                }
+              }
+            },
+            select: {
+              id: true
+            }
+          })
+
+          if (stalePermissionIds.length > 0) {
+            await tx.userPermission.deleteMany({
+              where: {
+                id: {
+                  in: stalePermissionIds.map((row) => row.id)
+                }
+              }
+            })
+          }
+        }
+
+        const outOfScopeAccessIds = await tx.userPermission.findMany({
+          where: {
+            companyId,
+            user: {
+              is: {
+                traderId: {
+                  not: normalized.traderId
+                }
+              }
+            }
+          },
+          select: {
+            id: true
+          }
+        })
+
+        if (outOfScopeAccessIds.length > 0) {
+          await tx.userPermission.deleteMany({
+            where: {
+              id: {
+                in: outOfScopeAccessIds.map((row) => row.id)
+              }
+            }
+          })
+        }
       }
 
       return updated
@@ -400,6 +531,12 @@ export async function PUT(
       before: existingCompany,
       after: updatedCompany,
       requestMeta: getAuditRequestMeta(request)
+    })
+    markSuperAdminLiveUpdate()
+    markCompanyLiveUpdate(companyId)
+    markUserSessionLiveUpdates(affectedUsers)
+    affectedUsers.forEach((user) => {
+      invalidateAuthGuardStateForUser(user)
     })
 
     const response = await getCompanyById(companyId, false)
@@ -441,6 +578,29 @@ export async function DELETE(
     }
 
     const deletedAt = new Date()
+    const affectedUsers = await prisma.user.findMany({
+      where: {
+        deletedAt: null,
+        NOT: [{ role: 'SUPER_ADMIN' }, { role: 'super_admin' }],
+        OR: [
+          {
+            companyId
+          },
+          {
+            permissions: {
+              some: {
+                companyId
+              }
+            }
+          }
+        ]
+      },
+      select: {
+        id: true,
+        traderId: true,
+        userId: true
+      }
+    })
 
     const deletedSnapshot = await prisma.$transaction(async (tx) => {
       const company = await tx.company.update({
@@ -480,6 +640,12 @@ export async function DELETE(
       before: existingCompany,
       after: deletedSnapshot,
       requestMeta: getAuditRequestMeta(request)
+    })
+    markSuperAdminLiveUpdate()
+    markCompanyLiveUpdate(companyId)
+    markUserSessionLiveUpdates(affectedUsers)
+    affectedUsers.forEach((user) => {
+      invalidateAuthGuardStateForUser(user)
     })
 
     return NextResponse.json({ success: true })

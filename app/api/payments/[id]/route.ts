@@ -17,6 +17,7 @@ import {
   isBillLinkedPaymentType,
   isPurchasePaymentType
 } from '@/lib/payment-entry-types'
+import { assertFinancialYearOpenForDate, FinancialYearValidationError } from '@/lib/financial-years'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'Payment ID is required') })
 
@@ -171,6 +172,14 @@ export async function PUT(
     }
 
     const nextAmount = parsedBody.data.amount ?? existingPayment.amount
+    const nextPayDate = parsedBody.data.payDate ? new Date(parsedBody.data.payDate) : existingPayment.payDate
+
+    await assertFinancialYearOpenForDate({
+      auth: authResult.auth,
+      companyId: existingPayment.companyId,
+      date: nextPayDate,
+      actionLabel: 'Payment update'
+    })
 
     const result = await prisma.$transaction(async (tx) => {
       if (parsedBody.data.amount !== undefined && isBillLinkedPaymentType(existingPayment.billType)) {
@@ -275,6 +284,9 @@ export async function PUT(
 
     return NextResponse.json({ success: true, payment: result })
   } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     const message = error instanceof Error ? error.message : 'Failed to update payment'
     const status = message.includes('exceeds pending balance') ? 400 : 500
     return NextResponse.json({ error: message }, { status })
@@ -317,6 +329,13 @@ export async function DELETE(
       return NextResponse.json({ error: 'Payment access denied' }, { status: 403 })
     }
 
+    await assertFinancialYearOpenForDate({
+      auth: authResult.auth,
+      companyId: existingPayment.companyId,
+      date: existingPayment.payDate,
+      actionLabel: 'Payment delete'
+    })
+
     const deletedAt = new Date()
 
     const deletedPayment = await prisma.$transaction(async (tx) => {
@@ -356,7 +375,10 @@ export async function DELETE(
     })
 
     return NextResponse.json({ success: true })
-  } catch {
+  } catch (error) {
+    if (error instanceof FinancialYearValidationError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
     return NextResponse.json({ error: 'Failed to delete payment' }, { status: 500 })
   }
 }

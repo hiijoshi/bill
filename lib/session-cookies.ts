@@ -70,3 +70,12 @@ export function getCompanyCookieNameCandidates(scopeSource?: string | null): str
   const scoped = getCompanyCookieName(scopeSource)
   return scoped === 'companyId' ? ['companyId'] : [scoped, 'companyId']
 }
+
+export function getFinancialYearCookieName(scopeSource?: string | null): string {
+  return withScope('financialYearId', scopeSource)
+}
+
+export function getFinancialYearCookieNameCandidates(scopeSource?: string | null): string[] {
+  const scoped = getFinancialYearCookieName(scopeSource)
+  return scoped === 'financialYearId' ? ['financialYearId'] : [scoped, 'financialYearId']
+}

@@ -4,7 +4,6 @@ import {
   getPartyOpeningBalanceReference,
   getSignedPartyOpeningBalance
 } from '@/lib/party-opening-balance'
-import { ensurePartyOpeningBalanceSchema } from '@/lib/party-opening-balance-schema'
 
 export const DEFAULT_PARTY_CREDIT_DAYS = 30
 
@@ -41,8 +40,6 @@ export async function getPartyCreditSnapshot({
   referenceDate = new Date(),
   excludeBillId,
 }: GetPartyCreditSnapshotArgs): Promise<PartyCreditSnapshot | null> {
-  await ensurePartyOpeningBalanceSchema(prisma)
-
   const party = await prisma.party.findFirst({
     where: {
       id: partyId,

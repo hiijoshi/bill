@@ -10,6 +10,7 @@ type Props = {
 }
 
 export type PrintType = 'invoice' | 'dispatch'
+export type InvoiceCopyPart = '17(A)' | '17(B)'
 
 const toFixed2 = (value: number) => value.toFixed(2)
 
@@ -17,6 +18,10 @@ const currencyFormatter = new Intl.NumberFormat('en-IN', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2
 })
+
+function getInvoiceCopyHint(copyPart: InvoiceCopyPart) {
+  return copyPart === '17(B)' ? 'Duplicate For Transporter' : 'Original For Recipient'
+}
 
 function createRows<T>(items: T[], minRows: number): Array<T | null> {
   const rows: Array<T | null> = [...items]
@@ -90,11 +95,22 @@ export default function SalesPrintClient({ printData }: Props) {
     () => (searchParams.get('type') === 'dispatch' ? 'dispatch' : 'invoice')
   )
   const shouldAutoPrint = searchParams.get('autoprint') === '1'
+  const [invoiceCopyPart, setInvoiceCopyPart] = useState<InvoiceCopyPart>(() => {
+    const part = searchParams.get('part')
+    return part === '17(B)' ? '17(B)' : '17(A)'
+  })
 
   const updateType = (nextType: PrintType) => {
     setPrintType(nextType)
     const currentUrl = new URL(window.location.href)
     currentUrl.searchParams.set('type', nextType)
+    window.history.replaceState({}, '', `${currentUrl.pathname}?${currentUrl.searchParams.toString()}`)
+  }
+
+  const updateInvoiceCopyPart = (nextPart: InvoiceCopyPart) => {
+    setInvoiceCopyPart(nextPart)
+    const currentUrl = new URL(window.location.href)
+    currentUrl.searchParams.set('part', nextPart)
     window.history.replaceState({}, '', `${currentUrl.pathname}?${currentUrl.searchParams.toString()}`)
   }
 
@@ -151,6 +167,22 @@ export default function SalesPrintClient({ printData }: Props) {
           >
             Dispatch Preview
           </Button>
+          {printType === 'invoice' ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant={invoiceCopyPart === '17(A)' ? 'default' : 'outline'}
+                onClick={() => updateInvoiceCopyPart('17(A)')}
+              >
+                17(A)
+              </Button>
+              <Button
+                variant={invoiceCopyPart === '17(B)' ? 'default' : 'outline'}
+                onClick={() => updateInvoiceCopyPart('17(B)')}
+              >
+                17(B)
+              </Button>
+            </div>
+          ) : null}
           <Button variant="outline" onClick={() => window.print()}>
             Print {printType === 'invoice' ? 'Invoice' : 'Dispatch'}
           </Button>
@@ -162,6 +194,8 @@ export default function SalesPrintClient({ printData }: Props) {
         <InvoiceTemplate
           printData={printData}
           rows={invoiceRows}
+          copyLabel={invoiceCopyPart}
+          copyHint={getInvoiceCopyHint(invoiceCopyPart)}
         />
       ) : (
         <DispatchTemplate
@@ -175,10 +209,14 @@ export default function SalesPrintClient({ printData }: Props) {
 
 export function InvoiceTemplate({
   printData,
-  rows
+  rows,
+  copyLabel,
+  copyHint
 }: {
   printData: SalesBillPrintData
   rows: Array<SalesBillPrintData['items'][number] | null>
+  copyLabel?: string
+  copyHint?: string
 }) {
   const cgstAmount = printData.gstAmount > 0 ? printData.gstAmount / 2 : 0
   const sgstAmount = printData.gstAmount > 0 ? printData.gstAmount / 2 : 0
@@ -189,7 +227,10 @@ export function InvoiceTemplate({
     <div className="print-sheet border border-black bg-white text-[11px]">
       <div className="flex items-center justify-between border-b border-black px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]">
         <span>Tax Invoice</span>
-        <span className="text-[10px] font-medium italic tracking-[0.12em]">(Original For Recipient)</span>
+        <span className="text-[10px] font-medium italic tracking-[0.12em]">
+          {copyLabel ? `${copyLabel} / ` : ''}
+          ({copyHint || 'Original For Recipient'})
+        </span>
       </div>
 
       <div className="border-b border-black px-3 py-2 text-center">

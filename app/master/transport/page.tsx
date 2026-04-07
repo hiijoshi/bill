@@ -11,6 +11,7 @@ import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Truck, Upload } from 'lucide-react'
+import { APP_COMPANY_CHANGED_EVENT } from '@/lib/company-context'
 import { formatMasterImportSummary, uploadMasterCsv } from '@/lib/master-import-client'
 
 interface Transport {
@@ -70,6 +71,17 @@ export default function TransportMasterPage() {
 
   useEffect(() => {
     void fetchTransports()
+
+    const onCompanyChanged = () => {
+      setLoading(true)
+      void fetchTransports()
+    }
+
+    window.addEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+
+    return () => {
+      window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
+    }
   }, [fetchTransports])
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -70,7 +70,7 @@ export async function resolveServerDefaultAppRoute(requestedCompanyId?: string |
   const accessibleCompanies = await getAccessibleCompanies(auth)
   const unlockedCompanies = accessibleCompanies.filter((company) => !company.locked)
   if (unlockedCompanies.length === 0) {
-    return '/company/select'
+    return '/main/profile'
   }
 
   const currentCompany =
@@ -81,7 +81,7 @@ export async function resolveServerDefaultAppRoute(requestedCompanyId?: string |
     null
 
   if (!currentCompany) {
-    return '/company/select'
+    return '/main/profile'
   }
 
   const permissions = (await loadPermissionAccessForCompany({
