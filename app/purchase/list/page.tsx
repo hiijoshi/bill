@@ -42,16 +42,23 @@ export default async function PurchaseListPage({ searchParams }: PageProps) {
   }
 
   const companyId = shellBootstrap.activeCompanyId || ''
-  const dataset = companyId ? await loadServerPurchaseListData(companyId).catch(() => null) : null
+  const dataset = companyId
+    ? await loadServerPurchaseListData(companyId, shellBootstrap.layoutData.financialYearPayload).catch(() => null)
+    : null
 
   const regularBills = Array.isArray(dataset?.purchaseBills)
     ? dataset.purchaseBills.map((bill) => ({
         id: String(bill?.id || ''),
         billNo: String(bill?.billNo || ''),
         billDate: String(bill?.billDate || ''),
-        markaNo: typeof bill?.markaNo === 'string' ? bill.markaNo : null,
+        markaNo: null,
         ...normalizeBillFinancials(bill?.totalAmount, bill?.paidAmount, bill?.balanceAmount, bill?.status),
-        farmer: bill?.farmer || null,
+        farmer: bill?.farmer
+          ? {
+              id: String(bill.farmer.id || ''),
+              name: String(bill.farmer.name || '')
+            }
+          : null,
         farmerNameSnapshot: typeof bill?.farmerNameSnapshot === 'string' ? bill.farmerNameSnapshot : null,
         farmerAddressSnapshot: typeof bill?.farmerAddressSnapshot === 'string' ? bill.farmerAddressSnapshot : null,
         krashakAnubandhSnapshot: typeof bill?.krashakAnubandhSnapshot === 'string' ? bill.krashakAnubandhSnapshot : null,
@@ -75,12 +82,19 @@ export default async function PurchaseListPage({ searchParams }: PageProps) {
         supplierInvoiceNo: String(bill?.supplierInvoiceNo || ''),
         billDate: String(bill?.billDate || ''),
         ...normalizeBillFinancials(bill?.totalAmount, bill?.paidAmount, bill?.balanceAmount, bill?.status),
-        supplier: bill?.supplier || {
-          id: '',
-          name: '',
-          address: '',
-          gstNumber: ''
-        },
+        supplier: bill?.supplier
+          ? {
+              id: String(bill.supplier.id || ''),
+              name: String(bill.supplier.name || ''),
+              address: String(bill.supplier.address || ''),
+              gstNumber: String(bill.supplier.gstNumber || '')
+            }
+          : {
+              id: '',
+              name: '',
+              address: '',
+              gstNumber: ''
+            },
         specialPurchaseItems: Array.isArray(bill?.specialPurchaseItems)
           ? bill.specialPurchaseItems.map((item: Record<string, unknown>) => ({
               noOfBags: clampNonNegative(item?.noOfBags),

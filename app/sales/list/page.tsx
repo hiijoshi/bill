@@ -36,7 +36,9 @@ export default async function SalesListPage({ searchParams }: PageProps) {
   }
 
   const companyId = shellBootstrap.activeCompanyId || ''
-  const dataset = companyId ? await loadServerSalesListData(companyId).catch(() => null) : null
+  const dataset = companyId
+    ? await loadServerSalesListData(companyId, shellBootstrap.layoutData.financialYearPayload).catch(() => null)
+    : null
 
   const initialBills = Array.isArray(dataset)
     ? dataset.map((raw) => {
@@ -48,8 +50,8 @@ export default async function SalesListPage({ searchParams }: PageProps) {
 
         return {
           id: String(raw?.id || ''),
-          invoiceNo: String(raw?.invoiceNo || raw?.billNo || ''),
-          invoiceDate: String(raw?.invoiceDate || raw?.billDate || ''),
+          invoiceNo: String(raw?.billNo || ''),
+          invoiceDate: String(raw?.billDate || ''),
           totalAmount,
           receivedAmount,
           balanceAmount,
@@ -61,8 +63,8 @@ export default async function SalesListPage({ searchParams }: PageProps) {
           },
           salesItems: Array.isArray(raw?.salesItems)
             ? raw.salesItems.map((item: Record<string, unknown>) => ({
-                weight: clampNonNegative(item?.weight || item?.qty),
-                qty: clampNonNegative(item?.qty || item?.weight),
+                weight: clampNonNegative(item?.weight),
+                qty: clampNonNegative(item?.weight),
                 bags: clampNonNegative(item?.bags),
                 rate: clampNonNegative(item?.rate),
                 amount: clampNonNegative(item?.amount),

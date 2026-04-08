@@ -5,9 +5,8 @@ import { cookies, headers } from 'next/headers'
 import { getAccessibleCompanies, normalizeAppRole, type RequestAuthContext } from '@/lib/api-security'
 import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
 import { loadPermissionAccessForCompany } from '@/lib/permission-access'
-import { prisma } from '@/lib/prisma'
-import { getSession } from '@/lib/session'
 import { getCompanyCookieNameCandidates } from '@/lib/session-cookies'
+import { resolveServerAuth } from '@/lib/server-auth'
 
 function normalizeCompanyId(value: string | null | undefined): string | null {
   if (!value) return null
@@ -28,39 +27,16 @@ async function getCookieCompanyId(): Promise<string | null> {
 }
 
 export async function resolveServerDefaultAppRoute(requestedCompanyId?: string | null): Promise<string | null> {
-  const session = await getSession()
-  if (!session) {
+  const resolved = await resolveServerAuth({ namespace: 'app' })
+  if (!resolved) {
     return null
   }
-
-  const user = await prisma.user.findFirst({
-    where: {
-      userId: session.userId,
-      traderId: session.traderId,
-      deletedAt: null
-    },
-    select: {
-      id: true,
-      companyId: true,
-      role: true,
-      locked: true,
-      trader: {
-        select: {
-          locked: true,
-          deletedAt: true
-        }
-      }
-    }
-  })
-
-  if (!user || user.locked || user.trader?.locked || user.trader?.deletedAt) {
-    return '/login'
-  }
+  const user = resolved.user
 
   const auth: RequestAuthContext = {
-    userId: session.userId,
-    traderId: session.traderId,
-    role: normalizeAppRole(user.role || session.role),
+    userId: user.userId,
+    traderId: user.traderId,
+    role: normalizeAppRole(user.role || resolved.auth.role),
     companyId: user.companyId,
     userDbId: user.id
   }

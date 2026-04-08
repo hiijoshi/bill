@@ -149,10 +149,6 @@
   transition-delay: 0s !important;
 }
 
-.motion-minimal-app [class*="animate-"] {
-  animation: none !important;
-}
-
 .task-loader-dot {
   left: 0;
   top: 0;

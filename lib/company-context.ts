@@ -1,12 +1,17 @@
-import { getClientCache, getOrLoadClientCache, setClientCache } from './client-fetch-cache'
+import { deleteClientCache, getClientCache, getOrLoadClientCache, setClientCache } from './client-fetch-cache'
 import { getCompanyCookieNameCandidates } from './session-cookies'
+import {
+  SHELL_ACTIVE_COMPANY_CACHE_AGE_MS,
+  SHELL_ACTIVE_COMPANY_CACHE_KEY,
+  SHELL_AUTH_CACHE_AGE_MS,
+  SHELL_COMPANIES_CACHE_AGE_MS,
+  SHELL_COMPANIES_CACHE_KEY
+} from './client-shell-data'
 
 export const APP_COMPANY_CHANGED_EVENT = 'app-company-changed'
 
-const ACTIVE_COMPANY_CACHE_KEY = 'shell:active-company-id'
 const AUTH_ME_CACHE_KEY = 'shell:auth-me'
-const ACTIVE_COMPANY_CACHE_AGE_MS = 5 * 60_000
-const AUTH_ME_CACHE_AGE_MS = 5 * 60_000
+const AUTH_ME_CACHE_AGE_MS = SHELL_AUTH_CACHE_AGE_MS
 
 type AuthMeCachePayload = {
   user?: {
@@ -16,6 +21,11 @@ type AuthMeCachePayload = {
     id?: string | null
   } | null
 }
+
+type CompanyCachePayload = Array<{
+  id?: string | null
+  locked?: boolean | null
+}>
 
 function getCompanyIdFromCookie(): string {
   if (typeof document === 'undefined') return ''
@@ -34,6 +44,71 @@ function getCompanyIdFromCookie(): string {
 }
 
 const ALLOWED_INTERNAL_PATHS = new Set(['/api/auth/company', '/api/auth/me'])
+
+function normalizeCompanyId(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function pickKnownCompanyId(
+  companies: CompanyCachePayload,
+  candidateIds: string[],
+  options: { allowLocked?: boolean } = {}
+): string {
+  const normalizedCompanies = Array.isArray(companies)
+    ? companies
+        .map((company) => ({
+          id: normalizeCompanyId(company?.id),
+          locked: Boolean(company?.locked)
+        }))
+        .filter((company) => company.id.length > 0)
+    : []
+
+  if (normalizedCompanies.length === 0) {
+    return ''
+  }
+
+  const normalizedCandidateIds = candidateIds
+    .map((candidateId) => normalizeCompanyId(candidateId))
+    .filter((candidateId) => candidateId.length > 0)
+
+  if (normalizedCandidateIds.length === 0) {
+    return chooseFallbackCompanyId(normalizedCompanies)
+  }
+
+  const unlockedCompanies = normalizedCompanies.filter((company) => !company.locked)
+
+  for (const candidateId of normalizedCandidateIds) {
+    if (unlockedCompanies.some((company) => company.id === candidateId)) {
+      return candidateId
+    }
+  }
+
+  if (options.allowLocked) {
+    for (const candidateId of normalizedCandidateIds) {
+      if (normalizedCompanies.some((company) => company.id === candidateId)) {
+        return candidateId
+      }
+    }
+  }
+
+  return ''
+}
+
+function chooseFallbackCompanyId(companies: Array<{ id: string; locked: boolean }>): string {
+  return companies.find((company) => !company.locked)?.id || companies[0]?.id || ''
+}
+
+function rememberResolvedCompanyId(companyId: string): string {
+  const normalizedCompanyId = normalizeCompanyId(companyId)
+  if (normalizedCompanyId) {
+    setClientCache(SHELL_ACTIVE_COMPANY_CACHE_KEY, normalizedCompanyId, { persist: true })
+  }
+  return normalizedCompanyId
+}
+
+function clearStaleCompanyContext() {
+  deleteClientCache(SHELL_ACTIVE_COMPANY_CACHE_KEY)
+}
 
 async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs: number = 12000): Promise<Response> {
   // CWE-918: only allow known internal API paths — reject any external or unexpected URL
@@ -63,9 +138,7 @@ export function getCompanyIdFromSearch(search: string): string {
     .map((id) => id.trim())
     .filter(Boolean)
 
-  if (companyIds[0]) return companyIds[0]
-
-  return getCompanyIdFromCookie()
+  return companyIds[0] || ''
 }
 
 export async function resolveCompanyId(search: string): Promise<string> {
@@ -73,16 +146,32 @@ export async function resolveCompanyId(search: string): Promise<string> {
   if (fromSearch) return fromSearch
 
   try {
-    const cachedActiveCompanyId = getClientCache<string>(ACTIVE_COMPANY_CACHE_KEY, ACTIVE_COMPANY_CACHE_AGE_MS)
-    if (cachedActiveCompanyId) {
-      return cachedActiveCompanyId
-    }
+    const cachedCompanies = getClientCache<CompanyCachePayload>(
+      SHELL_COMPANIES_CACHE_KEY,
+      SHELL_COMPANIES_CACHE_AGE_MS
+    ) || []
+    const cachedActiveCompanyId = normalizeCompanyId(
+      getClientCache<string>(SHELL_ACTIVE_COMPANY_CACHE_KEY, SHELL_ACTIVE_COMPANY_CACHE_AGE_MS)
+    )
+    const cookieCompanyId = normalizeCompanyId(getCompanyIdFromCookie())
 
     const cachedAuthMe = getClientCache<AuthMeCachePayload>(AUTH_ME_CACHE_KEY, AUTH_ME_CACHE_AGE_MS)
-    const cachedAuthCompanyId = String(cachedAuthMe?.company?.id || cachedAuthMe?.user?.companyId || '').trim()
-    if (cachedAuthCompanyId) {
-      setClientCache(ACTIVE_COMPANY_CACHE_KEY, cachedAuthCompanyId, { persist: true })
-      return cachedAuthCompanyId
+    const cachedAuthCompanyId = normalizeCompanyId(cachedAuthMe?.company?.id || cachedAuthMe?.user?.companyId)
+
+    if (cachedCompanies.length > 0) {
+      const knownCompanyId = pickKnownCompanyId(
+        cachedCompanies,
+        [cookieCompanyId, cachedActiveCompanyId, cachedAuthCompanyId],
+        { allowLocked: true }
+      )
+      if (knownCompanyId) {
+        return rememberResolvedCompanyId(knownCompanyId)
+      }
+      clearStaleCompanyContext()
+    } else if (cookieCompanyId) {
+      return rememberResolvedCompanyId(cookieCompanyId)
+    } else if (cachedAuthCompanyId) {
+      return rememberResolvedCompanyId(cachedAuthCompanyId)
     }
 
     const defaultApiTimeoutMs = process.env.NODE_ENV === 'development' ? 20000 : 15000
@@ -91,15 +180,15 @@ export async function resolveCompanyId(search: string): Promise<string> {
       Math.min(60000, Number(process.env.NEXT_PUBLIC_API_TIMEOUT_MS || defaultApiTimeoutMs))
     )
     return await getOrLoadClientCache<string>(
-      ACTIVE_COMPANY_CACHE_KEY,
-      ACTIVE_COMPANY_CACHE_AGE_MS,
+      SHELL_ACTIVE_COMPANY_CACHE_KEY,
+      SHELL_ACTIVE_COMPANY_CACHE_AGE_MS,
       async () => {
         const activeCompanyResponse = await fetchWithTimeout('/api/auth/company', { cache: 'no-store' }, timeoutMs)
         if (activeCompanyResponse.ok) {
           const activeData = await activeCompanyResponse.json().catch(() => null)
-          const activeCompanyId = activeData?.company?.id
-          if (typeof activeCompanyId === 'string' && activeCompanyId.trim()) {
-            return activeCompanyId.trim()
+          const activeCompanyId = normalizeCompanyId(activeData?.company?.id)
+          if (activeCompanyId) {
+            return activeCompanyId
           }
         }
 
@@ -119,7 +208,7 @@ export async function resolveCompanyId(search: string): Promise<string> {
           }
         )
 
-        const resolvedCompanyId = String(data?.user?.companyId || data?.company?.id || '').trim()
+        const resolvedCompanyId = normalizeCompanyId(data?.company?.id || data?.user?.companyId)
         if (!resolvedCompanyId) {
           throw new Error('No active company found')
         }
@@ -152,7 +241,7 @@ export function notifyAppCompanyChanged(companyId: string): void {
   if (typeof window === 'undefined') return
   const normalizedCompanyId = companyId.trim()
   if (normalizedCompanyId) {
-    setClientCache(ACTIVE_COMPANY_CACHE_KEY, normalizedCompanyId, { persist: true })
+    setClientCache(SHELL_ACTIVE_COMPANY_CACHE_KEY, normalizedCompanyId, { persist: true })
   }
   window.dispatchEvent(
     new CustomEvent(APP_COMPANY_CHANGED_EVENT, {

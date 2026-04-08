@@ -414,13 +414,11 @@ export default function PurchaseListClient({
   }, [initialCompanyId, router])
 
   useEffect(() => {
-    if (hasInitialBills) {
-      stripCompanyParamsFromUrl()
-      return
-    }
-
     let cancelled = false
     ;(async () => {
+      if (hasInitialBills) {
+        stripCompanyParamsFromUrl()
+      }
       await fetchPurchaseBills(() => cancelled)
     })()
     return () => {

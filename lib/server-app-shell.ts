@@ -12,12 +12,13 @@ import type { DashboardLayoutInitialData, SubscriptionBannerPayload } from '@/li
 import { getAccessibleCompanies, normalizeAppRole, normalizeId } from '@/lib/api-security'
 import { getFinancialYearContext } from '@/lib/financial-years'
 import { prisma } from '@/lib/prisma'
-import { getSession } from '@/lib/session'
+import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
 import {
   getCompanyCookieNameCandidates,
   getFinancialYearCookieNameCandidates
 } from '@/lib/session-cookies'
-import { getCurrentTraderSubscription, getTraderSubscriptionEntitlement } from '@/lib/subscription-core'
+import { resolveServerAuth } from '@/lib/server-auth'
+import { getTraderSubscriptionEntitlement } from '@/lib/subscription-core'
 import { ensureSubscriptionManagementSchemaReady } from '@/lib/subscription-schema'
 import { getTraderDataLifecycleSummary } from '@/lib/trader-retention'
 
@@ -38,6 +39,8 @@ type ServerUserRow = {
     maxUsers: number | null
   } | null
 }
+
+const SUBSCRIPTION_BANNER_CACHE_TTL_MS = 20_000
 
 export type ServerAppShellBootstrap = {
   auth: RequestAuthContext
@@ -159,43 +162,51 @@ async function loadSubscriptionBanner(user: ServerUserRow): Promise<Subscription
     return null
   }
 
-  const [entitlement, currentSubscription, dataLifecycle] = await Promise.all([
-    getTraderSubscriptionEntitlement(prisma, user.traderId, new Date(), {
-      id: user.trader.id,
-      name: user.trader.name || '',
-      maxCompanies: user.trader.maxCompanies,
-      maxUsers: user.trader.maxUsers,
-      locked: user.trader.locked,
-      deletedAt: user.trader.deletedAt
-    }),
-    getCurrentTraderSubscription(prisma, user.traderId),
-    getTraderDataLifecycleSummary(prisma, user.traderId, new Date(), {
-      traderDeletedAt: user.trader.deletedAt
-    })
+  const now = new Date()
+  const cacheKey = makeServerCacheKey('shell-subscription-banner', [
+    user.traderId,
+    user.trader.locked,
+    user.trader.deletedAt?.toISOString() || '',
+    now.toISOString().slice(0, 16)
   ])
 
-  return {
-    entitlement: entitlement
-      ? {
-          lifecycleState: entitlement.lifecycleState,
-          message: entitlement.message,
-          daysLeft: entitlement.daysLeft
-        }
-      : null,
-    dataLifecycle: dataLifecycle
-      ? {
-          state: dataLifecycle.state,
-          readOnlyMode: dataLifecycle.readOnlyMode,
-          message: dataLifecycle.message
-        }
-      : null,
-    currentSubscription: currentSubscription
-      ? {
-          planName: currentSubscription.planName,
-          endDate: currentSubscription.endDate
-        }
-      : null
-  }
+  return getOrSetServerCache(cacheKey, SUBSCRIPTION_BANNER_CACHE_TTL_MS, async () => {
+    const entitlement = await getTraderSubscriptionEntitlement(prisma, user.traderId, now, {
+      id: user.trader!.id,
+      name: user.trader!.name || '',
+      maxCompanies: user.trader!.maxCompanies,
+      maxUsers: user.trader!.maxUsers,
+      locked: user.trader!.locked,
+      deletedAt: user.trader!.deletedAt
+    })
+    const dataLifecycle = await getTraderDataLifecycleSummary(prisma, user.traderId, now, {
+      traderDeletedAt: user.trader!.deletedAt,
+      entitlement
+    })
+
+    return {
+      entitlement: entitlement
+        ? {
+            lifecycleState: entitlement.lifecycleState,
+            message: entitlement.message,
+            daysLeft: entitlement.daysLeft
+          }
+        : null,
+      dataLifecycle: dataLifecycle
+        ? {
+            state: dataLifecycle.state,
+            readOnlyMode: dataLifecycle.readOnlyMode,
+            message: dataLifecycle.message
+          }
+        : null,
+      currentSubscription: entitlement?.currentSubscription
+        ? {
+            planName: entitlement.currentSubscription.planName,
+            endDate: entitlement.currentSubscription.endDate
+          }
+        : null
+    }
+  })
 }
 
 async function loadFinancialYearPayload(args: {
@@ -252,48 +263,15 @@ export async function loadServerAppShellBootstrap(options: {
   searchParams?: Record<string, string | string[] | undefined>
   companyId?: string | null
 } = {}): Promise<ServerAppShellBootstrap | null> {
-  const session = await getSession('app')
-  if (!session) {
+  const resolved = await resolveServerAuth({ namespace: 'app' })
+  if (!resolved) {
     return null
   }
-
-  const user = await prisma.user.findFirst({
-    where: {
-      userId: session.userId,
-      traderId: session.traderId,
-      deletedAt: null
-    },
-    select: {
-      id: true,
-      userId: true,
-      traderId: true,
-      name: true,
-      role: true,
-      companyId: true,
-      locked: true,
-      trader: {
-        select: {
-          id: true,
-          name: true,
-          locked: true,
-          deletedAt: true,
-          maxCompanies: true,
-          maxUsers: true
-        }
-      }
-    }
-  })
-
-  if (!user || user.locked || user.trader?.locked || user.trader?.deletedAt) {
-    return null
-  }
+  const user = resolved.user
 
   const auth: RequestAuthContext = {
-    userId: user.userId,
-    traderId: user.traderId,
-    role: normalizeAppRole(user.role || session.role),
-    companyId: user.companyId || null,
-    userDbId: user.id
+    ...resolved.auth,
+    role: normalizeAppRole(user.role || resolved.auth.role)
   }
 
   const companies = await getAccessibleCompanies(auth)

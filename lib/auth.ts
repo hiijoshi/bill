@@ -177,27 +177,48 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
     const { userId, password, traderId } = credentials
     const normalizedUserId = userId.toLowerCase().trim()
     const traderInput = traderId?.trim()
-
-    // Find all matching user IDs first; trader filtering will be applied safely below.
-    const candidates = await prisma.user.findMany({
-      where: {
-        userId: normalizedUserId,
-        deletedAt: null
-      },
-      select: {
-        id: true,
-        userId: true,
-        traderId: true,
-        companyId: true,
-        password: true,
-        name: true,
-        role: true,
-        locked: true,
-        trader: true,
-        createdAt: true,
-        updatedAt: true
+    const candidateSelect = {
+      id: true,
+      userId: true,
+      traderId: true,
+      companyId: true,
+      password: true,
+      name: true,
+      role: true,
+      locked: true,
+      trader: {
+        select: {
+          id: true,
+          name: true,
+          locked: true,
+          deletedAt: true
+        }
       }
-    })
+    } as const
+
+    const exactTraderCandidate = traderInput
+      ? await prisma.user.findFirst({
+          where: {
+            userId: normalizedUserId,
+            traderId: traderInput,
+            deletedAt: null
+          },
+          select: candidateSelect
+        })
+      : null
+
+    // For the standard Trader ID login flow, prefer the exact trader-scoped user
+    // lookup first. Fall back to the broader scan only to preserve older trader-name
+    // matching behavior.
+    const candidates = exactTraderCandidate
+      ? [exactTraderCandidate]
+      : await prisma.user.findMany({
+          where: {
+            userId: normalizedUserId,
+            deletedAt: null
+          },
+          select: candidateSelect
+        })
 
     if (candidates.length === 0) {
       return {

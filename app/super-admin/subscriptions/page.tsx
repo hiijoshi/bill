@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation'
 
 import SuperAdminTraderSubscriptionsClient from '@/app/super-admin/subscriptions/SubscriptionsClient'
 import { prisma } from '@/lib/prisma'
-import { getSession } from '@/lib/session'
+import { resolveServerAuth } from '@/lib/server-auth'
 import { getSuperAdminSubscriptionBootstrap } from '@/lib/super-admin-subscription-data'
 
 interface SuperAdminTraderSubscriptionsPageProps {
@@ -14,8 +14,8 @@ interface SuperAdminTraderSubscriptionsPageProps {
 export default async function SuperAdminTraderSubscriptionsPage({
   searchParams
 }: SuperAdminTraderSubscriptionsPageProps) {
-  const session = await getSession('super_admin')
-  if (!session || session.role?.toLowerCase().replace(/\s+/g, '_') !== 'super_admin') {
+  const resolved = await resolveServerAuth({ namespace: 'super_admin', allowedRoles: ['super_admin'] })
+  if (!resolved) {
     redirect('/super-admin/login')
   }
 
