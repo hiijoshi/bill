@@ -4,6 +4,7 @@ import { setSession, clearSession } from '@/lib/session'
 import { getRequestIp } from '@/lib/api-security'
 import { env } from '@/lib/config'
 import { prisma } from '@/lib/prisma'
+import { shouldUseSecureCookies } from '@/lib/request-cookie-security'
 import { getSessionCookieNameCandidates } from '@/lib/session-cookies'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { getSupabaseClaimsFromRequest, hasSupabaseAppContext } from '@/lib/supabase/auth-bridge'
@@ -38,6 +39,7 @@ export async function POST(request: NextRequest) {
     }
 
     const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+    const secureCookies = shouldUseSecureCookies(request)
     let payload = null as ReturnType<typeof verifyRefreshTokenWithMetadata>
 
     // Prefer the cloud session when it is available, but never make it a hard
@@ -128,7 +130,7 @@ export async function POST(request: NextRequest) {
       success: true,
       token: newAccessToken
     })
-    await setSession(newAccessToken, nextRefreshToken, response, 'app', scopeSource)
+    await setSession(newAccessToken, nextRefreshToken, response, 'app', scopeSource, secureCookies)
     return response
   } catch (error) {
     void error

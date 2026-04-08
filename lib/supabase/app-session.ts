@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server'
 
 import { getSupabaseClaimsFromRequest, hasSupabaseAppContext, type SupabaseAppClaims } from '@/lib/supabase/auth-bridge'
 import { getCompanyCookieName, getCompanyCookieNameCandidates } from '@/lib/session-cookies'
-import { env } from '@/lib/config'
+import { shouldUseSecureCookies } from '@/lib/request-cookie-security'
 
 export type SupabaseProfileRow = {
   id: string
@@ -213,10 +213,10 @@ export async function resolveSupabaseAppSession(
   }
 }
 
-export function getAppCompanyCookieOptions() {
+export function getAppCompanyCookieOptions(request?: Pick<NextRequest, 'headers' | 'nextUrl'> | null) {
   return {
     httpOnly: true as const,
-    secure: env.NODE_ENV === 'production',
+    secure: shouldUseSecureCookies(request),
     sameSite: 'strict' as const,
     path: '/',
     priority: 'high' as const

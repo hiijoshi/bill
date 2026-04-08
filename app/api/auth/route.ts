@@ -15,6 +15,7 @@ import { getCompanyCookieName } from '@/lib/session-cookies'
 import { resolveFirstAccessibleAppRoute } from '@/lib/app-default-route'
 import { loadPermissionAccessForCompany } from '@/lib/permission-access'
 import { isPrismaSchemaMismatchError } from '@/lib/prisma-schema-guard'
+import { shouldUseSecureCookies } from '@/lib/request-cookie-security'
 
 // Simple in-memory rate limiting store
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
@@ -355,6 +356,7 @@ export async function POST(request: NextRequest) {
     }
 
     const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+    const secureCookies = shouldUseSecureCookies(request)
     let preferredCompanyId = authResult.company?.id || null
 
     if (isSupabaseConfigured()) {
@@ -425,13 +427,13 @@ export async function POST(request: NextRequest) {
         })
       )
 
-      await setSession(authResult.token!, authResult.refreshToken, response, 'app', scopeSource)
+      await setSession(authResult.token!, authResult.refreshToken, response, 'app', scopeSource, secureCookies)
 
       if (preferredCompanyId) {
         response.cookies.set(
           getCompanyCookieName(scopeSource),
           preferredCompanyId,
-          getAppCompanyCookieOptions()
+          getAppCompanyCookieOptions(request)
         )
       }
 
@@ -490,13 +492,13 @@ export async function POST(request: NextRequest) {
     })
 
     // Set HttpOnly cookies with both tokens on the response
-    await setSession(authResult.token!, authResult.refreshToken, response, 'app', scopeSource)
+    await setSession(authResult.token!, authResult.refreshToken, response, 'app', scopeSource, secureCookies)
 
     if (preferredCompanyId) {
       response.cookies.set(
         getCompanyCookieName(scopeSource),
         preferredCompanyId,
-        getAppCompanyCookieOptions()
+        getAppCompanyCookieOptions(request)
       )
     }
 

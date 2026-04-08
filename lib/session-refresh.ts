@@ -1,6 +1,7 @@
 import type { NextRequest, NextResponse } from 'next/server'
 import { generateRefreshToken, generateToken, normalizeRole } from '@/lib/auth'
 import { env } from '@/lib/config'
+import { shouldUseSecureCookies } from '@/lib/request-cookie-security'
 import { setSession } from '@/lib/session'
 import type { SessionNamespace } from '@/lib/session-cookies'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
@@ -79,7 +80,14 @@ export async function refreshUserSessionAfterMutation(params: {
       ? generateRefreshToken(tokenPayload, SUPER_ADMIN_REFRESH_EXPIRES_IN)
       : generateRefreshToken(tokenPayload)
 
-  await setSession(accessToken, refreshToken, response, params.namespace, scopeSource)
+  await setSession(
+    accessToken,
+    refreshToken,
+    response,
+    params.namespace,
+    scopeSource,
+    shouldUseSecureCookies(params.request)
+  )
 
   return {
     response,
