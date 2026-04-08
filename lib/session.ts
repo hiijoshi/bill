@@ -43,17 +43,19 @@ export async function setSession(
   refreshToken?: string,
   res?: import('next/server').NextResponse,
   namespace: SessionNamespace = 'app',
-  scopeSource?: string | null
+  scopeSource?: string | null,
+  secureCookies?: boolean
 ) {
   // allow an explicit response object or fall back to the implicit cookie store
   const store = res ? res.cookies : await cookies()
   const resolvedScopeSource = await resolveScopeSource(scopeSource)
   const cookieNames = getSessionCookieNames(namespace, resolvedScopeSource)
+  const secure = secureCookies ?? env.NODE_ENV === 'production'
   
   // Set access token
   store.set(cookieNames.authToken, token, {
     httpOnly: true, // Prevent XSS attacks
-    secure: env.NODE_ENV === 'production',
+    secure,
     sameSite: 'strict',
     path: '/',
     priority: 'high'
@@ -63,7 +65,7 @@ export async function setSession(
   if (refreshToken) {
     store.set(cookieNames.refreshToken, refreshToken, {
       httpOnly: true,
-      secure: env.NODE_ENV === 'production',
+      secure,
       sameSite: 'strict',
       path: '/',
       priority: 'high'
@@ -73,7 +75,7 @@ export async function setSession(
   // Double-submit CSRF token cookie for mutating cookie-auth API calls.
   store.set(cookieNames.csrfToken, randomBytes(24).toString('hex'), {
     httpOnly: false,
-    secure: env.NODE_ENV === 'production',
+    secure,
     sameSite: 'strict',
     path: '/',
     priority: 'high'

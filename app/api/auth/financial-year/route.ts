@@ -84,17 +84,17 @@ export async function POST(request: NextRequest) {
     const cookieName = getFinancialYearCookieName(scopeSource)
     if (selectedFinancialYear) {
       response.cookies.set(cookieName, selectedFinancialYear.id, {
-        ...getAppCompanyCookieOptions()
+        ...getAppCompanyCookieOptions(request)
       })
     } else {
       response.cookies.set(cookieName, '', {
-        ...getAppCompanyCookieOptions(),
+        ...getAppCompanyCookieOptions(request),
         maxAge: 0
       })
       for (const candidate of getFinancialYearCookieNameCandidates(scopeSource)) {
         if (candidate === cookieName) continue
         response.cookies.set(candidate, '', {
-          ...getAppCompanyCookieOptions(),
+          ...getAppCompanyCookieOptions(request),
           maxAge: 0
         })
       }

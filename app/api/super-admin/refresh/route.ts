@@ -3,6 +3,7 @@ import { verifyRefreshTokenWithMetadata, generateRefreshToken, generateToken, no
 import { setSession, clearSession } from '@/lib/session'
 import { getRequestIp } from '@/lib/api-security'
 import { prisma } from '@/lib/prisma'
+import { shouldUseSecureCookies } from '@/lib/request-cookie-security'
 import { getSessionCookieNameCandidates } from '@/lib/session-cookies'
 import { env } from '@/lib/config'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
@@ -43,6 +44,7 @@ export async function POST(request: NextRequest) {
     }
 
     const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
+    const secureCookies = shouldUseSecureCookies(request)
 
     if (isSupabaseConfigured()) {
       const supabaseContext = await getSupabaseClaimsFromRequest(request)
@@ -119,7 +121,7 @@ export async function POST(request: NextRequest) {
           token: newAccessToken
         })
         response = supabaseContext.applyCookies(response)
-        await setSession(newAccessToken, nextRefreshToken, response, 'super_admin', scopeSource)
+        await setSession(newAccessToken, nextRefreshToken, response, 'super_admin', scopeSource, secureCookies)
         return response
       }
     }
@@ -201,7 +203,7 @@ export async function POST(request: NextRequest) {
       success: true,
       token: newAccessToken
     })
-    await setSession(newAccessToken, nextRefreshToken, response, 'super_admin', scopeSource)
+    await setSession(newAccessToken, nextRefreshToken, response, 'super_admin', scopeSource, secureCookies)
     return response
   } catch (error) {
     void error

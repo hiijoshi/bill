@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { setSession } from '@/lib/session'
 import { generateRefreshToken, generateToken, normalizeRole } from '@/lib/auth'
 import { env } from '@/lib/config'
+import { shouldUseSecureCookies } from '@/lib/request-cookie-security'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { createSupabaseRouteClient } from '@/lib/supabase/route'
 import { ensureSupabaseIdentityForLegacyUser, loadLegacyUserForSupabaseSync } from '@/lib/supabase/legacy-user-sync'
@@ -154,7 +155,14 @@ export async function POST(request: NextRequest) {
       response = routeClient.applyCookies(response)
     }
 
-    await setSession(token, refreshToken, response, 'super_admin', requestHost)
+    await setSession(
+      token,
+      refreshToken,
+      response,
+      'super_admin',
+      requestHost,
+      shouldUseSecureCookies(request)
+    )
     return response
   } catch (error) {
     return NextResponse.json(

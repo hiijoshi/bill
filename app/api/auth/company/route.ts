@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
       response.cookies.set(
         supabaseSession.companyCookieName,
         company.id,
-        getAppCompanyCookieOptions()
+        getAppCompanyCookieOptions(request)
       )
 
       return response
@@ -192,7 +192,7 @@ export async function POST(request: NextRequest) {
     })
 
     response.cookies.set(getCompanyCookieName(scopeSource), company.id, {
-      ...getAppCompanyCookieOptions()
+      ...getAppCompanyCookieOptions(request)
     })
 
     return response
