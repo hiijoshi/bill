@@ -1,14 +1,17 @@
 import { redirect } from 'next/navigation'
-import { getSession } from '@/lib/session'
+import { resolveServerAuth } from '@/lib/server-auth'
 
 export default async function MasterLandingPage() {
-  const superAdminSession = await getSession('super_admin')
-  if (superAdminSession?.role?.toLowerCase().replace(/\s+/g, '_') === 'super_admin') {
+  const [superAdminAuth, appAuth] = await Promise.all([
+    resolveServerAuth({ namespace: 'super_admin' }),
+    resolveServerAuth({ namespace: 'app' })
+  ])
+
+  if (superAdminAuth) {
     redirect('/super-admin/masters')
   }
 
-  const appSession = await getSession()
-  if (appSession) {
+  if (appAuth) {
     redirect('/master/product')
   }
 

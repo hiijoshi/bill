@@ -5,6 +5,8 @@ import { getRequestIp } from '@/lib/api-security'
 import { env } from '@/lib/config'
 import { prisma } from '@/lib/prisma'
 import { getSessionCookieNameCandidates } from '@/lib/session-cookies'
+import { isSupabaseConfigured } from '@/lib/supabase/client'
+import { getSupabaseClaimsFromRequest, hasSupabaseAppContext } from '@/lib/supabase/auth-bridge'
 
 const refreshRateLimit = new Map<string, { count: number; resetTime: number }>()
 const ENABLE_REFRESH_RATE_LIMIT = env.NODE_ENV === 'production'
@@ -36,20 +38,46 @@ export async function POST(request: NextRequest) {
     }
 
     const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
-    const refreshToken =
-      getSessionCookieNameCandidates('app', scopeSource)
-        .map((cookieNames) => request.cookies.get(cookieNames.refreshToken)?.value)
-        .find((value): value is string => Boolean(value)) || null
+    let payload = null as ReturnType<typeof verifyRefreshTokenWithMetadata>
 
-    if (!refreshToken) {
-      return NextResponse.json({ error: 'No refresh token provided' }, { status: 401 })
+    // Prefer the cloud session when it is available, but never make it a hard
+    // requirement for refreshing an otherwise-valid legacy ERP session.
+    if (isSupabaseConfigured()) {
+      const supabaseContext = await getSupabaseClaimsFromRequest(request)
+      if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
+        payload = {
+          userId:
+            (typeof supabaseContext.claims.user_code === 'string' && supabaseContext.claims.user_code.trim()) ||
+            supabaseContext.claims.user_db_id,
+          traderId: supabaseContext.claims.trader_id,
+          name: undefined,
+          role: normalizeRole(supabaseContext.claims.app_role) || undefined,
+          userDbId:
+            typeof supabaseContext.claims.user_db_id === 'string'
+              ? supabaseContext.claims.user_db_id
+              : null,
+          iat: typeof supabaseContext.claims.iat === 'number' ? supabaseContext.claims.iat : undefined,
+          exp: typeof supabaseContext.claims.exp === 'number' ? supabaseContext.claims.exp : undefined
+        }
+      }
     }
 
-    const payload = verifyRefreshTokenWithMetadata(refreshToken)
     if (!payload) {
-      const response = NextResponse.json({ error: 'Invalid or expired refresh token' }, { status: 401 })
-      await clearSession(response, 'app', scopeSource)
-      return response
+      const refreshToken =
+        getSessionCookieNameCandidates('app', scopeSource)
+          .map((cookieNames) => request.cookies.get(cookieNames.refreshToken)?.value)
+          .find((value): value is string => Boolean(value)) || null
+
+      if (!refreshToken) {
+        return NextResponse.json({ error: 'No refresh token provided' }, { status: 401 })
+      }
+
+      payload = verifyRefreshTokenWithMetadata(refreshToken)
+      if (!payload) {
+        const response = NextResponse.json({ error: 'Invalid or expired refresh token' }, { status: 401 })
+        await clearSession(response, 'app', scopeSource)
+        return response
+      }
     }
 
     const user = await prisma.user.findFirst({

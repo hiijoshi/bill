@@ -109,8 +109,12 @@ export function buildFinancialYearLabel(startYear: number): string {
 
 export function getFinancialYearWindowFromStartYear(startYear: number): DateSpan {
   const normalizedStartYear = Math.floor(Number(startYear || 0))
-  const startDate = new Date(normalizedStartYear, FINANCIAL_YEAR_START_MONTH_INDEX, FINANCIAL_YEAR_START_DAY, 0, 0, 0, 0)
-  const endDate = new Date(normalizedStartYear + 1, FINANCIAL_YEAR_START_MONTH_INDEX, 0, 23, 59, 59, 999)
+  const startDate = new Date(
+    Date.UTC(normalizedStartYear, FINANCIAL_YEAR_START_MONTH_INDEX, FINANCIAL_YEAR_START_DAY, 0, 0, 0, 0)
+  )
+  const endDate = new Date(
+    Date.UTC(normalizedStartYear + 1, FINANCIAL_YEAR_START_MONTH_INDEX, 0, 23, 59, 59, 999)
+  )
 
   return {
     startYear: normalizedStartYear,
@@ -124,7 +128,7 @@ export function getFinancialYearWindowFromStartYear(startYear: number): DateSpan
 export function getFinancialYearWindowForDate(date: Date): DateSpan {
   const parsed = new Date(date)
   const startYear =
-    parsed.getMonth() >= FINANCIAL_YEAR_START_MONTH_INDEX ? parsed.getFullYear() : parsed.getFullYear() - 1
+    parsed.getUTCMonth() >= FINANCIAL_YEAR_START_MONTH_INDEX ? parsed.getUTCFullYear() : parsed.getUTCFullYear() - 1
   return getFinancialYearWindowFromStartYear(startYear)
 }
 

@@ -46,86 +46,82 @@ export async function POST(request: NextRequest) {
 
     if (isSupabaseConfigured()) {
       const supabaseContext = await getSupabaseClaimsFromRequest(request)
-      if (!supabaseContext || !hasSupabaseAppContext(supabaseContext.claims)) {
-        const response = NextResponse.json({ error: 'Invalid or expired session' }, { status: 401 })
-        await clearSession(response, 'super_admin', scopeSource)
-        return response
-      }
+      if (supabaseContext && hasSupabaseAppContext(supabaseContext.claims)) {
+        const supabaseUserId =
+          (typeof supabaseContext.claims.user_code === 'string' && supabaseContext.claims.user_code.trim()) ||
+          supabaseContext.claims.user_db_id
 
-      const supabaseUserId =
-        (typeof supabaseContext.claims.user_code === 'string' && supabaseContext.claims.user_code.trim()) ||
-        supabaseContext.claims.user_db_id
-
-      const user = await prisma.user.findFirst({
-        where: {
-          ...(typeof supabaseContext.claims.user_db_id === 'string'
-            ? { id: supabaseContext.claims.user_db_id }
-            : { userId: supabaseUserId, traderId: supabaseContext.claims.trader_id }),
-          deletedAt: null
-        },
-        select: {
-          id: true,
-          userId: true,
-          traderId: true,
-          name: true,
-          role: true,
-          locked: true,
-          updatedAt: true,
-          trader: {
-            select: {
-              locked: true,
-              deletedAt: true
-            }
+        const user = await prisma.user.findFirst({
+          where: {
+            ...(typeof supabaseContext.claims.user_db_id === 'string'
+              ? { id: supabaseContext.claims.user_db_id }
+              : { userId: supabaseUserId, traderId: supabaseContext.claims.trader_id }),
+            deletedAt: null
           },
-          company: {
-            select: {
-              locked: true,
-              deletedAt: true
+          select: {
+            id: true,
+            userId: true,
+            traderId: true,
+            name: true,
+            role: true,
+            locked: true,
+            updatedAt: true,
+            trader: {
+              select: {
+                locked: true,
+                deletedAt: true
+              }
+            },
+            company: {
+              select: {
+                locked: true,
+                deletedAt: true
+              }
             }
           }
+        })
+
+        if (
+          user &&
+          typeof supabaseContext.claims.iat === 'number' &&
+          user.updatedAt.getTime() > supabaseContext.claims.iat * 1000 + 1000
+        ) {
+          const response = NextResponse.json({ error: 'Session expired due to account changes' }, { status: 401 })
+          await clearSession(response, 'super_admin', scopeSource)
+          return supabaseContext.applyCookies(response)
         }
-      })
 
-      if (
-        user &&
-        typeof supabaseContext.claims.iat === 'number' &&
-        user.updatedAt.getTime() > supabaseContext.claims.iat * 1000 + 1000
-      ) {
-        const response = NextResponse.json({ error: 'Session expired due to account changes' }, { status: 401 })
-        await clearSession(response, 'super_admin', scopeSource)
-        return supabaseContext.applyCookies(response)
-      }
+        if (
+          !user ||
+          normalizeRole(user.role) !== 'super_admin' ||
+          user.locked ||
+          user.trader?.locked ||
+          user.trader?.deletedAt ||
+          user.company?.locked ||
+          user.company?.deletedAt
+        ) {
+          const response = NextResponse.json({ error: 'Account is locked or inactive' }, { status: 403 })
+          await clearSession(response, 'super_admin', scopeSource)
+          return supabaseContext.applyCookies(response)
+        }
 
-      if (
-        !user ||
-        normalizeRole(user.role) !== 'super_admin' ||
-        user.locked ||
-        user.trader?.locked ||
-        user.trader?.deletedAt ||
-        user.company?.locked ||
-        user.company?.deletedAt
-      ) {
-        const response = NextResponse.json({ error: 'Account is locked or inactive' }, { status: 403 })
-        await clearSession(response, 'super_admin', scopeSource)
-        return supabaseContext.applyCookies(response)
+        const refreshedPayload = {
+          userId: user.userId,
+          traderId: user.traderId,
+          name: user.name || undefined,
+          role: normalizeRole(user.role) || undefined,
+          userDbId: user.id
+        }
+        const newAccessToken = generateToken(refreshedPayload, SUPER_ADMIN_ACCESS_EXPIRES_IN)
+        const nextRefreshToken = generateRefreshToken(refreshedPayload, SUPER_ADMIN_REFRESH_EXPIRES_IN)
+        let response = NextResponse.json({
+          success: true,
+          token: newAccessToken
+        })
+        response = supabaseContext.applyCookies(response)
+        await setSession(newAccessToken, nextRefreshToken, response, 'super_admin', scopeSource)
+        return response
       }
-
-      const refreshedPayload = {
-        userId: user.userId,
-        traderId: user.traderId,
-        name: user.name || undefined,
-        role: normalizeRole(user.role) || undefined,
-        userDbId: user.id
-      }
-      const newAccessToken = generateToken(refreshedPayload, SUPER_ADMIN_ACCESS_EXPIRES_IN)
-      const nextRefreshToken = generateRefreshToken(refreshedPayload, SUPER_ADMIN_REFRESH_EXPIRES_IN)
-      let response = NextResponse.json({
-        success: true,
-        token: newAccessToken
-      })
-      response = supabaseContext.applyCookies(response)
-      await setSession(newAccessToken, nextRefreshToken, response, 'super_admin', scopeSource)
-      return response
     }
 
     const refreshToken =

@@ -44,6 +44,7 @@ type FinancialYearSummaryLike = {
 const OVERVIEW_CACHE_TTL_MS = 15_000
 const RECENT_BILLS_LIMIT = 8
 const TREND_WINDOW_DAYS = 7
+const LIST_SSR_LIMIT = 50
 
 const emptyDashboardOverviewPayload = {
   purchaseBills: [],
@@ -257,6 +258,7 @@ async function loadDirectDashboardOverviewPayload(params: {
   dateFrom: Date | null
   dateTo: Date | null
   financialYear: FinancialYearSummaryLike | null
+  mode?: 'critical' | 'full'
 }) {
   const {
     purchaseCompanyIds,
@@ -326,6 +328,7 @@ async function loadDirectDashboardOverviewPayload(params: {
   if (params.dateFrom && trendStart.getTime() < params.dateFrom.getTime()) {
     trendStart.setTime(params.dateFrom.getTime())
   }
+  const includeAnalytics = params.mode !== 'critical'
   const needsCompanyBreakdown = params.companies.length > 1
 
   const [
@@ -452,7 +455,7 @@ async function loadDirectDashboardOverviewPayload(params: {
     productCompanyIds.length > 0 ? prisma.product.count({ where: { companyId: { in: productCompanyIds } } }) : Promise.resolve(0),
     partyCompanyIds.length > 0 ? prisma.party.count({ where: { companyId: { in: partyCompanyIds } } }) : Promise.resolve(0),
     unitCompanyIds.length > 0 ? prisma.unit.count({ where: { companyId: { in: unitCompanyIds } } }) : Promise.resolve(0),
-    stockCompanyIds.length > 0
+    includeAnalytics && stockCompanyIds.length > 0
       ? prisma.stockLedger.count({
           where: {
             companyId: { in: stockCompanyIds },
@@ -487,7 +490,7 @@ async function loadDirectDashboardOverviewPayload(params: {
           }
         })
       : Promise.resolve([]),
-    needsCompanyBreakdown && purchaseWhere
+    includeAnalytics && needsCompanyBreakdown && purchaseWhere
       ? prisma.purchaseBill.groupBy({
           by: ['companyId'],
           where: purchaseWhere,
@@ -495,7 +498,7 @@ async function loadDirectDashboardOverviewPayload(params: {
           _sum: { totalAmount: true }
         })
       : Promise.resolve([]),
-    needsCompanyBreakdown && salesWhere
+    includeAnalytics && needsCompanyBreakdown && salesWhere
       ? prisma.salesBill.groupBy({
           by: ['companyId'],
           where: salesWhere,
@@ -503,14 +506,14 @@ async function loadDirectDashboardOverviewPayload(params: {
           _sum: { totalAmount: true }
         })
       : Promise.resolve([]),
-    needsCompanyBreakdown && paymentWhere
+    includeAnalytics && needsCompanyBreakdown && paymentWhere
       ? prisma.payment.groupBy({
           by: ['companyId', 'billType'],
           where: paymentWhere,
           _sum: { amount: true }
         })
       : Promise.resolve([]),
-    purchaseWhere
+    includeAnalytics && purchaseWhere
       ? prisma.purchaseBill.findMany({
           where: {
             ...purchaseWhere,
@@ -525,7 +528,7 @@ async function loadDirectDashboardOverviewPayload(params: {
           }
         })
       : Promise.resolve([]),
-    salesWhere
+    includeAnalytics && salesWhere
       ? prisma.salesBill.findMany({
           where: {
             ...salesWhere,
@@ -540,7 +543,7 @@ async function loadDirectDashboardOverviewPayload(params: {
           }
         })
       : Promise.resolve([]),
-    paymentWhere
+    includeAnalytics && paymentWhere
       ? prisma.payment.findMany({
           where: {
             ...paymentWhere,
@@ -557,13 +560,15 @@ async function loadDirectDashboardOverviewPayload(params: {
       : Promise.resolve([])
   ])
 
-  const lowStockRows = stockBalances.filter((row) => toNumber(row._sum.qtyIn) - toNumber(row._sum.qtyOut) <= 0)
+  const lowStockRows = includeAnalytics
+    ? stockBalances.filter((row) => toNumber(row._sum.qtyIn) - toNumber(row._sum.qtyOut) <= 0)
+    : []
   const lowStockPreviewRows = [...lowStockRows]
     .sort((left, right) => (toNumber(left._sum.qtyIn) - toNumber(left._sum.qtyOut)) - (toNumber(right._sum.qtyIn) - toNumber(right._sum.qtyOut)))
     .slice(0, 5)
   const lowStockProductIds = lowStockPreviewRows.map((row) => row.productId)
   const lowStockProducts =
-    lowStockProductIds.length > 0
+    includeAnalytics && lowStockProductIds.length > 0
       ? await prisma.product.findMany({
           where: { id: { in: lowStockProductIds } },
           select: {
@@ -596,7 +601,7 @@ async function loadDirectDashboardOverviewPayload(params: {
     map.set(row.companyId, current)
     return map
   }, new Map<string, typeof paymentsByCompany>())
-  const companyPerformance = needsCompanyBreakdown
+  const companyPerformance = includeAnalytics && needsCompanyBreakdown
     ? Array.from(
         params.companies
           .reduce((map, company) => {
@@ -648,7 +653,7 @@ async function loadDirectDashboardOverviewPayload(params: {
           }
         })
         .sort((left, right) => right.salesTotal - left.salesTotal)
-    : params.companies[0]
+    : includeAnalytics && params.companies[0]
       ? [
           {
             id: params.companies[0].id,
@@ -706,11 +711,13 @@ async function loadDirectDashboardOverviewPayload(params: {
       }
     },
     companyPerformance,
-    trendData: buildTrendRows({
-      purchaseRows: purchaseTrendRows,
-      salesRows: salesTrendRows,
-      paymentRows: paymentTrendRows
-    }),
+    trendData: includeAnalytics
+      ? buildTrendRows({
+          purchaseRows: purchaseTrendRows,
+          salesRows: salesTrendRows,
+          paymentRows: paymentTrendRows
+        })
+      : [],
     activeFinancialYear: params.financialYear
   }
 }
@@ -783,15 +790,104 @@ export async function loadServerDashboardOverview(args: {
             id: effectiveFinancialYear.id,
             label: effectiveFinancialYear.label
           }
-        : null
+        : null,
+      mode: 'critical'
     })
   )
 }
 
-export async function loadServerPurchaseListData(companyId: string) {
+export async function loadServerPurchaseListData(
+  companyId: string,
+  financialYearPayload?: ClientFinancialYearPayload | null,
+  limit = LIST_SSR_LIMIT
+) {
+  const range = getServerFinancialYearRange(financialYearPayload)
   const [purchaseBills, specialPurchaseBills] = await Promise.all([
-    fetchInternalApiJson(`/api/purchase-bills?companyId=${encodeURIComponent(companyId)}&includeCancelled=true&view=list`),
-    fetchInternalApiJson(`/api/special-purchase-bills?companyId=${encodeURIComponent(companyId)}&includeCancelled=true`)
+    prisma.purchaseBill.findMany({
+      where: {
+        companyId,
+        ...(range.dateFrom || range.dateTo
+          ? {
+              billDate: {
+                ...(range.dateFrom ? { gte: range.dateFrom } : {}),
+                ...(range.dateTo ? { lte: range.dateTo } : {})
+              }
+            }
+          : {})
+      },
+      select: {
+        id: true,
+        billNo: true,
+        billDate: true,
+        totalAmount: true,
+        paidAmount: true,
+        balanceAmount: true,
+        status: true,
+        farmerNameSnapshot: true,
+        farmerAddressSnapshot: true,
+        krashakAnubandhSnapshot: true,
+        farmer: {
+          select: {
+            id: true,
+            name: true
+          }
+        },
+        purchaseItems: {
+          select: {
+            bags: true,
+            qty: true,
+            rate: true,
+            hammali: true,
+            amount: true,
+            markaNo: true
+          }
+        }
+      },
+      orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }],
+      take: limit
+    }),
+    prisma.specialPurchaseBill.findMany({
+      where: {
+        companyId,
+        ...(range.dateFrom || range.dateTo
+          ? {
+              billDate: {
+                ...(range.dateFrom ? { gte: range.dateFrom } : {}),
+                ...(range.dateTo ? { lte: range.dateTo } : {})
+              }
+            }
+          : {})
+      },
+      select: {
+        id: true,
+        supplierInvoiceNo: true,
+        billDate: true,
+        totalAmount: true,
+        paidAmount: true,
+        balanceAmount: true,
+        status: true,
+        supplier: {
+          select: {
+            id: true,
+            name: true,
+            address: true,
+            gstNumber: true
+          }
+        },
+        specialPurchaseItems: {
+          select: {
+            noOfBags: true,
+            weight: true,
+            rate: true,
+            netAmount: true,
+            otherAmount: true,
+            grossAmount: true
+          }
+        }
+      },
+      orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }],
+      take: limit
+    })
   ])
 
   return {
@@ -800,8 +896,65 @@ export async function loadServerPurchaseListData(companyId: string) {
   }
 }
 
-export async function loadServerSalesListData(companyId: string) {
-  return fetchInternalApiJson(`/api/sales-bills?companyId=${encodeURIComponent(companyId)}&includeCancelled=true&view=list`)
+export async function loadServerSalesListData(
+  companyId: string,
+  financialYearPayload?: ClientFinancialYearPayload | null,
+  limit = LIST_SSR_LIMIT
+) {
+  const range = getServerFinancialYearRange(financialYearPayload)
+  return prisma.salesBill.findMany({
+    where: {
+      companyId,
+      ...(range.dateFrom || range.dateTo
+        ? {
+            billDate: {
+              ...(range.dateFrom ? { gte: range.dateFrom } : {}),
+              ...(range.dateTo ? { lte: range.dateTo } : {})
+            }
+          }
+        : {})
+    },
+    select: {
+      id: true,
+      billNo: true,
+      billDate: true,
+      totalAmount: true,
+      receivedAmount: true,
+      balanceAmount: true,
+      status: true,
+      party: {
+        select: {
+          name: true,
+          address: true,
+          phone1: true
+        }
+      },
+      salesItems: {
+        select: {
+          weight: true,
+          bags: true,
+          rate: true,
+          amount: true,
+          product: {
+            select: {
+              name: true
+            }
+          }
+        }
+      },
+      transportBills: {
+        select: {
+          transportName: true,
+          lorryNo: true,
+          freightAmount: true,
+          otherAmount: true,
+          insuranceAmount: true
+        }
+      }
+    },
+    orderBy: [{ billDate: 'desc' }, { createdAt: 'desc' }],
+    take: limit
+  })
 }
 
 export async function loadServerPaymentWorkspace(

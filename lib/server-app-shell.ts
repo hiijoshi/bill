@@ -13,11 +13,11 @@ import { getAccessibleCompanies, normalizeAppRole, normalizeId } from '@/lib/api
 import { getFinancialYearContext } from '@/lib/financial-years'
 import { prisma } from '@/lib/prisma'
 import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
-import { getSession } from '@/lib/session'
 import {
   getCompanyCookieNameCandidates,
   getFinancialYearCookieNameCandidates
 } from '@/lib/session-cookies'
+import { resolveServerAuth } from '@/lib/server-auth'
 import { getTraderSubscriptionEntitlement } from '@/lib/subscription-core'
 import { ensureSubscriptionManagementSchemaReady } from '@/lib/subscription-schema'
 import { getTraderDataLifecycleSummary } from '@/lib/trader-retention'
@@ -263,48 +263,15 @@ export async function loadServerAppShellBootstrap(options: {
   searchParams?: Record<string, string | string[] | undefined>
   companyId?: string | null
 } = {}): Promise<ServerAppShellBootstrap | null> {
-  const session = await getSession('app')
-  if (!session) {
+  const resolved = await resolveServerAuth({ namespace: 'app' })
+  if (!resolved) {
     return null
   }
-
-  const user = await prisma.user.findFirst({
-    where: {
-      userId: session.userId,
-      traderId: session.traderId,
-      deletedAt: null
-    },
-    select: {
-      id: true,
-      userId: true,
-      traderId: true,
-      name: true,
-      role: true,
-      companyId: true,
-      locked: true,
-      trader: {
-        select: {
-          id: true,
-          name: true,
-          locked: true,
-          deletedAt: true,
-          maxCompanies: true,
-          maxUsers: true
-        }
-      }
-    }
-  })
-
-  if (!user || user.locked || user.trader?.locked || user.trader?.deletedAt) {
-    return null
-  }
+  const user = resolved.user
 
   const auth: RequestAuthContext = {
-    userId: user.userId,
-    traderId: user.traderId,
-    role: normalizeAppRole(user.role || session.role),
-    companyId: user.companyId || null,
-    userDbId: user.id
+    ...resolved.auth,
+    role: normalizeAppRole(user.role || resolved.auth.role)
   }
 
   const companies = await getAccessibleCompanies(auth)
