@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSession } from '@/lib/session'
 import { prisma } from '@/lib/prisma'
 import { getAccessibleCompanies, normalizeAppRole } from '@/lib/api-security'
 import { getCompanyCookieName, getCompanyCookieNameCandidates } from '@/lib/session-cookies'
 import { getAppCompanyCookieOptions, resolveSupabaseAppSession } from '@/lib/supabase/app-session'
+import { resolveServerAuth } from '@/lib/server-auth'
+import { resolveServerAccessibleCompanies } from '@/lib/server-app-shell'
 
 export async function GET(request: NextRequest) {
   try {
@@ -22,47 +23,19 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const session = await getSession()
-    if (!session) {
+    const resolved = await resolveServerAuth({ namespace: 'app' })
+    if (!resolved) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const authUser = await prisma.user.findFirst({
-      where: {
-        userId: session.userId,
-        traderId: session.traderId,
-        deletedAt: null
+    const role = normalizeAppRole(resolved.user.role || resolved.auth.role)
+    const { activeCompany: company } = await resolveServerAccessibleCompanies({
+      auth: {
+        ...resolved.auth,
+        role
       },
-      select: {
-        id: true,
-        role: true,
-        companyId: true
-      }
+      assignedCompanyId: resolved.user.companyId
     })
-
-    if (!authUser) {
-      return NextResponse.json({ error: 'Invalid session user' }, { status: 401 })
-    }
-
-    const role = normalizeAppRole(authUser.role || session.role)
-    const accessibleCompanies = await getAccessibleCompanies({
-      userId: session.userId,
-      traderId: session.traderId,
-      role,
-      companyId: authUser.companyId,
-      userDbId: authUser.id
-    })
-    const scopeSource = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host
-    const cookieCompanyId =
-      getCompanyCookieNameCandidates(scopeSource)
-        .map((cookieName) => request.cookies.get(cookieName)?.value?.trim() || '')
-        .find((value) => value.length > 0) || ''
-
-    const company =
-      accessibleCompanies.find((entry) => entry.id === cookieCompanyId && !entry.locked) ||
-      accessibleCompanies.find((entry) => entry.id === authUser.companyId && !entry.locked) ||
-      accessibleCompanies.find((entry) => !entry.locked) ||
-      null
 
     return NextResponse.json({
       success: true,
@@ -134,8 +107,8 @@ export async function POST(request: NextRequest) {
       return response
     }
 
-    const session = await getSession()
-    if (!session) {
+    const resolved = await resolveServerAuth({ namespace: 'app' })
+    if (!resolved) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -145,13 +118,14 @@ export async function POST(request: NextRequest) {
 
     const authUser = await prisma.user.findFirst({
       where: {
-        userId: session.userId,
-        traderId: session.traderId,
+        id: resolved.user.id,
         deletedAt: null
       },
       select: {
         id: true,
         role: true,
+        userId: true,
+        traderId: true,
         companyId: true,
         locked: true,
         trader: {
@@ -175,12 +149,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Account is locked or inactive' }, { status: 403 })
     }
 
-    const role = normalizeAppRole(authUser.role || session.role)
+    const role = normalizeAppRole(authUser.role || resolved.auth.role)
     const company = (
       await getAccessibleCompanies(
         {
-          userId: session.userId,
-          traderId: session.traderId,
+          userId: authUser.userId,
+          traderId: authUser.traderId,
           role,
           companyId: authUser.companyId,
           userDbId: authUser.id

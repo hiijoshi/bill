@@ -64,11 +64,6 @@ function LoginPageContent() {
   }, [])
 
   useEffect(() => {
-    router.prefetch('/main/dashboard')
-    router.prefetch('/main/profile')
-  }, [router])
-
-  useEffect(() => {
     const queryTraderId = searchParams.get('traderId')?.trim() || ''
     const queryUserId = searchParams.get('userId')?.trim() || ''
     const hasPasswordParam = searchParams.has('password')
@@ -212,9 +207,12 @@ function LoginPageContent() {
       if (!fallbackCompanyId) {
         didStartNavigation = true
         setPhase('redirecting')
-        router.prefetch('/main/profile')
         await waitForNextPaint()
-        router.replace('/main/profile')
+        if (typeof window !== 'undefined') {
+          window.location.replace('/main/profile')
+        } else {
+          router.replace('/main/profile')
+        }
         return
       }
 
@@ -244,9 +242,12 @@ function LoginPageContent() {
       ).trim() || '/main/dashboard'
       didStartNavigation = true
       setPhase('redirecting')
-      router.prefetch(nextRoute)
       await waitForNextPaint()
-      router.replace(nextRoute)
+      if (typeof window !== 'undefined') {
+        window.location.replace(nextRoute)
+      } else {
+        router.replace(nextRoute)
+      }
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Login failed. Please try again.')
       setPhase('idle')

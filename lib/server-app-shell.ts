@@ -152,6 +152,39 @@ function chooseActiveCompanyId(args: {
   return unlockedCompanies[0]?.id || args.companies[0]?.id || ''
 }
 
+export async function resolveServerAccessibleCompanies(args: {
+  auth: RequestAuthContext
+  requestedCompanyId?: string | null
+  assignedCompanyId?: string | null
+}): Promise<{
+  companies: ShellCompanySummary[]
+  activeCompanyId: string
+  activeCompany: ShellCompanySummary | null
+}> {
+  const companies = await getAccessibleCompanies(args.auth)
+  const normalizedCompanies: ShellCompanySummary[] = companies.map((company) => ({
+    id: company.id,
+    name: company.name,
+    locked: company.locked
+  }))
+
+  const scopeSource = await getScopeSource()
+  const cookieCompanyId = await getCookieValue(getCompanyCookieNameCandidates(scopeSource))
+  const requestedCompanyId = normalizeNullableId(args.requestedCompanyId)
+  const activeCompanyId = chooseActiveCompanyId({
+    companies: normalizedCompanies,
+    requestedCompanyId,
+    cookieCompanyId,
+    assignedCompanyId: normalizeNullableId(args.assignedCompanyId)
+  })
+
+  return {
+    companies: normalizedCompanies,
+    activeCompanyId,
+    activeCompany: normalizedCompanies.find((company) => company.id === activeCompanyId) || null
+  }
+}
+
 async function loadSubscriptionBanner(user: ServerUserRow): Promise<SubscriptionBannerPayload | null> {
   if (!user.trader) {
     return null
@@ -274,23 +307,13 @@ export async function loadServerAppShellBootstrap(options: {
     role: normalizeAppRole(user.role || resolved.auth.role)
   }
 
-  const companies = await getAccessibleCompanies(auth)
-  const normalizedCompanies: ShellCompanySummary[] = companies.map((company) => ({
-    id: company.id,
-    name: company.name,
-    locked: company.locked
-  }))
-
-  const scopeSource = await getScopeSource()
-  const cookieCompanyId = await getCookieValue(getCompanyCookieNameCandidates(scopeSource))
   const requestedCompanyId = normalizeNullableId(options.companyId) || getRequestedCompanyId(options.searchParams)
-  const activeCompanyId = chooseActiveCompanyId({
-    companies: normalizedCompanies,
-    requestedCompanyId,
-    cookieCompanyId,
-    assignedCompanyId: normalizeNullableId(user.companyId)
-  })
-  const activeCompany = normalizedCompanies.find((company) => company.id === activeCompanyId) || null
+  const { companies: normalizedCompanies, activeCompanyId, activeCompany } =
+    await resolveServerAccessibleCompanies({
+      auth,
+      requestedCompanyId,
+      assignedCompanyId: user.companyId
+    })
   const [subscriptionBanner, financialYearPayload] = await Promise.all([
     loadSubscriptionBanner(user),
     loadFinancialYearPayload({
