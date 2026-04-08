@@ -114,13 +114,28 @@ export default async function MainDashboardPage({ searchParams }: PageProps) {
       ? shellBootstrap.activeCompanyId
       : normalizedSelectedCompanyIds[0] || shellBootstrap.activeCompanyId || ''
 
-  const permissionPayload = primaryCompanyId
-    ? await loadPermissionAccessForCompany({
+  const permissionPromise = primaryCompanyId
+    ? loadPermissionAccessForCompany({
         role: shellBootstrap.auth.role,
         userDbId: shellBootstrap.auth.userDbId || null,
         companyId: primaryCompanyId
       })
-    : null
+    : Promise.resolve(null)
+
+  const overviewPromise =
+    normalizedSelectedCompanyIds.length > 0
+      ? loadServerDashboardOverview({
+          auth: shellBootstrap.auth,
+          companies: shellBootstrap.companies,
+          targetCompanyIds: normalizedSelectedCompanyIds,
+          financialYearPayload: shellBootstrap.layoutData.financialYearPayload
+        }).catch(() => null)
+      : Promise.resolve(null)
+
+  const [permissionPayload, overviewPayload] = await Promise.all([
+    permissionPromise,
+    overviewPromise
+  ])
 
   const hasDashboardAccess = permissionPayload
     ? new Set(getReadablePermissionModules(permissionPayload.permissions)).has('DASHBOARD')
@@ -130,10 +145,6 @@ export default async function MainDashboardPage({ searchParams }: PageProps) {
     const nextRoute = resolveFirstAccessibleAppRoute(permissionPayload.permissions, primaryCompanyId)
     redirect(nextRoute.startsWith('/main/dashboard') ? '/main/profile' : nextRoute)
   }
-
-  const overviewPayload = normalizedSelectedCompanyIds.length > 0
-    ? await loadServerDashboardOverview(normalizedSelectedCompanyIds).catch(() => null)
-    : null
 
   return (
     <MainDashboardClient

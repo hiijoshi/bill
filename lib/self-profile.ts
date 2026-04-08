@@ -1,10 +1,9 @@
 import type { RequestAuthContext } from '@/lib/api-security'
-import { normalizeAppRole } from '@/lib/api-security'
 import { prisma } from '@/lib/prisma'
 import { hashPassword, verifyPassword } from '@/lib/auth'
 import { normalizeOptionalString } from '@/lib/api-security'
-import { getSession } from '@/lib/session'
 import type { SessionNamespace } from '@/lib/session-cookies'
+import { resolveServerAuth } from '@/lib/server-auth'
 
 export type SelfProfileUser = {
   id: string
@@ -76,44 +75,12 @@ export async function loadSelfUser(auth: RequestAuthContext) {
 }
 
 export async function loadSelfProfileFromSession(namespace: SessionNamespace): Promise<SelfProfileUser | null> {
-  const session = await getSession(namespace)
-  if (!session) {
+  const resolved = await resolveServerAuth({ namespace })
+  if (!resolved) {
     return null
   }
 
-  const basicUser = await prisma.user.findFirst({
-    where: {
-      userId: session.userId,
-      traderId: session.traderId,
-      deletedAt: null
-    },
-    select: {
-      id: true,
-      userId: true,
-      traderId: true,
-      role: true,
-      companyId: true
-    }
-  })
-
-  if (!basicUser) {
-    return null
-  }
-
-  const auth: RequestAuthContext = {
-    userId: basicUser.userId,
-    traderId: basicUser.traderId,
-    role: normalizeAppRole(basicUser.role || session.role),
-    companyId: basicUser.companyId || null,
-    userDbId: basicUser.id
-  }
-
-  const fullUser = await loadSelfUser(auth)
-  if (!fullUser) {
-    return null
-  }
-
-  return toSelfProfile(fullUser)
+  return toSelfProfile(resolved.user)
 }
 
 export function toSelfProfile(user: SelfProfileSource): SelfProfileUser {

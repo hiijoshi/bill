@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,8 +8,21 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { LoaderMark } from '@/components/loaders/task-loader'
-import { Shield, User, Lock, AlertCircle } from 'lucide-react'
+import { Shield, User, Lock, AlertCircle, Loader2 } from 'lucide-react'
 import { clearClientCache } from '@/lib/client-fetch-cache'
+
+type LoginPhase = 'idle' | 'authenticating' | 'redirecting'
+
+function waitForNextPaint() {
+  return new Promise<void>((resolve) => {
+    if (typeof window === 'undefined') {
+      resolve()
+      return
+    }
+
+    window.requestAnimationFrame(() => resolve())
+  })
+}
 
 export default function SuperAdminLogin() {
   return (
@@ -22,15 +35,24 @@ export default function SuperAdminLogin() {
 function SuperAdminLoginContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [loading, setLoading] = useState(false)
+  const [phase, setPhase] = useState<LoginPhase>('idle')
   const [error, setError] = useState('')
   const [userId, setUserId] = useState('')
   const [password, setPassword] = useState('')
   const [secondSecret, setSecondSecret] = useState('')
+  const loading = phase !== 'idle'
+  const loadingMessage = useMemo(
+    () => (phase === 'redirecting' ? 'Opening the control panel...' : 'Checking super admin credentials...'),
+    [phase]
+  )
 
   useEffect(() => {
     clearClientCache()
   }, [])
+
+  useEffect(() => {
+    router.prefetch('/super-admin/crud')
+  }, [router])
 
   useEffect(() => {
     const queryUserId = searchParams.get('userId')?.trim() || ''
@@ -55,7 +77,8 @@ function SuperAdminLoginContent() {
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setError('')
-    setLoading(true)
+    setPhase('authenticating')
+    let didStartNavigation = false
     
     try {
       clearClientCache()
@@ -77,12 +100,18 @@ function SuperAdminLoginContent() {
         throw new Error(err.error || 'Login failed')
       }
 
+      didStartNavigation = true
+      setPhase('redirecting')
+      router.prefetch('/super-admin/crud')
+      await waitForNextPaint()
       router.replace('/super-admin/crud')
     } catch (err) {
-      
       setError(err instanceof Error ? err.message : 'Login failed')
+      setPhase('idle')
     } finally {
-      setLoading(false)
+      if (!didStartNavigation) {
+        setPhase('idle')
+      }
     }
   }
 
@@ -175,6 +204,19 @@ function SuperAdminLoginContent() {
           </CardContent>
         </Card>
       </div>
+      {loading ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/88 backdrop-blur-sm">
+          <div className="rounded-3xl border border-slate-200 bg-white px-6 py-5 shadow-xl">
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-5 w-5 animate-spin text-slate-800" />
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-slate-900">Signing you in</p>
+                <p className="text-sm text-slate-600">{loadingMessage}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

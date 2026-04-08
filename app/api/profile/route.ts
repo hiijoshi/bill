@@ -1,12 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { prisma } from '@/lib/prisma'
-import { getSession } from '@/lib/session'
 import {
   type AppRole,
   type RequestAuthContext,
-  getRequestAuthContext,
-  normalizeAppRole,
 } from '@/lib/api-security'
 import { invalidateAuthGuardStateForUser } from '@/lib/auth-guard-state'
 import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
@@ -14,6 +10,7 @@ import { refreshUserSessionAfterMutation } from '@/lib/session-refresh'
 import { loadSelfUser, toSelfProfile, updateSelfProfile } from '@/lib/self-profile'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { syncSupabaseForLegacyUserMutationWithTimeout } from '@/lib/supabase/legacy-user-sync'
+import { resolveServerAuth } from '@/lib/server-auth'
 
 const profileUpdateSchema = z
   .object({
@@ -33,57 +30,16 @@ const profileUpdateSchema = z
 const allowedProfileRoles: AppRole[] = ['trader_admin', 'company_admin', 'company_user']
 
 async function resolveProfileAuthContext(request: NextRequest) {
-  const headerAuth = getRequestAuthContext(request)
-  if (headerAuth && allowedProfileRoles.includes(headerAuth.role)) {
-    return { ok: true as const, auth: headerAuth }
-  }
-
-  const session = await getSession('app')
-  if (!session) {
+  void request
+  const resolved = await resolveServerAuth({ namespace: 'app', allowedRoles: allowedProfileRoles })
+  if (!resolved) {
     return {
       ok: false as const,
       response: NextResponse.json({ error: 'Authentication required' }, { status: 401 })
     }
   }
 
-  const user = await prisma.user.findFirst({
-    where: {
-      userId: session.userId,
-      traderId: session.traderId,
-      deletedAt: null
-    },
-    select: {
-      id: true,
-      userId: true,
-      traderId: true,
-      role: true,
-      companyId: true
-    }
-  })
-
-  if (!user) {
-    return {
-      ok: false as const,
-      response: NextResponse.json({ error: 'Authentication required' }, { status: 401 })
-    }
-  }
-
-  const auth: RequestAuthContext = {
-    userId: user.userId,
-    traderId: user.traderId,
-    role: normalizeAppRole(user.role || session.role),
-    companyId: user.companyId || null,
-    userDbId: user.id
-  }
-
-  if (!allowedProfileRoles.includes(auth.role)) {
-    return {
-      ok: false as const,
-      response: NextResponse.json({ error: 'Insufficient privileges' }, { status: 403 })
-    }
-  }
-
-  return { ok: true as const, auth }
+  return { ok: true as const, auth: resolved.auth as RequestAuthContext }
 }
 
 export async function GET(request: NextRequest) {

@@ -1,12 +1,11 @@
 import { redirect } from 'next/navigation'
-import { getSession } from '@/lib/session'
 import SuperAdminOverviewClient from '@/app/super-admin/components/SuperAdminOverviewClient'
 import { loadSuperAdminOverviewData } from '@/lib/server-super-admin-overview'
-import { fetchInternalApiJson } from '@/lib/server-internal-api'
+import { resolveServerAuth } from '@/lib/server-auth'
 
 export default async function SuperAdminDashboardPage() {
-  const session = await getSession('super_admin')
-  if (!session || session.role?.toLowerCase().replace(/\s+/g, '_') !== 'super_admin') {
+  const resolved = await resolveServerAuth({ namespace: 'super_admin', allowedRoles: ['super_admin'] })
+  if (!resolved) {
     redirect('/super-admin/login')
   }
 
@@ -20,9 +19,13 @@ export default async function SuperAdminDashboardPage() {
     users: overview.users || [],
     permissionPreview: overview.permissionPreview || null
   }
-  const initialProfile = await fetchInternalApiJson<{ user?: { userId?: string; name?: string; role?: string } }>(
-    '/api/super-admin/profile'
-  ).catch(() => null)
+  const initialProfile = {
+    user: {
+      userId: resolved.user.userId,
+      name: resolved.user.name || undefined,
+      role: resolved.user.role || undefined
+    }
+  }
 
   return (
     <SuperAdminOverviewClient initialOverview={initialOverview} initialProfile={initialProfile} />

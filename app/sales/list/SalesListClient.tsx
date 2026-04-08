@@ -351,12 +351,10 @@ export default function SalesListClient({
   }, [initialCompanyId, router])
 
   useEffect(() => {
-    if (hasInitialBills) {
-      stripCompanyParamsFromUrl()
-      return
-    }
-
     const timer = window.setTimeout(() => {
+      if (hasInitialBills) {
+        stripCompanyParamsFromUrl()
+      }
       void fetchSalesBills()
     }, 0)
     return () => window.clearTimeout(timer)
