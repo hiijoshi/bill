@@ -364,7 +364,26 @@ export async function proxy(request: NextRequest) {
     if (authResolution.auth.role === 'super_admin') {
       return NextResponse.redirect(new URL('/super-admin/crud', request.url))
     }
-    let response = NextResponse.next()
+    const effectiveCompanyId =
+      getCookieCompanyId(request, scopeSource) ||
+      authResolution.auth.companyId ||
+      null
+    const h = new Headers(request.headers)
+    if (effectiveCompanyId) {
+      h.set('x-company-id', effectiveCompanyId)
+      h.set('x-auth-company-id', effectiveCompanyId)
+    }
+    h.set(
+      AUTH_CONTEXT_HEADER,
+      encodeRequestAuthContext({
+        ...authResolution.auth,
+        companyId: effectiveCompanyId,
+        requestId
+      })
+    )
+    h.set('x-request-id', requestId)
+
+    let response = NextResponse.next({ request: { headers: h } })
     if (authResolution.applyCookies) {
       response = authResolution.applyCookies(response)
     }
@@ -381,7 +400,17 @@ export async function proxy(request: NextRequest) {
     if (authGuard.missing || authGuard.userLocked || authGuard.userDeleted || authGuard.traderLocked || authGuard.traderDeleted || hasSessionStateDrift(authResolution.auth, authGuard)) {
       return NextResponse.redirect(new URL('/super-admin/login', request.url))
     }
-    let response = NextResponse.next()
+    const h = new Headers(request.headers)
+    h.set(
+      AUTH_CONTEXT_HEADER,
+      encodeRequestAuthContext({
+        ...authResolution.auth,
+        requestId
+      })
+    )
+    h.set('x-request-id', requestId)
+
+    let response = NextResponse.next({ request: { headers: h } })
     if (authResolution.applyCookies) {
       response = authResolution.applyCookies(response)
     }
