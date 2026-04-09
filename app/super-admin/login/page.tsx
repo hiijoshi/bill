@@ -51,10 +51,6 @@ function SuperAdminLoginContent() {
   }, [])
 
   useEffect(() => {
-    router.prefetch('/super-admin/crud')
-  }, [router])
-
-  useEffect(() => {
     const queryUserId = searchParams.get('userId')?.trim() || ''
     const hasPasswordParam = searchParams.has('password')
     const restriction = searchParams.get('restricted')
@@ -102,9 +98,12 @@ function SuperAdminLoginContent() {
 
       didStartNavigation = true
       setPhase('redirecting')
-      router.prefetch('/super-admin/crud')
       await waitForNextPaint()
-      router.replace('/super-admin/crud')
+      if (typeof window !== 'undefined') {
+        window.location.replace('/super-admin/crud')
+      } else {
+        router.replace('/super-admin/crud')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
       setPhase('idle')
