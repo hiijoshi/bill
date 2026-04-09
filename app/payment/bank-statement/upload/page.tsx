@@ -516,7 +516,7 @@ function SummaryMetricCard({
         : 'bg-slate-100 text-slate-700'
 
   return (
-    <div className={`rounded-2xl border p-4 ${toneClasses}`}>
+    <div className={`rounded-2xl border p-3 ${toneClasses}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.24em]">{label}</p>
@@ -1476,10 +1476,10 @@ function BankStatementUploadPageContent() {
         </DialogContent>
       </Dialog>
 
-      <div className="min-h-full bg-slate-50 p-4 sm:p-6">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4">
-          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div className="min-h-full bg-slate-50 p-3 sm:p-4">
+        <div className="mx-auto flex max-w-7xl flex-col gap-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.28em] text-blue-700">
                   <span>ERP bank workspace</span>
@@ -1517,13 +1517,13 @@ function BankStatementUploadPageContent() {
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={() => router.push('/payment/dashboard')}>
+                <Button size="sm" variant="outline" onClick={() => router.push('/payment/dashboard')}>
                   View Payment History
                 </Button>
-                <Button variant="outline" onClick={() => router.push('/payment/cash-bank/entry')}>
+                <Button size="sm" variant="outline" onClick={() => router.push('/payment/cash-bank/entry')}>
                   Record Cash / Bank Payment
                 </Button>
-                <Button variant="outline" onClick={() => router.push('/main/dashboard')}>
+                <Button size="sm" variant="outline" onClick={() => router.push('/main/dashboard')}>
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to Dashboard
                 </Button>
@@ -1533,7 +1533,7 @@ function BankStatementUploadPageContent() {
 
           {workspaceError ? (
             <Card className="border-red-200 bg-white shadow-sm">
-              <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+              <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-start gap-3">
                   <AlertTriangle className="mt-0.5 h-5 w-5 text-red-600" />
                   <div>
@@ -1558,14 +1558,14 @@ function BankStatementUploadPageContent() {
             </Card>
           ) : null}
 
-          <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+          <div className="grid gap-3 xl:grid-cols-[1.2fr_0.8fr]">
             <Card className="border-slate-200 bg-white shadow-sm">
               <CardHeader className="pb-3">
                 <CardTitle className="text-base text-slate-950">Upload & verify</CardTitle>
               </CardHeader>
-              <CardContent className="grid gap-4">
+              <CardContent className="grid gap-3">
                 {banks.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-center">
                     <p className="text-sm text-slate-700">No bank master is configured for this company yet.</p>
                     <Button className="mt-4" onClick={() => router.push('/master/bank')}>
                       Add Bank Master
@@ -1573,7 +1573,7 @@ function BankStatementUploadPageContent() {
                   </div>
                 ) : (
                   <>
-                    <div className="grid gap-4 md:grid-cols-[240px_1fr]">
+                    <div className="grid gap-3 md:grid-cols-[240px_1fr]">
                       <div className="grid gap-2">
                         <Label htmlFor="bankId">Bank account</Label>
                         <Select
@@ -1611,7 +1611,7 @@ function BankStatementUploadPageContent() {
                         />
                         <button
                           type="button"
-                          className={`flex min-h-[142px] flex-col items-start justify-between rounded-2xl border border-dashed p-4 text-left transition ${
+                          className={`flex min-h-[116px] flex-col items-start justify-between rounded-2xl border border-dashed p-3 text-left transition ${
                             dragActive
                               ? 'border-blue-400 bg-blue-50'
                               : 'border-slate-300 bg-slate-50 hover:border-slate-400 hover:bg-slate-100'
@@ -1643,7 +1643,7 @@ function BankStatementUploadPageContent() {
                           </div>
 
                           {selectedFile ? (
-                            <div className="w-full rounded-2xl border border-blue-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
+                            <div className="w-full rounded-xl border border-blue-200 bg-white px-3 py-3 text-sm text-slate-700 shadow-sm">
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div>
                                   <p className="font-semibold text-slate-950">{selectedFile.name}</p>
@@ -1666,7 +1666,7 @@ function BankStatementUploadPageContent() {
                     </div>
 
                     {selectedBank ? (
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
                             <p className="font-semibold text-slate-900">{selectedBank.name}</p>
@@ -1681,7 +1681,7 @@ function BankStatementUploadPageContent() {
                       </div>
                     ) : null}
 
-                    <div className="flex flex-wrap gap-3">
+                    <div className="flex flex-wrap gap-2">
                       <Button
                         onClick={() => void submitStatement('preview')}
                         disabled={!selectedBankId || !selectedFile || verifyingStatement || uploadingStatement}
@@ -1699,7 +1699,7 @@ function BankStatementUploadPageContent() {
                     </div>
 
                     {activeAction ? (
-                      <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                      <div className="rounded-2xl border border-blue-200 bg-blue-50 p-3">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
                             <Loader2 className="h-4 w-4 animate-spin text-blue-700" />
@@ -1764,7 +1764,7 @@ function BankStatementUploadPageContent() {
             </Card>
           </div>
 
-          <div className="sticky top-4 z-20 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
               <Badge variant="outline" className="border-slate-200 bg-slate-50 hover:bg-slate-50">
                 Rows not read: {summary.errors}
@@ -1890,8 +1890,8 @@ function BankStatementUploadPageContent() {
             </CardContent>
           </Card>
 
-          <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-            <div className="grid gap-4">
+          <div className="grid gap-3 xl:grid-cols-[1.15fr_0.85fr]">
+            <div className="grid gap-3">
               <Collapsible open={matchedOpen} onOpenChange={setMatchedOpen}>
                 <Card className="border-slate-200 bg-white shadow-sm">
                   <CardHeader className="p-0">
@@ -2036,8 +2036,8 @@ function BankStatementUploadPageContent() {
                     </CollapsibleTrigger>
                   </CardHeader>
                   <CollapsibleContent>
-                    <CardContent className="grid gap-4 p-5">
-                      <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 lg:grid-cols-[auto_1fr_220px_auto_auto] lg:items-center">
+                    <CardContent className="grid gap-3 p-3">
+                      <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[auto_minmax(0,1fr)_220px_auto_auto] lg:items-center">
                         <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
                           <input
                             type="checkbox"
@@ -2184,7 +2184,7 @@ function BankStatementUploadPageContent() {
                                       {suggestionConfidence ? (
                                         <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-50">
                                           Suggestion {suggestionConfidence}
-                                        </Badge>
+                                          </Badge>
                                       ) : null}
                                     </div>
                                   </TableCell>
@@ -2192,7 +2192,7 @@ function BankStatementUploadPageContent() {
                                 {expanded ? (
                                   <TableRow>
                                     <TableCell colSpan={7} className="bg-slate-50 px-5 py-4 text-sm text-slate-600">
-                                      <div className="grid gap-4 lg:grid-cols-[1fr_1fr_1fr_auto]">
+                                      <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]">
                                         <div>
                                           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Remark</p>
                                           <p className="mt-1">{getEntryRemark(entry, selectedTarget)}</p>
@@ -2321,7 +2321,7 @@ function BankStatementUploadPageContent() {
               ) : null}
             </div>
 
-            <div className="grid gap-4">
+            <div className="grid gap-3">
               <Card className="border-slate-200 bg-white shadow-sm">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base text-slate-950">Workflow guide</CardTitle>
@@ -2369,7 +2369,7 @@ function BankStatementUploadPageContent() {
                       </div>
                     ))
                   ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
                       Activity appears here after verification, draft saves, and ledger posting.
                     </div>
                   )}
