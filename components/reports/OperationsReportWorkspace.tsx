@@ -291,13 +291,25 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
-function printTable(title: string, subtitle: string, headers: string[], rows: string[][]) {
+function printTable(
+  title: string,
+  subtitle: string,
+  headers: string[],
+  rows: string[][],
+  options: {
+    rightAlignedColumnCount?: number
+  } = {}
+) {
+  const rightAlignedColumnCount = Math.max(0, options.rightAlignedColumnCount ?? 3)
   const headerHtml = headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')
   const bodyRows = rows
     .map(
       (row) =>
         `<tr>${row
-          .map((cell, index) => `<td style="${index >= Math.max(0, row.length - 3) ? 'text-align:right;' : ''}">${escapeHtml(cell)}</td>`)
+          .map(
+            (cell, index) =>
+              `<td style="${index >= Math.max(0, row.length - rightAlignedColumnCount) ? 'text-align:right;' : ''}">${escapeHtml(cell)}</td>`
+          )
           .join('')}</tr>`
     )
     .join('')
@@ -804,6 +816,38 @@ export default function OperationsReportWorkspace({
       return b.balanceAmount - a.balanceAmount || a.partyName.localeCompare(b.partyName)
     })
   }, [outstandingBucketFilter, outstandingSort, reportData?.outstanding, searchTerm])
+
+  const outstandingTotals = useMemo(
+    () =>
+      filteredOutstanding.reduce(
+        (totals, row) => ({
+          saleAmount: roundAmount(totals.saleAmount + row.saleAmount),
+          receivedAmount: roundAmount(totals.receivedAmount + row.receivedAmount),
+          balanceAmount: roundAmount(totals.balanceAmount + row.balanceAmount),
+          invoiceCount: totals.invoiceCount + row.invoiceCount
+        }),
+        {
+          saleAmount: 0,
+          receivedAmount: 0,
+          balanceAmount: 0,
+          invoiceCount: 0
+        }
+      ),
+    [filteredOutstanding]
+  )
+
+  const outstandingTotalExportRow = useMemo(
+    () => [
+      ...(showCompanyColumn
+        ? ['Total', '', '', '', '', '', '', '', '']
+        : ['Total', '', '', '', '', '', '', '']),
+      numberText(outstandingTotals.saleAmount),
+      numberText(outstandingTotals.receivedAmount),
+      numberText(outstandingTotals.balanceAmount),
+      String(outstandingTotals.invoiceCount)
+    ],
+    [outstandingTotals, showCompanyColumn]
+  )
 
   const filteredLedgerRows = useMemo(() => {
     const query = searchTerm.trim().toLowerCase()
@@ -1375,6 +1419,16 @@ export default function OperationsReportWorkspace({
       return
     }
 
+    if (activeView === 'outstanding') {
+      const csv = [
+        activeExport.headers.map(csvEscape).join(','),
+        ...activeExport.rows.map((row) => row.map(csvEscape).join(',')),
+        outstandingTotalExportRow.map(csvEscape).join(',')
+      ].join('\n')
+      downloadTextFile(activeExport.fileName, csv, 'text/csv;charset=utf-8;')
+      return
+    }
+
     if (activeView === 'ledger' || activeView === 'bank-ledger' || activeView === 'cash-ledger') {
       const isPartyLedger = activeView === 'ledger'
       const isCashLedger = activeView === 'cash-ledger'
@@ -1490,6 +1544,17 @@ export default function OperationsReportWorkspace({
         totalCredit: numberText(cashLedgerTotalCredit),
         finalBalance: formatLedgerBalance(cashLedgerClosingBalance)
       })
+      return
+    }
+
+    if (activeView === 'outstanding') {
+      printTable(
+        activeExport.title,
+        activeExport.subtitle,
+        activeExport.headers,
+        [...activeExport.rows, outstandingTotalExportRow],
+        { rightAlignedColumnCount: 4 }
+      )
       return
     }
 
@@ -1860,32 +1925,43 @@ export default function OperationsReportWorkspace({
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredOutstanding.map((row) => (
-                      <TableRow key={`${row.companyId}-${row.partyId}`}>
-                        {showCompanyColumn ? <TableCell>{row.companyName}</TableCell> : null}
-                        <TableCell className="font-medium text-slate-900">
-                          <Button
-                            type="button"
-                            variant="link"
-                            className="h-auto p-0 text-left font-medium text-sky-700 underline-offset-4 hover:text-sky-900"
-                            onClick={() => openOutstandingPartyLedger(row)}
-                          >
-                            {row.partyName}
-                          </Button>
+                    <>
+                      {filteredOutstanding.map((row) => (
+                        <TableRow key={`${row.companyId}-${row.partyId}`}>
+                          {showCompanyColumn ? <TableCell>{row.companyName}</TableCell> : null}
+                          <TableCell className="font-medium text-slate-900">
+                            <Button
+                              type="button"
+                              variant="link"
+                              className="h-auto p-0 text-left font-medium text-sky-700 underline-offset-4 hover:text-sky-900"
+                              onClick={() => openOutstandingPartyLedger(row)}
+                            >
+                              {row.partyName}
+                            </Button>
+                          </TableCell>
+                          <TableCell>{row.phone1 || '-'}</TableCell>
+                          <TableCell>{row.address || '-'}</TableCell>
+                          <TableCell>{formatDateLabel(row.oldestBillDate)}</TableCell>
+                          <TableCell>{formatDateLabel(row.lastBillDate)}</TableCell>
+                          <TableCell className="text-right">{row.daysOverdue}</TableCell>
+                          <TableCell>{row.ageBucket}</TableCell>
+                          <TableCell className="capitalize">{row.status}</TableCell>
+                          <TableCell className="text-right">{currencyText(row.saleAmount)}</TableCell>
+                          <TableCell className="text-right text-emerald-700">{currencyText(row.receivedAmount)}</TableCell>
+                          <TableCell className="text-right font-semibold text-amber-700">{currencyText(row.balanceAmount)}</TableCell>
+                          <TableCell className="text-right">{row.invoiceCount}</TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow className="border-t-2 border-slate-200 bg-slate-50/80">
+                        <TableCell colSpan={showCompanyColumn ? 9 : 8} className="text-right font-semibold text-slate-900">
+                          Total
                         </TableCell>
-                        <TableCell>{row.phone1 || '-'}</TableCell>
-                        <TableCell>{row.address || '-'}</TableCell>
-                        <TableCell>{formatDateLabel(row.oldestBillDate)}</TableCell>
-                        <TableCell>{formatDateLabel(row.lastBillDate)}</TableCell>
-                        <TableCell className="text-right">{row.daysOverdue}</TableCell>
-                        <TableCell>{row.ageBucket}</TableCell>
-                        <TableCell className="capitalize">{row.status}</TableCell>
-                        <TableCell className="text-right">{currencyText(row.saleAmount)}</TableCell>
-                        <TableCell className="text-right text-emerald-700">{currencyText(row.receivedAmount)}</TableCell>
-                        <TableCell className="text-right font-semibold text-amber-700">{currencyText(row.balanceAmount)}</TableCell>
-                        <TableCell className="text-right">{row.invoiceCount}</TableCell>
+                        <TableCell className="text-right font-semibold text-slate-900">{currencyText(outstandingTotals.saleAmount)}</TableCell>
+                        <TableCell className="text-right font-semibold text-emerald-700">{currencyText(outstandingTotals.receivedAmount)}</TableCell>
+                        <TableCell className="text-right font-semibold text-amber-700">{currencyText(outstandingTotals.balanceAmount)}</TableCell>
+                        <TableCell className="text-right font-semibold text-slate-900">{outstandingTotals.invoiceCount}</TableCell>
                       </TableRow>
-                    ))
+                    </>
                   )}
                 </TableBody>
               </Table>
