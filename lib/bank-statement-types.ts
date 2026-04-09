@@ -34,6 +34,8 @@ export type StatementPreviewRow = {
   matchedTypeLabel?: string
   matchedTargetLabel?: string
   reason?: string
+  amountMismatch?: boolean
+  mismatchReason?: string | null
   suggestedTarget?: StatementTargetSelection | null
   selectedTarget?: StatementTargetSelection | null
 }

@@ -68,8 +68,24 @@ type TargetCandidate = {
   keywords: string[]
 }
 
+type ParsedStatementCacheEntry = {
+  parsedStatement: Awaited<ReturnType<typeof parseBankStatementFile>>
+  updatedAt: number
+}
+
+const PARSED_STATEMENT_CACHE_TTL_MS = 15 * 60_000
+const parsedStatementCache = new Map<string, ParsedStatementCacheEntry>()
+
 function normalizeText(value: unknown): string {
   return String(value || '').trim()
+}
+
+function formatCurrency(value: number): string {
+  const normalizedValue = Number(value || 0)
+  return `₹${new Intl.NumberFormat('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(Number.isFinite(normalizedValue) ? normalizedValue : 0)}`
 }
 
 function normalizeForCompare(value: unknown): string {
@@ -78,6 +94,35 @@ function normalizeForCompare(value: unknown): string {
 
 function normalizeCompact(value: unknown): string {
   return normalizeText(value).toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function buildParsedStatementCacheKey(companyId: string, bankId: string, file: File): string {
+  return [
+    companyId,
+    bankId,
+    normalizeText(file.name).toLowerCase(),
+    String(file.size || 0),
+    String(Number(file.lastModified || 0))
+  ].join(':')
+}
+
+function getCachedParsedStatement(cacheKey: string): Awaited<ReturnType<typeof parseBankStatementFile>> | null {
+  const cached = parsedStatementCache.get(cacheKey)
+  if (!cached) return null
+
+  if (Date.now() - cached.updatedAt > PARSED_STATEMENT_CACHE_TTL_MS) {
+    parsedStatementCache.delete(cacheKey)
+    return null
+  }
+
+  return cached.parsedStatement
+}
+
+function setCachedParsedStatement(cacheKey: string, parsedStatement: Awaited<ReturnType<typeof parseBankStatementFile>>): void {
+  parsedStatementCache.set(cacheKey, {
+    parsedStatement,
+    updatedAt: Date.now()
+  })
 }
 
 function tokenize(value: unknown): string[] {
@@ -366,6 +411,38 @@ function matchExistingPayment(
   return bestMatch ? { payment: bestMatch.payment, reason: bestMatch.reason } : null
 }
 
+function detectAmountMismatch(
+  entry: ParsedStatementEntry,
+  payments: ExistingPaymentRecord[],
+  bank: BankRecord
+): string | null {
+  const bankValues = getBankComparisonValues(bank)
+  const normalizedEntryReference = normalizeCompact(entry.reference)
+
+  for (const payment of payments) {
+    if (!paymentDirectionMatches(entry, payment)) continue
+    if (Math.abs(Number(payment.amount || 0) - entry.amount) <= 0.009) continue
+    if (isCashMode(payment.mode)) continue
+
+    const dateDistance = getDateDistanceInDays(entry.postedAt, payment.payDate)
+    const normalizedPaymentReference = normalizeCompact(payment.txnRef)
+    const paymentBankValues = getPaymentBankComparisonValues(payment)
+    const bankMatches =
+      paymentBankValues.length > 0 &&
+      paymentBankValues.some((value) => bankValues.includes(value))
+
+    if (normalizedEntryReference && normalizedPaymentReference && normalizedEntryReference === normalizedPaymentReference) {
+      return `Reference matches an existing ${getPaymentTypeLabel(payment.billType).toLowerCase()}, but the amount is ${formatCurrency(payment.amount)}.`
+    }
+
+    if (dateDistance <= 1 && bankMatches) {
+      return `A nearby ${getPaymentTypeLabel(payment.billType).toLowerCase()} exists on the same bank and date range, but the amount is ${formatCurrency(payment.amount)}.`
+    }
+  }
+
+  return null
+}
+
 function buildImportNote(entry: ParsedStatementEntry, fileName: string): string {
   const parts = [
     `Imported from statement ${normalizeText(fileName) || 'upload'}`,
@@ -413,6 +490,8 @@ export async function POST(request: NextRequest) {
   const authResult = requireRoles(request, ['super_admin', 'trader_admin', 'company_admin', 'company_user'])
   if (!authResult.ok) return authResult.response
 
+  let auditCompanyId = ''
+
   try {
     const formData = await request.formData()
     const companyId = normalizeText(formData.get('companyId'))
@@ -424,6 +503,8 @@ export async function POST(request: NextRequest) {
     if (!companyId) {
       return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
     }
+
+    auditCompanyId = companyId
 
     if (!bankId) {
       return NextResponse.json({ error: 'Bank is required' }, { status: 400 })
@@ -454,7 +535,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Selected bank not found' }, { status: 404 })
     }
 
-    const parsedStatement = await parseBankStatementFile(file, bank.id)
+    const parsedStatementCacheKey = buildParsedStatementCacheKey(companyId, bank.id, file)
+    const parsedStatement =
+      getCachedParsedStatement(parsedStatementCacheKey) ||
+      await parseBankStatementFile(file, bank.id)
+    setCachedParsedStatement(parsedStatementCacheKey, parsedStatement)
     const statementEntryDates = parsedStatement.entries
       .filter((entry): entry is ParsedStatementEntry => !('reason' in entry))
       .map((entry) => new Date(`${entry.postedAt}T00:00:00.000Z`))
@@ -606,16 +691,19 @@ export async function POST(request: NextRequest) {
 
       const suggestedTarget = suggestStatementTarget(parsed, targetCandidates)
       const selectedTarget = resolveSelectedTarget(manualTargets[parsed.externalId], targetCandidateMap)
+      const mismatchReason = detectAmountMismatch(parsed, existingPayments, bank)
 
       return {
         ...parsed,
         status: 'unsettled',
+        amountMismatch: Boolean(mismatchReason),
+        mismatchReason: mismatchReason || null,
         suggestedTarget,
         selectedTarget,
         reason:
           selectedTarget
             ? `Ready to import as ${selectedTarget.targetLabel}.`
-            : suggestedTarget?.reason || 'No settlement matched in the system yet.'
+            : mismatchReason || suggestedTarget?.reason || 'No settlement matched in the system yet.'
       }
     })
 
@@ -708,6 +796,7 @@ export async function POST(request: NextRequest) {
           bankId: bank.id,
           bankName: bank.name,
           documentKind: parsedStatement.document.kind,
+          fileName: parsedStatement.document.fileName,
           imported,
           totalRows: previewRows.length
         },
@@ -741,6 +830,25 @@ export async function POST(request: NextRequest) {
       )
     }
     const message = error instanceof Error ? error.message : 'Internal server error'
+    await writeAuditLog({
+      actor: {
+        id: authResult.auth.userDbId || authResult.auth.userId,
+        role: authResult.auth.role
+      },
+      action: 'UPDATE',
+      resourceType: 'PAYMENT_BATCH',
+      resourceId: `bank-statement-error:${Date.now()}`,
+      scope: {
+        traderId: authResult.auth.traderId,
+        companyId: auditCompanyId || null
+      },
+      after: {
+        error: message,
+        route: 'bank-statement-import'
+      },
+      requestMeta: getAuditRequestMeta(request),
+      notes: 'Bank statement preview/import failed'
+    })
     return NextResponse.json(
       { error: message },
       { status: getRouteErrorStatus(message) }
