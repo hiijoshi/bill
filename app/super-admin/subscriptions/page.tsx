@@ -8,6 +8,7 @@ import { getSuperAdminSubscriptionBootstrap } from '@/lib/super-admin-subscripti
 interface SuperAdminTraderSubscriptionsPageProps {
   searchParams: Promise<{
     traderId?: string
+    state?: string
   }>
 }
 
@@ -19,16 +20,18 @@ export default async function SuperAdminTraderSubscriptionsPage({
     redirect('/super-admin/login')
   }
 
-  const { traderId } = await searchParams
+  const { traderId, state } = await searchParams
 
   try {
     const bootstrap = await getSuperAdminSubscriptionBootstrap(prisma, {
-      requestedTraderId: traderId
+      requestedTraderId: traderId,
+      state
     })
 
     return (
       <SuperAdminTraderSubscriptionsClient
         requestedTraderId={traderId}
+        requestedState={state}
         initialTraders={bootstrap.traders}
         initialPlans={bootstrap.plans}
         initialSelectedTraderId={bootstrap.selectedTraderId}
@@ -43,6 +46,7 @@ export default async function SuperAdminTraderSubscriptionsPage({
     return (
       <SuperAdminTraderSubscriptionsClient
         requestedTraderId={traderId}
+        requestedState={state}
         initialTraders={[]}
         initialPlans={[]}
         initialSelectedTraderId=""

@@ -735,8 +735,14 @@ async function fetchSuperAdminTraderSubscriptionRows(
       }
     }
 
-    if (stateFilter && row.subscriptionState !== stateFilter && row.dataLifecycleState !== stateFilter) {
-      return false
+    if (stateFilter) {
+      if (stateFilter === 'closure_requested') {
+        if (!row.lifecycleMessage.toLowerCase().includes('closure request submitted')) {
+          return false
+        }
+      } else if (row.subscriptionState !== stateFilter && row.dataLifecycleState !== stateFilter) {
+        return false
+      }
     }
 
     if (schemaReady && expiringWithinDays !== null && Number.isFinite(expiringWithinDays) && expiringWithinDays >= 0) {
