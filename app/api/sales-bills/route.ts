@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { validateStockBeforeSale } from '@/lib/stock-automation'
 import { z } from 'zod'
@@ -19,6 +20,14 @@ import {
   FinancialYearValidationError,
   getFinancialYearDateFilter
 } from '@/lib/financial-years'
+import {
+  buildOperationalSalesBillWhere,
+  buildVisibleSalesBillWhere,
+  normalizeSalesBillSplitView,
+  SALES_BILL_KIND,
+  SALES_BILL_WORKFLOW_STATUS,
+} from '@/lib/sales-split'
+import { buildSalesBillSplitSummary } from '@/lib/sales-split-service'
 
 const salesItemSchema = z.object({
   productId: z.string().min(1),
@@ -485,6 +494,8 @@ export async function POST(request: NextRequest) {
           receivedAmount: nextReceived,
           balanceAmount: nextBalance,
           status: nextStatus,
+          invoiceKind: SALES_BILL_KIND.REGULAR,
+          workflowStatus: SALES_BILL_WORKFLOW_STATUS.POSTED,
           createdBy: userId
         }
       })
@@ -588,6 +599,7 @@ export async function GET(request: NextRequest) {
     const last = searchParams.get('last')
     const includeCancelled = parseBooleanParam(searchParams.get('includeCancelled'))
     const view = normalizeSalesBillListView(searchParams.get('view'))
+    const splitView = normalizeSalesBillSplitView(searchParams.get('splitView'))
 
     if (!companyId) {
       return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
@@ -627,7 +639,37 @@ export async function GET(request: NextRequest) {
               product: true
             }
           },
-          transportBills: true
+          transportBills: true,
+          parentSalesBill: {
+            select: {
+              id: true,
+              billNo: true
+            }
+          },
+          childSalesBills: {
+            include: {
+              party: true,
+              salesItems: {
+                include: {
+                  product: true
+                }
+              },
+              transportBills: true
+            },
+            orderBy: {
+              splitSequence: 'asc'
+            }
+          },
+          splitGroup: {
+            select: {
+              id: true,
+              status: true,
+              splitMethod: true,
+              reason: true,
+              notes: true,
+              finalizedAt: true
+            }
+          }
         }
       })
 
@@ -635,21 +677,25 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Sales bill not found' }, { status: 404 })
       }
 
-      const additionalChargesMap = await listSalesAdditionalChargesByBillIds(prisma, [bill.id])
+      const detailBillIds = [bill.id, ...bill.childSalesBills.map((childBill) => childBill.id)]
+      const additionalChargesMap = await listSalesAdditionalChargesByBillIds(prisma, detailBillIds)
       return NextResponse.json({
         ...sanitizeSalesBill(bill),
         additionalCharges: additionalChargesMap.get(bill.id) || [],
+        splitSummary: buildSalesBillSplitSummary(bill),
+        parentSalesBill: bill.parentSalesBill,
+        splitGroup: bill.splitGroup,
+        childSalesBills: bill.childSalesBills.map((childBill) => ({
+          ...sanitizeSalesBill(childBill),
+          additionalCharges: additionalChargesMap.get(childBill.id) || [],
+          splitSummary: buildSalesBillSplitSummary(childBill),
+        })),
       })
     }
 
     const pagination = parsePaginationParams(searchParams, { defaultPageSize: 50, maxPageSize: 200 })
 
-    const whereClause: {
-      companyId: string
-      status?: { not: string }
-      billDate?: { gte?: Date; lte?: Date }
-      OR?: Array<{ billNo: { contains: string } } | { status: { contains: string } }>
-    } = {
+    const whereClause: Prisma.SalesBillWhereInput = {
       companyId,
       ...(includeCancelled ? {} : { status: { not: 'cancelled' } })
     }
@@ -661,13 +707,25 @@ export async function GET(request: NextRequest) {
     }
 
     if (pagination.search) {
-      whereClause.OR = [{ billNo: { contains: pagination.search } }, { status: { contains: pagination.search } }]
+      whereClause.OR = [
+        { billNo: { contains: pagination.search } },
+        { status: { contains: pagination.search } },
+        { party: { name: { contains: pagination.search } } },
+        { parentSalesBill: { billNo: { contains: pagination.search } } },
+        { childSalesBills: { some: { billNo: { contains: pagination.search } } } },
+        { salesItems: { some: { product: { name: { contains: pagination.search } } } } },
+      ]
     }
+
+    const effectiveWhereClause =
+      view === 'payment' || view === 'report'
+        ? buildOperationalSalesBillWhere(whereClause)
+        : buildVisibleSalesBillWhere(whereClause, splitView)
 
     const listQuery =
       view === 'payment'
         ? prisma.salesBill.findMany({
-            where: whereClause,
+            where: effectiveWhereClause,
             select: {
               id: true,
               companyId: true,
@@ -677,6 +735,30 @@ export async function GET(request: NextRequest) {
               receivedAmount: true,
               balanceAmount: true,
               status: true,
+              invoiceKind: true,
+              workflowStatus: true,
+              splitMethod: true,
+              splitPartLabel: true,
+              splitSuffix: true,
+              parentSalesBill: {
+                select: {
+                  id: true,
+                  billNo: true
+                }
+              },
+              childSalesBills: {
+                select: {
+                  id: true,
+                  billNo: true,
+                  totalAmount: true,
+                  receivedAmount: true,
+                  balanceAmount: true,
+                  workflowStatus: true,
+                  invoiceKind: true,
+                  splitPartLabel: true,
+                  splitSuffix: true
+                }
+              },
               party: {
                 select: {
                   id: true,
@@ -691,7 +773,7 @@ export async function GET(request: NextRequest) {
           })
         : view === 'list'
           ? prisma.salesBill.findMany({
-              where: whereClause,
+              where: effectiveWhereClause,
               select: {
                 id: true,
                 billNo: true,
@@ -700,6 +782,30 @@ export async function GET(request: NextRequest) {
                 receivedAmount: true,
                 balanceAmount: true,
                 status: true,
+                invoiceKind: true,
+                workflowStatus: true,
+                splitMethod: true,
+                splitPartLabel: true,
+                splitSuffix: true,
+                parentSalesBill: {
+                  select: {
+                    id: true,
+                    billNo: true
+                  }
+                },
+                childSalesBills: {
+                  select: {
+                    id: true,
+                    billNo: true,
+                    totalAmount: true,
+                    receivedAmount: true,
+                    balanceAmount: true,
+                    workflowStatus: true,
+                    invoiceKind: true,
+                    splitPartLabel: true,
+                    splitSuffix: true
+                  }
+                },
                 party: {
                   select: {
                     name: true,
@@ -735,7 +841,7 @@ export async function GET(request: NextRequest) {
             })
         : view === 'report'
           ? prisma.salesBill.findMany({
-              where: whereClause,
+              where: effectiveWhereClause,
               select: {
                 id: true,
                 companyId: true,
@@ -745,6 +851,30 @@ export async function GET(request: NextRequest) {
                 receivedAmount: true,
                 balanceAmount: true,
                 status: true,
+                invoiceKind: true,
+                workflowStatus: true,
+                splitMethod: true,
+                splitPartLabel: true,
+                splitSuffix: true,
+                parentSalesBill: {
+                  select: {
+                    id: true,
+                    billNo: true
+                  }
+                },
+                childSalesBills: {
+                  select: {
+                    id: true,
+                    billNo: true,
+                    totalAmount: true,
+                    receivedAmount: true,
+                    balanceAmount: true,
+                    workflowStatus: true,
+                    invoiceKind: true,
+                    splitPartLabel: true,
+                    splitSuffix: true
+                  }
+                },
                 party: {
                   select: {
                     name: true,
@@ -764,7 +894,7 @@ export async function GET(request: NextRequest) {
               ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
             })
           : prisma.salesBill.findMany({
-              where: whereClause,
+              where: effectiveWhereClause,
               include: {
                 party: true,
                 salesItems: {
@@ -772,7 +902,26 @@ export async function GET(request: NextRequest) {
                     product: true
                   }
                 },
-                transportBills: true
+                transportBills: true,
+                parentSalesBill: {
+                  select: {
+                    id: true,
+                    billNo: true
+                  }
+                },
+                childSalesBills: {
+                  select: {
+                    id: true,
+                    billNo: true,
+                    totalAmount: true,
+                    receivedAmount: true,
+                    balanceAmount: true,
+                    workflowStatus: true,
+                    invoiceKind: true,
+                    splitPartLabel: true,
+                    splitSuffix: true
+                  }
+                }
               },
               orderBy: { createdAt: 'desc' },
               ...(pagination.enabled ? { skip: pagination.skip, take: pagination.pageSize } : {})
@@ -780,7 +929,7 @@ export async function GET(request: NextRequest) {
 
     const [salesBills, total] = await Promise.all([
       listQuery,
-      pagination.enabled ? prisma.salesBill.count({ where: whereClause }) : Promise.resolve(0)
+      pagination.enabled ? prisma.salesBill.count({ where: effectiveWhereClause }) : Promise.resolve(0)
     ])
 
     const additionalChargesMap =
@@ -792,7 +941,8 @@ export async function GET(request: NextRequest) {
         : new Map()
     const safeSalesBills = salesBills.map((bill) => ({
       ...sanitizeSalesBill(bill),
-      ...(view === 'default' ? { additionalCharges: additionalChargesMap.get(bill.id) || [] } : {})
+      ...(view === 'default' ? { additionalCharges: additionalChargesMap.get(bill.id) || [] } : {}),
+      splitSummary: buildSalesBillSplitSummary(bill),
     }))
 
     if (pagination.enabled) {
@@ -845,6 +995,13 @@ export async function PUT(request: NextRequest) {
 
     if (String(existing.status || '').toLowerCase() === 'cancelled') {
       return NextResponse.json({ error: 'Cancelled sales bill cannot be updated' }, { status: 400 })
+    }
+
+    if (String(existing.invoiceKind || SALES_BILL_KIND.REGULAR) !== SALES_BILL_KIND.REGULAR) {
+      return NextResponse.json(
+        { error: 'Split parent or split child invoice must be edited from the invoice split workspace.' },
+        { status: 400 }
+      )
     }
 
     const hasSalesItems = Array.isArray(body.salesItems) && body.salesItems.length > 0

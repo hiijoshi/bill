@@ -20,6 +20,7 @@ import {
   FinancialYearValidationError,
   getFinancialYearDateFilter
 } from '@/lib/financial-years'
+import { buildOperationalSalesBillWhere } from '@/lib/sales-split'
 
 const PARTIES_CACHE_TTL_MS = 30_000 // 30 seconds server-side cache
 
@@ -179,7 +180,7 @@ export async function GET(request: NextRequest) {
       const [salesBillsAsOf, openingPaymentBalancesBeforeStart, openingPaymentBalancesAsOf] = partyIds.length > 0
         ? await Promise.all([
             prisma.salesBill.findMany({
-              where: {
+              where: buildOperationalSalesBillWhere({
                 companyId,
                 partyId: { in: partyIds },
                 status: { not: 'cancelled' },
@@ -190,7 +191,7 @@ export async function GET(request: NextRequest) {
                       }
                     }
                   : {})
-              },
+              }),
               select: {
                 id: true,
                 partyId: true,

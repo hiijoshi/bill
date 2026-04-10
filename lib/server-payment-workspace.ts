@@ -11,6 +11,7 @@ import {
   SALES_RECEIPT_TYPE
 } from '@/lib/payment-entry-types'
 import { isPartyOpeningBalanceReference } from '@/lib/party-opening-balance'
+import { buildOperationalSalesBillWhere } from '@/lib/sales-split'
 
 export type PaymentListView = 'default' | 'workspace' | 'report'
 
@@ -191,10 +192,10 @@ export async function loadPaymentsListData(params: PaymentQueryParams): Promise<
       : Promise.resolve([]),
     salesBillIds.length > 0
       ? prisma.salesBill.findMany({
-          where: {
+          where: buildOperationalSalesBillWhere({
             companyId: { in: companyIds },
             id: { in: salesBillIds }
-          },
+          }),
           select: {
             id: true,
             billNo: true
@@ -342,11 +343,11 @@ export async function loadPaymentWorkspaceData(
     options.salesAllowed === false
       ? Promise.resolve([])
       : prisma.salesBill.findMany({
-          where: {
+          where: buildOperationalSalesBillWhere({
             companyId,
             status: { not: 'cancelled' },
             ...buildDateRangeWhere('billDate', options.dateFrom || null, options.dateTo || null)
-          },
+          }),
           select: {
             id: true,
             billNo: true,

@@ -25,6 +25,7 @@ import {
   isSalesReceiptType,
   isSelfTransferPaymentType
 } from '@/lib/payment-entry-types'
+import { buildOperationalSalesBillWhere } from '@/lib/sales-split'
 import { isCashPaymentMode } from '@/lib/payment-mode-utils'
 import { getFinancialYearDateFilter } from '@/lib/financial-years'
 
@@ -637,18 +638,18 @@ export async function GET(request: NextRequest) {
           ? companyNameMap.get(targetCompanyIds[0]) || ''
           : `${targetCompanyIds.length} companies`
 
-      const salesWhere = {
-      companyId: { in: targetCompanyIds },
-      status: { not: 'cancelled' as const },
-      ...(dateFrom || dateTo
-        ? {
-            billDate: {
-              ...(dateFrom ? { gte: dateFrom } : {}),
-              ...(dateTo ? { lte: dateTo } : {})
+      const salesWhere = buildOperationalSalesBillWhere({
+        companyId: { in: targetCompanyIds },
+        status: { not: 'cancelled' as const },
+        ...(dateFrom || dateTo
+          ? {
+              billDate: {
+                ...(dateFrom ? { gte: dateFrom } : {}),
+                ...(dateTo ? { lte: dateTo } : {})
+              }
             }
-          }
-        : {})
-    }
+          : {})
+      })
 
       const purchaseWhere = {
       companyId: { in: targetCompanyIds },
@@ -689,17 +690,17 @@ export async function GET(request: NextRequest) {
         : {})
     }
 
-      const salesOutstandingWhere = {
-      companyId: { in: targetCompanyIds },
-      status: { not: 'cancelled' as const },
-      ...(dateTo
-        ? {
-            billDate: {
-              lte: dateTo
+      const salesOutstandingWhere = buildOperationalSalesBillWhere({
+        companyId: { in: targetCompanyIds },
+        status: { not: 'cancelled' as const },
+        ...(dateTo
+          ? {
+              billDate: {
+                lte: dateTo
+              }
             }
-          }
-        : {})
-    }
+          : {})
+      })
 
       const purchaseOutstandingWhere = {
       companyId: { in: targetCompanyIds },
@@ -1726,7 +1727,7 @@ export async function GET(request: NextRequest) {
       const [ledgerSales, ledgerPayments, openingSalesAggregate, openingPaymentsAggregate] = selectedPartyId
       ? await Promise.all([
           prisma.salesBill.findMany({
-            where: {
+            where: buildOperationalSalesBillWhere({
               companyId: { in: targetCompanyIds },
               partyId: selectedPartyId,
               status: { not: 'cancelled' },
@@ -1738,7 +1739,7 @@ export async function GET(request: NextRequest) {
                     }
                   }
                 : {})
-            },
+            }),
             select: {
               id: true,
               companyId: true,
@@ -1790,12 +1791,12 @@ export async function GET(request: NextRequest) {
           }),
           dateFrom
             ? prisma.salesBill.aggregate({
-                where: {
+                where: buildOperationalSalesBillWhere({
                   companyId: { in: targetCompanyIds },
                   partyId: selectedPartyId,
                   status: { not: 'cancelled' },
                   billDate: { lt: dateFrom }
-                },
+                }),
                 _sum: {
                   totalAmount: true
                 }

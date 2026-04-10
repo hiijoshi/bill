@@ -53,6 +53,31 @@ interface SalesBill {
     otherAmount?: number
     insuranceAmount?: number
   }>
+  splitSummary?: {
+    invoiceKind?: string
+    workflowStatus?: string
+    splitMethod?: string | null
+    splitPartLabel?: string | null
+    splitSuffix?: string | null
+    childCount?: number
+    parentBillId?: string | null
+    parentBillNo?: string | null
+  }
+  parentSalesBill?: {
+    id: string
+    billNo: string
+  } | null
+  childSalesBills?: Array<{
+    id: string
+    billNo: string
+    totalAmount: number
+    receivedAmount: number
+    balanceAmount: number
+    workflowStatus?: string
+    invoiceKind?: string
+    splitPartLabel?: string | null
+    splitSuffix?: string | null
+  }>
 }
 
 interface RawSalesItem {
@@ -91,9 +116,35 @@ interface RawSalesBill {
   }
   salesItems?: RawSalesItem[]
   transportBills?: RawTransportBill[]
+  splitSummary?: {
+    invoiceKind?: unknown
+    workflowStatus?: unknown
+    splitMethod?: unknown
+    splitPartLabel?: unknown
+    splitSuffix?: unknown
+    childCount?: unknown
+    parentBillId?: unknown
+    parentBillNo?: unknown
+  }
+  parentSalesBill?: {
+    id?: unknown
+    billNo?: unknown
+  } | null
+  childSalesBills?: Array<{
+    id?: unknown
+    billNo?: unknown
+    totalAmount?: unknown
+    receivedAmount?: unknown
+    balanceAmount?: unknown
+    workflowStatus?: unknown
+    invoiceKind?: unknown
+    splitPartLabel?: unknown
+    splitSuffix?: unknown
+  }>
 }
 
 type BillViewTab = 'active' | 'paid' | 'cancelled' | 'all'
+type SplitView = 'grouped' | 'children' | 'all'
 
 const clampNonNegative = (value: number): number => {
   const parsed = Number(value)
@@ -151,6 +202,37 @@ function normalizeSalesBill(raw: RawSalesBill): SalesBill {
           freightAmount: clampNonNegative(Number(item?.freightAmount || 0)),
           otherAmount: clampNonNegative(Number(item?.otherAmount || 0)),
           insuranceAmount: clampNonNegative(Number(item?.insuranceAmount || 0))
+        }))
+      : [],
+    splitSummary: raw?.splitSummary
+      ? {
+          invoiceKind: String(raw.splitSummary.invoiceKind || ''),
+          workflowStatus: String(raw.splitSummary.workflowStatus || ''),
+          splitMethod: raw.splitSummary.splitMethod == null ? null : String(raw.splitSummary.splitMethod),
+          splitPartLabel: raw.splitSummary.splitPartLabel == null ? null : String(raw.splitSummary.splitPartLabel),
+          splitSuffix: raw.splitSummary.splitSuffix == null ? null : String(raw.splitSummary.splitSuffix),
+          childCount: clampNonNegative(Number(raw.splitSummary.childCount || 0)),
+          parentBillId: raw.splitSummary.parentBillId == null ? null : String(raw.splitSummary.parentBillId),
+          parentBillNo: raw.splitSummary.parentBillNo == null ? null : String(raw.splitSummary.parentBillNo),
+        }
+      : undefined,
+    parentSalesBill: raw?.parentSalesBill
+      ? {
+          id: String(raw.parentSalesBill.id || ''),
+          billNo: String(raw.parentSalesBill.billNo || ''),
+        }
+      : null,
+    childSalesBills: Array.isArray(raw?.childSalesBills)
+      ? raw.childSalesBills.map((child) => ({
+          id: String(child?.id || ''),
+          billNo: String(child?.billNo || ''),
+          totalAmount: clampNonNegative(Number(child?.totalAmount || 0)),
+          receivedAmount: clampNonNegative(Number(child?.receivedAmount || 0)),
+          balanceAmount: clampNonNegative(Number(child?.balanceAmount || 0)),
+          workflowStatus: String(child?.workflowStatus || ''),
+          invoiceKind: String(child?.invoiceKind || ''),
+          splitPartLabel: child?.splitPartLabel == null ? null : String(child.splitPartLabel),
+          splitSuffix: child?.splitSuffix == null ? null : String(child.splitSuffix),
         }))
       : []
   }
@@ -228,6 +310,42 @@ function formatTransportCell(bill: SalesBill): string {
   return name || lorry || '-'
 }
 
+function getInvoiceKind(bill: SalesBill): string {
+  return String(bill.splitSummary?.invoiceKind || 'regular')
+}
+
+function isSplitParentBill(bill: SalesBill): boolean {
+  return getInvoiceKind(bill) === 'split_parent'
+}
+
+function isSplitChildBill(bill: SalesBill): boolean {
+  return getInvoiceKind(bill) === 'split_child'
+}
+
+function getSplitSearchText(bill: SalesBill): string {
+  const fragments = [
+    bill.invoiceNo,
+    bill.splitSummary?.parentBillNo || '',
+    bill.parentSalesBill?.billNo || '',
+    bill.splitSummary?.splitPartLabel || '',
+    bill.splitSummary?.splitSuffix || '',
+    ...(bill.childSalesBills || []).flatMap((child) => [
+      child.billNo,
+      child.splitPartLabel || '',
+      child.splitSuffix || '',
+    ]),
+    ...bill.salesItems.map((item) => item.product?.name || ''),
+  ]
+
+  return fragments.join(' ').toLowerCase()
+}
+
+function getSplitBadgeTone(bill: SalesBill): 'outline' | 'secondary' | 'default' {
+  if (isSplitParentBill(bill)) return 'secondary'
+  if (isSplitChildBill(bill)) return 'outline'
+  return 'default'
+}
+
 function openWhatsappReminder(bill: SalesBill) {
   const opened = openWhatsappChat(
     bill.party.phone1 || '',
@@ -263,10 +381,12 @@ export default function SalesListClient({
   const [companyId, setCompanyId] = useState(initialCompanyId)
   const hasVisibleDataRef = useRef(false)
   const [billView, setBillView] = useState<BillViewTab>('active')
+  const [splitView, setSplitView] = useState<SplitView>('grouped')
   const [selectedBillIds, setSelectedBillIds] = useState<string[]>([])
 
   // Filter states
   const [invoiceNumber, setInvoiceNumber] = useState('')
+  const [itemName, setItemName] = useState('')
   const [partyName, setPartyName] = useState('')
   const [partyAddress, setPartyAddress] = useState('')
   const [dateFrom, setDateFrom] = useState('')
@@ -282,7 +402,7 @@ export default function SalesListClient({
     setCompanyId(initialCompanyId)
     setSalesBills(initialBills)
     setLoading(false)
-    setClientCache(`sales-bills:${initialCompanyId}`, initialBills)
+    setClientCache(`sales-bills:${initialCompanyId}:grouped`, initialBills)
   }, [initialBills, initialCompanyId])
 
   useEffect(() => {
@@ -310,7 +430,7 @@ export default function SalesListClient({
       setCompanyId(companyIdParam)
       stripCompanyParamsFromUrl()
 
-      const cacheKey = `sales-bills:${companyIdParam}`
+      const cacheKey = `sales-bills:${companyIdParam}:${splitView}`
       const cached = getClientCache<SalesBill[]>(cacheKey, 15_000)
       if (cached) {
         hydratedFromCache = true
@@ -324,7 +444,9 @@ export default function SalesListClient({
         setRefreshing(true)
       }
 
-      const response = await fetch(`/api/sales-bills?companyId=${companyIdParam}&includeCancelled=true&view=list`)
+      const response = await fetch(
+        `/api/sales-bills?companyId=${companyIdParam}&includeCancelled=true&view=list&splitView=${splitView}`
+      )
       if (response.status === 401) {
         setLoading(false)
         router.push('/login')
@@ -348,7 +470,7 @@ export default function SalesListClient({
       setLoading(false)
       setRefreshing(false)
     }
-  }, [initialCompanyId, router])
+  }, [initialCompanyId, router, splitView])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -383,7 +505,15 @@ export default function SalesListClient({
     let filtered = salesBills
 
     if (invoiceNumber) {
-      filtered = filtered.filter(bill => bill.invoiceNo.toLowerCase().includes(invoiceNumber.toLowerCase()))
+      const needle = invoiceNumber.toLowerCase()
+      filtered = filtered.filter((bill) => getSplitSearchText(bill).includes(needle))
+    }
+
+    if (itemName) {
+      const needle = itemName.toLowerCase()
+      filtered = filtered.filter((bill) =>
+        bill.salesItems.some((item) => String(item.product?.name || '').toLowerCase().includes(needle))
+      )
     }
 
     if (partyName) {
@@ -435,7 +565,20 @@ export default function SalesListClient({
     }
 
     return filtered
-  }, [salesBills, invoiceNumber, partyName, partyAddress, dateFrom, dateTo, weight, rate, filterZeroRateBills, partyContact, payable])
+  }, [
+    dateFrom,
+    dateTo,
+    filterZeroRateBills,
+    invoiceNumber,
+    itemName,
+    partyAddress,
+    partyContact,
+    partyName,
+    payable,
+    rate,
+    salesBills,
+    weight,
+  ])
 
   const paidBills = useMemo(
     () => filteredBills.filter((bill) => bill.status === 'paid'),
@@ -475,6 +618,7 @@ export default function SalesListClient({
 
   const clearFilters = () => {
     setInvoiceNumber('')
+    setItemName('')
     setPartyName('')
     setPartyAddress('')
     setPartyContact('')
@@ -510,16 +654,22 @@ export default function SalesListClient({
     router.push(viewPath)
   }
 
-  const handleEdit = (billId: string) => {
+  const handleEdit = (bill: SalesBill) => {
+    const targetBillId =
+      isSplitChildBill(bill) && bill.splitSummary?.parentBillId ? bill.splitSummary.parentBillId : bill.id
     const editPath = companyId
-      ? `/sales/entry?billId=${billId}&companyId=${encodeURIComponent(companyId)}`
-      : `/sales/entry?billId=${billId}`
+      ? `/sales/entry?billId=${targetBillId}&companyId=${encodeURIComponent(companyId)}`
+      : `/sales/entry?billId=${targetBillId}`
     router.push(editPath)
   }
 
   const handleCancel = async (billId: string) => {
     const bill = salesBills.find((row) => row.id === billId)
     if (!bill) return
+    if (isSplitParentBill(bill) || isSplitChildBill(bill)) {
+      alert('Split invoices must be managed from the invoice split workspace.')
+      return
+    }
     if (bill.status === 'cancelled') {
       alert('This bill is already cancelled.')
       return
@@ -786,7 +936,16 @@ export default function SalesListClient({
                   id="invoiceNumber"
                   value={invoiceNumber}
                   onChange={(e) => setInvoiceNumber(e.target.value)}
-                  placeholder="Enter invoice number"
+                  placeholder="17, 17(A), 17(B)"
+                />
+              </div>
+              <div>
+                <Label htmlFor="itemName">Item Name</Label>
+                <Input
+                  id="itemName"
+                  value={itemName}
+                  onChange={(e) => setItemName(e.target.value)}
+                  placeholder="Enter item name"
                 />
               </div>
               <div>
@@ -900,8 +1059,33 @@ export default function SalesListClient({
           <RefreshOverlay refreshing={refreshing} label="Refreshing sales bills" />
           <CardHeader>
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <CardTitle>Sales Bills</CardTitle>
-              <Tabs defaultValue="active" className="w-full lg:w-auto">
+              <div className="space-y-3">
+                <CardTitle>Sales Bills</CardTitle>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant={splitView === 'grouped' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setSplitView('grouped')}
+                  >
+                    Parent / Grouped View
+                  </Button>
+                  <Button
+                    variant={splitView === 'children' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setSplitView('children')}
+                  >
+                    Child Parts Only
+                  </Button>
+                  <Button
+                    variant={splitView === 'all' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setSplitView('all')}
+                  >
+                    All Invoices
+                  </Button>
+                </div>
+              </div>
+              <Tabs defaultValue={billView} key={billView} className="w-full lg:w-auto">
                 <TabsList className="w-full lg:w-auto">
                   <TabsTrigger value="active" onClick={() => setBillView('active')}>
                     Active ({activeBills.length})
@@ -988,7 +1172,33 @@ export default function SalesListClient({
                             className="h-4 w-4 rounded border-slate-300"
                           />
                         </TableCell>
-                        <TableCell>{bill.invoiceNo || '-'}</TableCell>
+                        <TableCell>
+                          <div className="space-y-1">
+                            <div className="font-medium text-slate-900">{bill.invoiceNo || '-'}</div>
+                            {isSplitParentBill(bill) ? (
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                <Badge variant={getSplitBadgeTone(bill)}>Split Parent</Badge>
+                                <span>{bill.splitSummary?.childCount || bill.childSalesBills?.length || 0} parts</span>
+                                {(bill.childSalesBills || []).length > 0 ? (
+                                  <span>
+                                    {(bill.childSalesBills || [])
+                                      .map((child) => child.billNo)
+                                      .filter(Boolean)
+                                      .join(', ')}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            {isSplitChildBill(bill) ? (
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                <Badge variant={getSplitBadgeTone(bill)}>
+                                  {bill.splitSummary?.splitPartLabel || 'Split Child'}
+                                </Badge>
+                                <span>Parent: {bill.splitSummary?.parentBillNo || bill.parentSalesBill?.billNo || '-'}</span>
+                              </div>
+                            ) : null}
+                          </div>
+                        </TableCell>
                         <TableCell>{formatDateSafe(bill.invoiceDate)}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
@@ -1037,12 +1247,13 @@ export default function SalesListClient({
                               <Button
                                 size="sm"
                                 variant="outline"
-                                onClick={() => handleEdit(bill.id)}
+                                onClick={() => handleEdit(bill)}
+                                title={isSplitParentBill(bill) || isSplitChildBill(bill) ? 'Manage invoice split' : 'Edit bill'}
                               >
                                 <Edit className="w-4 h-4" />
                               </Button>
                             ) : null}
-                            {bill.status !== 'cancelled' ? (
+                            {bill.status !== 'cancelled' && !isSplitParentBill(bill) && !isSplitChildBill(bill) ? (
                               <Button
                                 size="sm"
                                 variant="outline"

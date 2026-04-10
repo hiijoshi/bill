@@ -17,6 +17,7 @@ import {
   isIncomingCashflowPaymentType,
   isOutgoingCashflowPaymentType
 } from '@/lib/payment-entry-types'
+import { buildGroupedSalesBillWhere, buildOperationalSalesBillWhere } from '@/lib/sales-split'
 
 export type ServerDateRange = {
   dateFrom: Date | null
@@ -287,7 +288,7 @@ async function loadDirectDashboardOverviewPayload(params: {
       : null
   const salesWhere =
     salesCompanyIds.length > 0
-      ? {
+      ? buildOperationalSalesBillWhere({
           companyId: { in: salesCompanyIds },
           status: { not: 'cancelled' as const },
           ...(params.dateFrom || params.dateTo
@@ -298,7 +299,7 @@ async function loadDirectDashboardOverviewPayload(params: {
                 }
               }
             : {})
-        }
+        })
       : null
   const paymentWhere =
     paymentCompanyIds.length > 0
@@ -903,17 +904,17 @@ export async function loadServerSalesListData(
 ) {
   const range = getServerFinancialYearRange(financialYearPayload)
   return prisma.salesBill.findMany({
-    where: {
+    where: buildGroupedSalesBillWhere({
       companyId,
       ...(range.dateFrom || range.dateTo
         ? {
             billDate: {
               ...(range.dateFrom ? { gte: range.dateFrom } : {}),
               ...(range.dateTo ? { lte: range.dateTo } : {})
+              }
             }
-          }
-        : {})
-    },
+          : {})
+    }),
     select: {
       id: true,
       billNo: true,
@@ -922,6 +923,30 @@ export async function loadServerSalesListData(
       receivedAmount: true,
       balanceAmount: true,
       status: true,
+      invoiceKind: true,
+      workflowStatus: true,
+      splitMethod: true,
+      splitPartLabel: true,
+      splitSuffix: true,
+      parentSalesBill: {
+        select: {
+          id: true,
+          billNo: true
+        }
+      },
+      childSalesBills: {
+        select: {
+          id: true,
+          billNo: true,
+          totalAmount: true,
+          receivedAmount: true,
+          balanceAmount: true,
+          workflowStatus: true,
+          invoiceKind: true,
+          splitPartLabel: true,
+          splitSuffix: true
+        }
+      },
       party: {
         select: {
           name: true,

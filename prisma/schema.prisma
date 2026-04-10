@@ -270,6 +270,7 @@ model Company {
   salesItemMasters     SalesItemMaster[]
   purchaseBills        PurchaseBill[]
   salesBills           SalesBill[]
+  salesBillSplitGroups SalesBillSplitGroup[]
   specialPurchaseBills SpecialPurchaseBill[]
   stockLedger          StockLedger[]
   payments             Payment[]
@@ -525,50 +526,127 @@ model SpecialPurchaseItem {
 }
 
 model SalesBill {
-  id             String          @id @default(cuid())
-  companyId      String
-  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  billNo         String
-  billDate       DateTime
-  partyId        String
-  party          Party           @relation(fields: [partyId], references: [id], onDelete: Cascade)
-  subTotalAmount Float           @default(0)
-  gstAmount      Float           @default(0)
-  totalAmount    Float
-  receivedAmount Float           @default(0)
-  balanceAmount  Float           @default(0)
-  status         String // unpaid/partial/paid
-  createdBy      String?
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  id                  String                @id @default(cuid())
+  companyId           String
+  company             Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  billNo              String
+  billDate            DateTime
+  partyId             String
+  party               Party                 @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  subTotalAmount      Float                 @default(0)
+  gstAmount           Float                 @default(0)
+  totalAmount         Float
+  receivedAmount      Float                 @default(0)
+  balanceAmount       Float                 @default(0)
+  status              String // unpaid/partial/paid
+  invoiceKind         String                @default("regular")
+  workflowStatus      String                @default("posted")
+  parentSalesBillId   String?
+  parentSalesBill     SalesBill?            @relation("SalesBillParentChild", fields: [parentSalesBillId], references: [id], onDelete: SetNull)
+  childSalesBills     SalesBill[]           @relation("SalesBillParentChild")
+  splitGroupId        String?
+  splitGroup          SalesBillSplitGroup?  @relation("SalesBillSplitGroupBills", fields: [splitGroupId], references: [id], onDelete: SetNull)
+  splitAsParentGroup  SalesBillSplitGroup?  @relation("SalesBillSplitGroupParent")
+  splitSuffix         String?
+  splitSequence       Int?
+  splitMethod         String?
+  splitReason         String?
+  splitPartLabel      String?
+  lockedAt            DateTime?
+  splitFinalizedAt    DateTime?
+  createdBy           String?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
   // relations
-  salesItems     SalesItem[]
-  transportBills TransportBill[]
-  additionalCharges SalesAdditionalCharge[]
+  salesItems          SalesItem[]
+  transportBills      TransportBill[]
+  additionalCharges   SalesAdditionalCharge[]
+  splitAllocations    SalesBillSplitAllocation[] @relation("SalesSplitAllocationChildBill")
 
   @@index([companyId, billDate], map: "idx_sales_bills_company_date")
   @@index([companyId, status, billDate, createdAt], map: "idx_sales_bills_company_status_date_created")
   @@index([companyId, partyId, billDate], map: "idx_sales_bills_company_party_date")
+  @@unique([parentSalesBillId, splitSuffix], map: "uniq_sales_bills_parent_suffix")
+  @@index([companyId, invoiceKind, workflowStatus, billDate, createdAt], map: "idx_sales_bills_company_kind_workflow_date_created")
+  @@index([parentSalesBillId, splitSequence], map: "idx_sales_bills_parent_sequence")
+  @@index([splitGroupId], map: "idx_sales_bills_split_group")
 }
 
 model SalesItem {
-  id              String    @id @default(cuid())
-  salesBillId     String
-  salesBill       SalesBill @relation(fields: [salesBillId], references: [id], onDelete: Cascade)
-  productId       String
-  product         Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
-  weight          Float
-  bags            Int?
-  rate            Float
-  taxableAmount   Float     @default(0)
-  gstRateSnapshot Float?
-  gstAmount       Float     @default(0)
-  lineTotal       Float     @default(0)
-  amount          Float
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                     String                     @id @default(cuid())
+  salesBillId            String
+  salesBill              SalesBill                  @relation(fields: [salesBillId], references: [id], onDelete: Cascade)
+  productId              String
+  product                Product                    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  weight                 Float
+  bags                   Int?
+  rate                   Float
+  taxableAmount          Float                      @default(0)
+  gstRateSnapshot        Float?
+  gstAmount              Float                      @default(0)
+  lineTotal              Float                      @default(0)
+  amount                 Float
+  parentSplitAllocations SalesBillSplitAllocation[] @relation("SalesSplitAllocationParentItem")
+  childSplitAllocations  SalesBillSplitAllocation[] @relation("SalesSplitAllocationChildItem")
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
 
   @@index([salesBillId], map: "idx_sales_items_bill_id")
+}
+
+model SalesBillSplitGroup {
+  id                  String                     @id @default(cuid())
+  companyId           String
+  company             Company                    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  parentSalesBillId   String                     @unique
+  parentSalesBill     SalesBill                  @relation("SalesBillSplitGroupParent", fields: [parentSalesBillId], references: [id], onDelete: Cascade)
+  status              String                     @default("draft")
+  splitMethod         String
+  chargeAllocationMode String                    @default("proportional_amount")
+  reason              String?
+  notes               String?
+  sourceBillSnapshot  String?
+  validationSnapshot  String?
+  createdBy           String?
+  updatedBy           String?
+  finalizedAt         DateTime?
+  mergedAt            DateTime?
+  lockedAt            DateTime?
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+  childBills          SalesBill[]                @relation("SalesBillSplitGroupBills")
+  allocations         SalesBillSplitAllocation[]
+
+  @@index([companyId, status, createdAt], map: "idx_sales_split_groups_company_status_created")
+  @@index([companyId, splitMethod], map: "idx_sales_split_groups_company_method")
+}
+
+model SalesBillSplitAllocation {
+  id              String              @id @default(cuid())
+  splitGroupId    String
+  splitGroup      SalesBillSplitGroup @relation(fields: [splitGroupId], references: [id], onDelete: Cascade)
+  parentSalesItemId String
+  parentSalesItem SalesItem           @relation("SalesSplitAllocationParentItem", fields: [parentSalesItemId], references: [id], onDelete: Cascade)
+  childSalesBillId String
+  childSalesBill  SalesBill           @relation("SalesSplitAllocationChildBill", fields: [childSalesBillId], references: [id], onDelete: Cascade)
+  childSalesItemId String?
+  childSalesItem  SalesItem?          @relation("SalesSplitAllocationChildItem", fields: [childSalesItemId], references: [id], onDelete: SetNull)
+  allocationMode  String?
+  sourceIndex     Int                 @default(0)
+  weight          Float               @default(0)
+  bags            Int?
+  rate            Float               @default(0)
+  amount          Float               @default(0)
+  taxableAmount   Float               @default(0)
+  gstAmount       Float               @default(0)
+  lineTotal       Float               @default(0)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([splitGroupId, parentSalesItemId, childSalesBillId, sourceIndex], map: "uniq_sales_split_allocations_group_item_bill_index")
+  @@index([splitGroupId, childSalesBillId], map: "idx_sales_split_allocations_group_child_bill")
+  @@index([parentSalesItemId], map: "idx_sales_split_allocations_parent_item")
+  @@index([childSalesItemId], map: "idx_sales_split_allocations_child_item")
 }
 
 model SalesItemMaster {

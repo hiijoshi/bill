@@ -16,6 +16,7 @@ import {
   isOutgoingCashflowPaymentType
 } from '@/lib/payment-entry-types'
 import { getFinancialYearDateFilter, type FinancialYearSummary } from '@/lib/financial-years'
+import { buildOperationalSalesBillWhere } from '@/lib/sales-split'
 
 type OverviewSection =
   | 'purchaseBills'
@@ -351,7 +352,7 @@ async function loadOverviewPayload(params: {
       : null
   const salesWhere =
     salesCompanyIds.length > 0
-      ? {
+      ? buildOperationalSalesBillWhere({
           companyId: { in: salesCompanyIds },
           status: { not: 'cancelled' as const },
           ...(params.dateFrom || params.dateTo
@@ -362,7 +363,7 @@ async function loadOverviewPayload(params: {
                 }
               }
             : {})
-        }
+        })
       : null
   const paymentWhere =
     paymentCompanyIds.length > 0
