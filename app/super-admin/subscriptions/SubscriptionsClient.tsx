@@ -53,6 +53,7 @@ type ActionFormState = {
 
 type SubscriptionsClientProps = {
   requestedTraderId?: string
+  requestedState?: string
   initialTraders: TraderSubscriptionListItem[]
   initialPlans: SuperAdminSubscriptionPlan[]
   initialSelectedTraderId: string
@@ -116,6 +117,7 @@ function getBadgeVariant(value?: string | null): 'default' | 'secondary' | 'dest
 
 export default function SuperAdminTraderSubscriptionsClient({
   requestedTraderId: requestedTraderIdProp,
+  requestedState: requestedStateProp,
   initialTraders,
   initialPlans,
   initialSelectedTraderId,
@@ -125,6 +127,7 @@ export default function SuperAdminTraderSubscriptionsClient({
   initialError = null
 }: SubscriptionsClientProps) {
   const requestedTraderId = String(requestedTraderIdProp || '').trim()
+  const requestedState = String(requestedStateProp || '').trim().toLowerCase()
   const [traders, setTraders] = useState<TraderSubscriptionListItem[]>(initialTraders)
   const [plans, setPlans] = useState<SuperAdminSubscriptionPlan[]>(initialPlans)
   const [selectedTraderId, setSelectedTraderId] = useState<string>(initialSelectedTraderId)
@@ -137,6 +140,7 @@ export default function SuperAdminTraderSubscriptionsClient({
   const [detailLoading, setDetailLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [query, setQuery] = useState('')
+  const [stateFilter, setStateFilter] = useState(requestedState)
   const [expiringWithinDays, setExpiringWithinDays] = useState('')
   const [error, setError] = useState<string | null>(initialError)
   const [schemaReady, setSchemaReady] = useState(initialSchemaReady)
@@ -166,6 +170,7 @@ export default function SuperAdminTraderSubscriptionsClient({
     try {
       const params = new URLSearchParams()
       if (query.trim()) params.set('query', query.trim())
+      if (stateFilter.trim()) params.set('state', stateFilter.trim())
       if (expiringWithinDays.trim()) params.set('expiringWithinDays', expiringWithinDays.trim())
 
       const response = await fetch(`/api/super-admin/trader-subscriptions?${params.toString()}`, { cache: 'no-store' })
@@ -198,7 +203,7 @@ export default function SuperAdminTraderSubscriptionsClient({
     } finally {
       setLoading(false)
     }
-  }, [expiringWithinDays, query, requestedTraderId, selectedTraderId])
+  }, [expiringWithinDays, query, requestedTraderId, selectedTraderId, stateFilter])
 
   const loadDetail = useCallback(async (traderId: string) => {
     if (!traderId) {
@@ -360,7 +365,11 @@ export default function SuperAdminTraderSubscriptionsClient({
   return (
     <SuperAdminShell
       title="Trader Subscriptions"
-      subtitle="Assign trials, activate paid plans, extend validity, and monitor expiring trader subscriptions."
+      subtitle={
+        stateFilter === 'closure_requested'
+          ? 'Review traders who submitted closure requests and complete the closure workflow.'
+          : 'Assign trials, activate paid plans, extend validity, and monitor expiring trader subscriptions.'
+      }
     >
       <div className="space-y-6">
         {error ? <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
@@ -375,13 +384,29 @@ export default function SuperAdminTraderSubscriptionsClient({
             <CardTitle>Expiring and Current Status</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-[1fr_180px_auto]">
+            <div className="grid gap-3 md:grid-cols-[1fr_220px_180px_auto]">
               <Input
                 name="subscription-search"
                 placeholder="Search trader or plan"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
               />
+              <select
+                name="subscription-state-filter"
+                className="h-10 w-full rounded-md border border-slate-200 px-3 text-sm"
+                value={stateFilter}
+                onChange={(event) => setStateFilter(event.target.value)}
+              >
+                <option value="">All states</option>
+                <option value="closure_requested">Closure Requested</option>
+                <option value="deletion_pending">Deletion Pending</option>
+                <option value="active">Active</option>
+                <option value="trial">Trial</option>
+                <option value="expired">Expired</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="suspended">Suspended</option>
+                <option value="pending">Pending</option>
+              </select>
               <Input
                 name="subscription-expiring-within-days"
                 type="number"
