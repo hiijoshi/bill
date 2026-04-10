@@ -737,7 +737,7 @@ async function fetchSuperAdminTraderSubscriptionRows(
 
     if (stateFilter) {
       if (stateFilter === 'closure_requested') {
-        if (!row.lifecycleMessage.toLowerCase().includes('closure request submitted')) {
+        if (!String(row.lifecycleMessage || '').toLowerCase().includes('closure request submitted')) {
           return false
         }
       } else if (row.subscriptionState !== stateFilter && row.dataLifecycleState !== stateFilter) {
@@ -888,6 +888,7 @@ export async function getSuperAdminSubscriptionBootstrap(
   options: {
     requestedTraderId?: string
     query?: string
+    state?: string
     expiringWithinDays?: number | null
     includeLocked?: boolean
   } = {}
@@ -899,6 +900,7 @@ export async function getSuperAdminSubscriptionBootstrap(
     fetchSuperAdminSubscriptionPlans(db, schemaReady, true),
     fetchSuperAdminTraderSubscriptionRows(db, schemaReady, {
       query: options.query,
+      state: options.state,
       expiringWithinDays: options.expiringWithinDays,
       includeLocked: options.includeLocked,
       now

@@ -10,6 +10,7 @@ export type StatementTargetSelection = {
   targetLabel: string
   reason?: string | null
   confidence?: StatementSuggestionConfidence | null
+  confidenceScore?: number | null
 }
 
 export type StatementDocumentMeta = {
@@ -33,6 +34,7 @@ export type StatementPreviewRow = {
   matchedPaymentId?: string
   matchedTypeLabel?: string
   matchedTargetLabel?: string
+  matchConfidenceScore?: number | null
   reason?: string
   amountMismatch?: boolean
   mismatchReason?: string | null

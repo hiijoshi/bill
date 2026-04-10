@@ -14,7 +14,7 @@ type PageProps = {
 }
 
 type ReportType = 'main' | 'purchase' | 'sales' | 'stock' | 'operations'
-type OperationsView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'cash-ledger' | 'bank-ledger'
+type OperationsView = 'overview' | 'outstanding' | 'ledger' | 'daily' | 'cash-ledger' | 'bank-ledger'
 
 function normalizeReportType(value: string | string[] | undefined): ReportType {
   const normalized = Array.isArray(value) ? value[0] : value
@@ -27,15 +27,20 @@ function normalizeReportType(value: string | string[] | undefined): ReportType {
 function normalizeOperationsView(value: string | string[] | undefined): OperationsView {
   const normalized = Array.isArray(value) ? value[0] : value
   if (
+    normalized === 'overview' ||
+    normalized === 'daily' ||
     normalized === 'ledger' ||
     normalized === 'daily-transaction' ||
     normalized === 'daily-consolidated' ||
     normalized === 'cash-ledger' ||
     normalized === 'bank-ledger'
   ) {
+    if (normalized === 'daily-transaction' || normalized === 'daily-consolidated') {
+      return 'daily'
+    }
     return normalized
   }
-  return 'outstanding'
+  return 'overview'
 }
 
 export default async function ReportsMainPage({ searchParams }: PageProps) {

@@ -465,15 +465,6 @@ export default function DashboardLayout({
               {financialYearSwitchError}
             </div>
           ) : null}
-          {financialYear ? (
-            <div className="mx-auto mt-3 max-w-7xl rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-              Financial Year: <span className="font-semibold text-slate-950">{financialYear.label}</span>
-              {financialYear.status !== 'open' ? ` • ${financialYear.status.toUpperCase()}` : ''}
-              {isUsingExplicitFinancialYear && financialYearPayload.activeFinancialYear?.label
-                ? ` • Active FY is ${financialYearPayload.activeFinancialYear.label}`
-                : ''}
-            </div>
-          ) : null}
           {shouldShowSubscriptionBanner ? (
             <div className="mx-auto mt-3 max-w-7xl rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               <span className="font-semibold">

@@ -136,6 +136,42 @@ function tokenize(value: unknown): string[] {
   )
 }
 
+function computeTokenSimilarity(left: string[], right: string[]): number {
+  if (left.length === 0 || right.length === 0) return 0
+
+  const leftSet = new Set(left)
+  const rightSet = new Set(right)
+  let overlap = 0
+
+  for (const token of leftSet) {
+    if (rightSet.has(token)) overlap += 1
+  }
+
+  return overlap / Math.max(leftSet.size, rightSet.size, 1)
+}
+
+function fuzzySimilarity(left: unknown, right: unknown): number {
+  const normalizedLeft = normalizeForCompare(left)
+  const normalizedRight = normalizeForCompare(right)
+  if (!normalizedLeft || !normalizedRight) return 0
+  if (normalizedLeft === normalizedRight) return 1
+
+  const compactLeft = normalizeCompact(left)
+  const compactRight = normalizeCompact(right)
+  if (compactLeft && compactRight && (compactLeft.includes(compactRight) || compactRight.includes(compactLeft))) {
+    return 0.88
+  }
+
+  return computeTokenSimilarity(tokenize(normalizedLeft), tokenize(normalizedRight))
+}
+
+function getConfidenceScore(confidence: 'high' | 'medium' | 'low' | null | undefined): number | null {
+  if (confidence === 'high') return 92
+  if (confidence === 'medium') return 74
+  if (confidence === 'low') return 58
+  return null
+}
+
 function normalizeDateKey(value: Date | string): string {
   const parsed = value instanceof Date ? value : new Date(value)
   if (!Number.isFinite(parsed.getTime())) return ''
@@ -159,13 +195,19 @@ function buildTargetKey(targetType: StatementTargetType, targetId: string): stri
   return `${targetType}:${targetId}`
 }
 
-function createTargetSelection(candidate: TargetCandidate, reason?: string | null, confidence?: 'high' | 'medium' | 'low' | null): StatementTargetSelection {
+function createTargetSelection(
+  candidate: TargetCandidate,
+  reason?: string | null,
+  confidence?: 'high' | 'medium' | 'low' | null,
+  confidenceScore?: number | null
+): StatementTargetSelection {
   return {
     targetType: candidate.targetType,
     targetId: candidate.targetId,
     targetLabel: candidate.targetLabel,
     reason: reason || undefined,
-    confidence: confidence || undefined
+    confidence: confidence || undefined,
+    confidenceScore: confidenceScore ?? getConfidenceScore(confidence)
   }
 }
 
@@ -270,6 +312,7 @@ function suggestStatementTarget(
 ): StatementTargetSelection | null {
   const haystack = normalizeForCompare(`${entry.description} ${entry.reference || ''}`)
   const compactHaystack = normalizeCompact(`${entry.description} ${entry.reference || ''}`)
+  const entryTokens = tokenize(`${entry.description} ${entry.reference || ''}`)
 
   if (!haystack) return null
 
@@ -303,6 +346,24 @@ function suggestStatementTarget(
       score += 1
     }
 
+    const similarity = fuzzySimilarity(`${entry.description} ${entry.reference || ''}`, candidate.matcherLabel)
+    if (similarity >= 0.9) {
+      score += 6
+      reasons.push('strong fuzzy name match')
+    } else if (similarity >= 0.75) {
+      score += 4
+      reasons.push('probable fuzzy name match')
+    }
+
+    if (entryTokens.length > 0) {
+      const keywordSimilarity = computeTokenSimilarity(entryTokens, tokens)
+      if (keywordSimilarity >= 0.66) {
+        score += 3
+      } else if (keywordSimilarity >= 0.4) {
+        score += 2
+      }
+    }
+
     if (score < 3) continue
 
     const reason = reasons.join('; ') || 'matched statement text'
@@ -314,7 +375,8 @@ function suggestStatementTarget(
   if (!bestMatch) return null
 
   const confidence = bestMatch.score >= 7 ? 'high' : bestMatch.score >= 5 ? 'medium' : 'low'
-  return createTargetSelection(bestMatch.candidate, `Suggested because ${bestMatch.reason}.`, confidence)
+  const confidenceScore = Math.max(58, Math.min(96, 48 + bestMatch.score * 6))
+  return createTargetSelection(bestMatch.candidate, `Suggested because ${bestMatch.reason}.`, confidence, confidenceScore)
 }
 
 function getBankComparisonValues(bank: BankRecord): string[] {
@@ -345,7 +407,7 @@ function matchExistingPayment(
   entry: ParsedStatementEntry,
   payments: ExistingPaymentRecord[],
   bank: BankRecord
-): { payment: ExistingPaymentRecord; reason: string } | null {
+): { payment: ExistingPaymentRecord; reason: string; confidenceScore: number } | null {
   const bankValues = getBankComparisonValues(bank)
 
   for (const payment of payments) {
@@ -353,7 +415,7 @@ function matchExistingPayment(
 
     const noteHaystack = normalizeForCompare(payment.note)
     if (noteHaystack.includes(normalizeForCompare(entry.externalId))) {
-      return { payment, reason: 'Already imported from the same bank statement row.' }
+      return { payment, reason: 'Already imported from the same bank statement row.', confidenceScore: 100 }
     }
   }
 
@@ -368,6 +430,10 @@ function matchExistingPayment(
     const dateDistance = getDateDistanceInDays(entry.postedAt, payment.payDate)
     const normalizedPaymentReference = normalizeCompact(payment.txnRef)
     const paymentBankValues = getPaymentBankComparisonValues(payment)
+    const partySimilarity = Math.max(
+      fuzzySimilarity(entry.description, payment.party?.name || ''),
+      fuzzySimilarity(entry.description, payment.farmer?.name || '')
+    )
     const bankMatches =
       paymentBankValues.length > 0 &&
       paymentBankValues.some((value) => bankValues.includes(value))
@@ -384,12 +450,24 @@ function matchExistingPayment(
       continue
     }
 
-    if (dateDistance <= 1 && bankMatches) {
+    if (dateDistance <= 2 && bankMatches) {
       const score = isSelfTransferPaymentType(payment.billType) ? 8 : 7
       if (!bestMatch || score > bestMatch.score) {
         bestMatch = {
           payment,
           reason: 'Matched by date, amount, and selected bank.',
+          score
+        }
+      }
+      continue
+    }
+
+    if (dateDistance <= 3 && partySimilarity >= 0.78) {
+      const score = 7
+      if (!bestMatch || score > bestMatch.score) {
+        bestMatch = {
+          payment,
+          reason: 'Matched by amount, nearby date, and party name similarity.',
           score
         }
       }
@@ -408,7 +486,13 @@ function matchExistingPayment(
     }
   }
 
-  return bestMatch ? { payment: bestMatch.payment, reason: bestMatch.reason } : null
+  return bestMatch
+    ? {
+        payment: bestMatch.payment,
+        reason: bestMatch.reason,
+        confidenceScore: Math.max(62, Math.min(99, 44 + bestMatch.score * 6))
+      }
+    : null
 }
 
 function detectAmountMismatch(
@@ -685,6 +769,7 @@ export async function POST(request: NextRequest) {
           matchedPaymentId: matchedPayment.payment.id,
           matchedTypeLabel: getPaymentTypeLabel(matchedPayment.payment.billType),
           matchedTargetLabel: matchedTargetLabel || undefined,
+          matchConfidenceScore: matchedPayment.confidenceScore,
           reason: matchedPayment.reason
         }
       }

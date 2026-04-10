@@ -56,6 +56,7 @@ import type {
 import { getClientCachedValue, loadClientCachedValue } from '@/lib/client-cached-value'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { deleteClientCache, setClientCache } from '@/lib/client-fetch-cache'
+import { getCsrfTokenScoped } from '@/lib/csrf'
 
 type BankRecord = {
   id: string
@@ -425,6 +426,71 @@ function buildPreviewStatusMessage(payload: StatementPayload): string {
   return `Statement verified. ${matched} matched and ${unmatched} unmatched row${unmatched === 1 ? '' : 's'} are ready for review.`
 }
 
+function getConfidencePercent(confidence: StatementTargetSelection['confidence'] | null | undefined): number {
+  if (confidence === 'high') return 92
+  if (confidence === 'medium') return 74
+  if (confidence === 'low') return 58
+  return 0
+}
+
+function averageConfidenceScore(rows: StatementPreviewRow[], resolver?: (row: StatementPreviewRow) => number | null): number {
+  if (!rows.length) return 0
+  const scores = rows
+    .map((row) => (resolver ? resolver(row) : row.matchConfidenceScore ?? row.suggestedTarget?.confidenceScore ?? getConfidencePercent(row.suggestedTarget?.confidence)))
+    .filter((value): value is number => value !== null && Number.isFinite(value) && value > 0)
+
+  if (!scores.length) return 0
+  return Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length)
+}
+
+function getFileLifecycleState(
+  activeAction: RouteAction | null,
+  hasPreview: boolean,
+  selectedFile: File | null
+): {
+  label: string
+  detail: string
+  className: string
+} {
+  if (activeAction === 'preview') {
+    return {
+      label: 'Processing',
+      detail: 'Parsing transactions...',
+      className: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200'
+    }
+  }
+
+  if (activeAction === 'import') {
+    return {
+      label: 'Finalizing',
+      detail: 'Posting verified rows...',
+      className: 'bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200'
+    }
+  }
+
+  if (hasPreview) {
+    return {
+      label: 'Ready',
+      detail: 'Verified and ready for review',
+      className: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200'
+    }
+  }
+
+  if (selectedFile) {
+    return {
+      label: 'Queued',
+      detail: 'Auto-detect bank format',
+      className: 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200'
+    }
+  }
+
+  return {
+    label: 'Idle',
+    detail: 'Waiting for upload',
+    className: 'bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200'
+  }
+}
+
 function getToneClasses(tone: ToastTone | null): string {
   if (tone === 'error') return 'border-red-200 bg-red-50 text-red-800'
   if (tone === 'success') return 'border-emerald-200 bg-emerald-50 text-emerald-800'
@@ -469,6 +535,11 @@ function submitStatementRequest(
     xhr.open('POST', '/api/payments/bank-statement/import')
     xhr.timeout = action === 'import' ? 120_000 : 90_000
     xhr.responseType = 'text'
+    const csrfToken = getCsrfTokenScoped('app')
+    if (csrfToken) {
+      xhr.setRequestHeader('x-csrf-token', csrfToken)
+    }
+    xhr.setRequestHeader('x-requested-with', 'XMLHttpRequest')
 
     xhr.upload.onprogress = (event) => {
       if (!event.lengthComputable || event.total <= 0) {
@@ -635,9 +706,11 @@ export default function BankStatementUploadClient({
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [matchedOpen, setMatchedOpen] = useState(false)
+  const [suggestedOpen, setSuggestedOpen] = useState(true)
   const [unmatchedOpen, setUnmatchedOpen] = useState(true)
   const [invalidOpen, setInvalidOpen] = useState(false)
   const [matchedVisibleCount, setMatchedVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
+  const [suggestedVisibleCount, setSuggestedVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   const [unmatchedVisibleCount, setUnmatchedVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   const [invalidVisibleCount, setInvalidVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   const [expandedRows, setExpandedRows] = useState<string[]>([])
@@ -1073,6 +1146,28 @@ export default function BankStatementUploadClient({
     })
   }, [unsettledEntries, deferredSearchTerm, dateFrom, dateTo, reviewFilter, manualTargets, statementTargetMap])
 
+  const suggestedEntries = useMemo(
+    () =>
+      filteredUnsettledEntries.filter(
+        (entry) =>
+          Boolean(entry.suggestedTarget) &&
+          !manualTargets[entry.externalId] &&
+          !entry.selectedTarget
+      ),
+    [filteredUnsettledEntries, manualTargets]
+  )
+
+  const reviewOnlyEntries = useMemo(
+    () =>
+      filteredUnsettledEntries.filter(
+        (entry) =>
+          !entry.suggestedTarget ||
+          Boolean(manualTargets[entry.externalId]) ||
+          Boolean(entry.selectedTarget)
+      ),
+    [filteredUnsettledEntries, manualTargets]
+  )
+
   const filteredInvalidEntries = useMemo(() => {
     const query = normalizeText(deferredSearchTerm).toLowerCase()
     return invalidEntries.filter((entry) => {
@@ -1086,18 +1181,23 @@ export default function BankStatementUploadClient({
   }, [filteredSettledEntries.length])
 
   useEffect(() => {
+    setSuggestedVisibleCount(INITIAL_VISIBLE_ROWS)
+  }, [suggestedEntries.length])
+
+  useEffect(() => {
     setUnmatchedVisibleCount(INITIAL_VISIBLE_ROWS)
     setSelectedUnmatchedIds((current) =>
-      current.filter((id) => filteredUnsettledEntries.some((entry) => entry.externalId === id))
+      current.filter((id) => reviewOnlyEntries.some((entry) => entry.externalId === id))
     )
-  }, [filteredUnsettledEntries.length])
+  }, [reviewOnlyEntries.length])
 
   useEffect(() => {
     setInvalidVisibleCount(INITIAL_VISIBLE_ROWS)
   }, [filteredInvalidEntries.length])
 
   const visibleSettledEntries = filteredSettledEntries.slice(0, matchedVisibleCount)
-  const visibleUnsettledEntries = filteredUnsettledEntries.slice(0, unmatchedVisibleCount)
+  const visibleSuggestedEntries = suggestedEntries.slice(0, suggestedVisibleCount)
+  const visibleUnsettledEntries = reviewOnlyEntries.slice(0, unmatchedVisibleCount)
   const visibleInvalidEntries = filteredInvalidEntries.slice(0, invalidVisibleCount)
 
   const combinedActivity = useMemo(() => {
@@ -1117,6 +1217,16 @@ export default function BankStatementUploadClient({
       : activeAction === 'preview'
         ? 'Verifying Statement'
         : ''
+
+  const fileLifecycle = getFileLifecycleState(activeAction, hasPreview, selectedFile)
+  const matchedConfidenceAverage = averageConfidenceScore(filteredSettledEntries)
+  const suggestedConfidenceAverage = averageConfidenceScore(
+    suggestedEntries,
+    (row) => row.suggestedTarget?.confidenceScore ?? getConfidencePercent(row.suggestedTarget?.confidence)
+  )
+  const unresolvedAmount = amountSummary.unmatchedAmount
+  const reconciliationDifference = unresolvedAmount
+  const completedReconciliation = hasPreview && unsettledEntries.length === 0 && invalidEntries.length === 0
 
   const applyManualTargets = (next: Record<string, string>, summaryText: string) => {
     if (areSelectionMapsEqual(manualTargets, next)) return
@@ -1157,7 +1267,7 @@ export default function BankStatementUploadClient({
     const next = { ...manualTargets }
     let changed = 0
 
-    for (const entry of filteredUnsettledEntries) {
+    for (const entry of reviewOnlyEntries) {
       if (!selectedUnmatchedIdSet.has(entry.externalId) || !entry.suggestedTarget) continue
       next[entry.externalId] = encodeTargetSelection(entry.suggestedTarget)
       changed += 1
@@ -1186,7 +1296,7 @@ export default function BankStatementUploadClient({
     const next = { ...manualTargets }
     let changed = 0
 
-    for (const entry of filteredUnsettledEntries) {
+    for (const entry of reviewOnlyEntries) {
       if (!selectedUnmatchedIdSet.has(entry.externalId)) continue
       next[entry.externalId] = bulkTargetValue
       changed += 1
@@ -1205,7 +1315,7 @@ export default function BankStatementUploadClient({
     const next = { ...manualTargets }
     let changed = 0
 
-    for (const entry of filteredUnsettledEntries) {
+    for (const entry of reviewOnlyEntries) {
       if (!selectedUnmatchedIdSet.has(entry.externalId)) continue
       if (next[entry.externalId]) {
         delete next[entry.externalId]
@@ -1648,52 +1758,57 @@ export default function BankStatementUploadClient({
         </DialogContent>
       </Dialog>
 
-      <div className="min-h-full bg-slate-50 p-3 sm:p-4">
+      <div className="min-h-full bg-[radial-gradient(circle_at_top_right,_rgba(14,165,233,0.12),_transparent_24%),radial-gradient(circle_at_top_left,_rgba(59,130,246,0.12),_transparent_22%),linear-gradient(180deg,#f8fbff_0%,#f8fafc_46%,#eef4ff_100%)] p-3 sm:p-4">
         <div className="mx-auto flex max-w-7xl flex-col gap-3">
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="overflow-hidden rounded-[28px] border border-white/70 bg-white/70 p-4 shadow-[0_16px_50px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+            <div className="absolute" />
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.28em] text-blue-700">
-                  <span>ERP bank workspace</span>
+                <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.28em] text-sky-700">
+                  <span>Intelligent finance workspace</span>
                   {result?.document?.parser ? (
-                    <Badge variant="outline" className="border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700 hover:bg-blue-50">
+                    <Badge variant="outline" className="border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] text-sky-700 hover:bg-sky-50">
                       Parser: {result.document.parser}
                     </Badge>
                   ) : null}
                 </div>
-                <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-950">Bank Statement Reconciliation</h1>
+                <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">Bank Reconciliation Workspace</h1>
                 <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                  Upload the statement once, review the matched and unmatched rows in compact sections, save the draft if needed, and post only the rows that are ready.
+                  Upload, auto-match, review and finalize transactions with one intelligent reconciliation flow.
                 </p>
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-                  <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-slate-700">
-                    <FileText className="h-4 w-4 text-slate-500" />
-                    <span className="max-w-[280px] truncate">{activeDocumentName}</span>
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1 text-slate-700 ring-1 ring-inset ring-slate-200">
+                    <Landmark className="h-4 w-4 text-emerald-600" />
+                    <span className="max-w-[220px] truncate">{activeBank?.name || 'Bank not selected'}</span>
+                  </span>
+                  <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-medium ${fileLifecycle.className}`}>
+                    {fileLifecycle.label}
                   </span>
                   <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-medium ${documentStatus.className}`}>
                     {documentStatus.label}
                   </span>
-                  {activeBank ? (
-                    <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-emerald-700 ring-1 ring-inset ring-emerald-200">
-                      <Landmark className="h-4 w-4" />
-                      {activeBank.name}
+                  {lastSavedAt ? (
+                    <span className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1 text-slate-700 ring-1 ring-inset ring-slate-200">
+                      <Clock3 className="h-4 w-4" />
+                      Updated {formatDateTime(lastSavedAt)}
                     </span>
                   ) : null}
-                  {lastSavedAt ? (
-                    <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-amber-700 ring-1 ring-inset ring-amber-200">
-                      <Clock3 className="h-4 w-4" />
-                      Saved {formatDateTime(lastSavedAt)}
+                  {selectedFile ? (
+                    <span className="inline-flex items-center gap-2 rounded-full bg-white/80 px-3 py-1 text-slate-700 ring-1 ring-inset ring-slate-200">
+                      <FileText className="h-4 w-4 text-slate-500" />
+                      <span className="max-w-[240px] truncate">{selectedFile.name}</span>
                     </span>
                   ) : null}
                 </div>
+                <p className="mt-3 text-xs font-medium text-slate-500">{fileLifecycle.detail}</p>
               </div>
 
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => router.push('/payment/dashboard')}>
-                  View Payment History
+                  View History
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => router.push('/payment/cash-bank/entry')}>
-                  Record Cash / Bank Payment
+                <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
+                  Upload New
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => router.push('/main/dashboard')}>
                   <ArrowLeft className="mr-2 h-4 w-4" />
@@ -1730,10 +1845,10 @@ export default function BankStatementUploadClient({
             </Card>
           ) : null}
 
-          <div className="grid gap-3 xl:grid-cols-[1.2fr_0.8fr]">
-            <Card className="border-slate-200 bg-white shadow-sm">
+          <div className="grid gap-3 xl:grid-cols-[1.15fr_0.85fr]">
+            <Card className="overflow-hidden border-slate-200 bg-white/90 shadow-[0_12px_32px_rgba(15,23,42,0.06)] backdrop-blur">
               <CardHeader className="pb-3">
-                <CardTitle className="text-base text-slate-950">Upload & verify</CardTitle>
+                <CardTitle className="text-base text-slate-950">Upload & Processing Panel</CardTitle>
               </CardHeader>
               <CardContent className="grid gap-3">
                 {banks.length === 0 ? (
@@ -1783,10 +1898,10 @@ export default function BankStatementUploadClient({
                         />
                         <button
                           type="button"
-                          className={`flex min-h-[116px] flex-col items-start justify-between rounded-2xl border border-dashed p-3 text-left transition ${
+                          className={`group flex min-h-[164px] flex-col items-start justify-between rounded-[24px] border border-dashed p-4 text-left transition ${
                             dragActive
-                              ? 'border-blue-400 bg-blue-50'
-                              : 'border-slate-300 bg-slate-50 hover:border-slate-400 hover:bg-slate-100'
+                              ? 'border-sky-400 bg-sky-50 shadow-[0_12px_28px_rgba(14,165,233,0.16)]'
+                              : 'border-slate-300 bg-[linear-gradient(145deg,#ffffff_0%,#f8fbff_100%)] hover:border-sky-300 hover:shadow-[0_12px_28px_rgba(59,130,246,0.08)]'
                           }`}
                           onClick={() => fileInputRef.current?.click()}
                           onDragEnter={(event) => {
@@ -1808,29 +1923,30 @@ export default function BankStatementUploadClient({
                           }}
                         >
                           <div>
-                            <p className="text-sm font-semibold text-slate-900">Drag & drop the statement here</p>
+                            <p className="text-base font-semibold text-slate-950">Drop bank statement here</p>
                             <p className="mt-1 text-sm text-slate-600">
-                              PDF, Excel, and CSV are fastest. Images and text remain available for recovery cases. Click to browse files.
+                              Auto-detect bank format, parse transactions in background, and restore cached previews instantly.
                             </p>
                           </div>
 
                           {selectedFile ? (
-                            <div className="w-full rounded-xl border border-blue-200 bg-white px-3 py-3 text-sm text-slate-700 shadow-sm">
+                            <div className="w-full rounded-2xl border border-sky-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div>
                                   <p className="font-semibold text-slate-950">{selectedFile.name}</p>
                                   <p className="mt-1 text-xs text-slate-500">
                                     {getDocumentKindLabel(selectedFileKind)} | {formatFileSize(selectedFile.size)}
                                   </p>
+                                  <p className="mt-1 text-xs text-sky-700">{fileLifecycle.detail}</p>
                                 </div>
-                                <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-50">
-                                  {getDocumentKindLabel(selectedFileKind)}
+                                <Badge variant="outline" className={`hover:bg-transparent ${fileLifecycle.className}`}>
+                                  {fileLifecycle.label}
                                 </Badge>
                               </div>
                             </div>
                           ) : (
                             <div className="rounded-xl bg-white px-3 py-2 text-xs text-slate-500 shadow-sm">
-                              No file selected yet
+                              Idle now. PDF, Excel, and CSV are supported.
                             </div>
                           )}
                         </button>
@@ -1871,18 +1987,20 @@ export default function BankStatementUploadClient({
                     </div>
 
                     {activeAction ? (
-                      <div className="rounded-2xl border border-blue-200 bg-blue-50 p-3">
+                      <div className="rounded-2xl border border-sky-200 bg-[linear-gradient(135deg,rgba(240,249,255,1)_0%,rgba(255,255,255,0.95)_100%)] p-4">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
-                            <Loader2 className="h-4 w-4 animate-spin text-blue-700" />
+                            <Loader2 className="h-4 w-4 animate-spin text-sky-700" />
                             <div>
-                              <p className="font-semibold text-blue-900">{activeRequestLabel}</p>
-                              <p className="text-sm text-blue-700">{getProcessingMessage(selectedFileKind, activeAction)}</p>
+                              <p className="font-semibold text-sky-900">{activeRequestLabel}</p>
+                              <p className="text-sm text-sky-700">
+                                {activeAction === 'preview' ? 'Auto-detecting bank format and parsing transactions…' : getProcessingMessage(selectedFileKind, activeAction)}
+                              </p>
                             </div>
                           </div>
-                          <span className="text-sm font-semibold text-blue-900">{requestProgress}%</span>
+                          <span className="text-sm font-semibold text-sky-900">{requestProgress}%</span>
                         </div>
-                        <Progress value={requestProgress} className="mt-3 h-2 bg-blue-100 [&_[data-slot='progress-indicator']]:bg-blue-600" />
+                        <Progress value={requestProgress} className="mt-3 h-2 bg-sky-100 [&_[data-slot='progress-indicator']]:bg-sky-600" />
                       </div>
                     ) : null}
                   </>
@@ -1890,51 +2008,92 @@ export default function BankStatementUploadClient({
               </CardContent>
             </Card>
 
-            <Card className="border-slate-200 bg-white shadow-sm">
+            <Card className="overflow-hidden border-slate-200 bg-white/90 shadow-[0_12px_32px_rgba(15,23,42,0.06)] backdrop-blur">
               <CardHeader className="pb-3">
-                <CardTitle className="text-base text-slate-950">Reconciliation summary</CardTitle>
+                <CardTitle className="text-base text-slate-950">Reconciliation Intelligence Panel</CardTitle>
               </CardHeader>
               <CardContent className="grid gap-3">
-                <SummaryMetricCard
-                  label="Total transactions"
-                  count={recognizedEntriesCount}
-                  amount={amountSummary.totalAmount}
-                  tone="neutral"
-                  helpText="All read rows"
-                />
                 <SummaryMetricCard
                   label="Matched"
                   count={settledEntries.length}
                   amount={amountSummary.matchedAmount}
                   tone="matched"
-                  helpText="Ready or posted"
+                  helpText={`${matchedConfidenceAverage || reconciliationPercent}% confidence`}
+                />
+                <SummaryMetricCard
+                  label="Suggested"
+                  count={suggestedEntries.length}
+                  amount={suggestedEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)}
+                  tone="neutral"
+                  helpText={`${suggestedConfidenceAverage || 0}% confidence`}
                 />
                 <SummaryMetricCard
                   label="Unmatched"
-                  count={unsettledEntries.length}
-                  amount={amountSummary.unmatchedAmount}
+                  count={reviewOnlyEntries.length}
+                  amount={reviewOnlyEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)}
                   tone="unmatched"
                   helpText="Needs review"
                 />
 
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="flex items-center justify-between gap-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Completion</p>
                       <p className="mt-1 text-xl font-bold text-slate-950">{reconciliationPercent}% reconciled</p>
+                      <p className="mt-1 text-xs text-slate-500">Total transactions: {recognizedEntriesCount}</p>
                     </div>
+                    <div className="grid gap-2 text-sm text-slate-600">
+                      <div className="flex items-center justify-between gap-3">
+                        <span>Matched amount</span>
+                        <strong className="text-slate-950">{formatCurrency(amountSummary.matchedAmount)}</strong>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span>Unmatched amount</span>
+                        <strong className="text-slate-950">{formatCurrency(amountSummary.unmatchedAmount)}</strong>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span>Difference</span>
+                        <strong className="text-slate-950">{formatCurrency(reconciliationDifference)}</strong>
+                      </div>
+                    </div>
+                  </div>
+                  <Progress value={reconciliationPercent} className="mt-3 h-2 bg-slate-200 [&_[data-slot='progress-indicator']]:bg-emerald-600" />
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <Badge variant="outline" className="border-slate-200 bg-white text-slate-700 hover:bg-white">
                       Ready to post: {readyToImportCount}
                     </Badge>
+                    <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-50">
+                      Unread rows: {summary.errors}
+                    </Badge>
                   </div>
-                  <Progress value={reconciliationPercent} className="mt-3 h-2 bg-slate-200 [&_[data-slot='progress-indicator']]:bg-emerald-600" />
-                  <p className="mt-3 text-xs text-slate-500">
-                    Imported rows stay marked as posted. Unmatched rows remain available for later review until they are mapped and posted.
-                  </p>
                 </div>
               </CardContent>
             </Card>
           </div>
+
+          {completedReconciliation ? (
+            <Card className="overflow-hidden border-emerald-200 bg-[linear-gradient(135deg,rgba(236,253,245,1)_0%,rgba(255,255,255,0.98)_100%)] shadow-[0_12px_28px_rgba(16,185,129,0.12)]">
+              <CardContent className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-700">Reconciliation Completed</p>
+                  <h2 className="mt-2 text-2xl font-bold text-slate-950">Everything is reconciled 🎉</h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {settledEntries.length} row{settledEntries.length === 1 ? '' : 's'} are matched or posted, and there are no remaining review issues.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={exportRowsToPdf}>
+                    <FileText className="mr-2 h-4 w-4" />
+                    Download report
+                  </Button>
+                  <Button onClick={() => setConfirmPostOpen(true)} disabled={!canUpload}>
+                    <Upload className="mr-2 h-4 w-4" />
+                    Post to ledger
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
 
           <div className="sticky top-3 z-20 flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm backdrop-blur lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
@@ -2189,6 +2348,140 @@ export default function BankStatementUploadClient({
                 </Card>
               </Collapsible>
 
+              <Collapsible open={suggestedOpen} onOpenChange={setSuggestedOpen}>
+                <Card className="border-amber-200 bg-white shadow-sm">
+                  <CardHeader className="p-0">
+                    <CollapsibleTrigger className="w-full">
+                      <div className="flex items-center justify-between gap-4 px-5 py-4 text-left">
+                        <div className="flex items-center gap-3">
+                          <span className="rounded-full bg-amber-100 p-2 text-amber-700">
+                            <Wand2 className="h-4 w-4" />
+                          </span>
+                          <div>
+                            <CardTitle className="text-base text-slate-950">Suggested matches</CardTitle>
+                            <p className="mt-1 text-sm text-slate-500">
+                              {suggestedEntries.length} row{suggestedEntries.length === 1 ? '' : 's'} | {formatCurrency(suggestedEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0))}
+                            </p>
+                          </div>
+                        </div>
+                        {suggestedOpen ? <ChevronDown className="h-5 w-5 text-slate-400" /> : <ChevronRight className="h-5 w-5 text-slate-400" />}
+                      </div>
+                    </CollapsibleTrigger>
+                  </CardHeader>
+                  <CollapsibleContent>
+                    <CardContent className="grid gap-3 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-3 text-sm">
+                        <div>
+                          <p className="font-semibold text-amber-900">AI-assisted suggestions</p>
+                          <p className="mt-1 text-amber-700">One click accepts the suggested ERP target. Suggestions stay separate from rows that still need manual review.</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Badge variant="outline" className="border-amber-200 bg-white text-amber-700 hover:bg-white">
+                            Avg confidence: {suggestedConfidenceAverage || 0}%
+                          </Badge>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              const next = { ...manualTargets }
+                              let changed = 0
+                              for (const entry of suggestedEntries) {
+                                if (!entry.suggestedTarget) continue
+                                next[entry.externalId] = encodeTargetSelection(entry.suggestedTarget)
+                                changed += 1
+                              }
+                              if (changed > 0) {
+                                applyManualTargets(next, `Accepted ${changed} suggested match${changed === 1 ? '' : 'es'}`)
+                                pushToast('success', 'Suggestions accepted', `${changed} suggested row${changed === 1 ? '' : 's'} are now ready.`)
+                              }
+                            }}
+                            disabled={!suggestedEntries.length}
+                          >
+                            <Wand2 className="mr-2 h-4 w-4" />
+                            Accept all
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3">
+                        {visibleSuggestedEntries.map((entry) => {
+                          const suggestion = entry.suggestedTarget
+                          const confidenceScore = suggestion?.confidenceScore ?? getConfidencePercent(suggestion?.confidence)
+                          return (
+                            <div key={`suggested-${entry.externalId}`} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_120px_minmax(0,1fr)_auto] lg:items-center">
+                                <div className="rounded-2xl bg-slate-50 p-3">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Bank entry</p>
+                                  <p className="mt-2 text-sm font-semibold text-slate-950">{entry.description || 'Statement row'}</p>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    {formatCompactStatementDate(entry.postedAt)} • {entry.reference || 'No reference'}
+                                  </p>
+                                  <p className="mt-2 text-base font-bold text-slate-950">
+                                    {entry.direction === 'out' ? getEntryDebitAmount(entry) : getEntryCreditAmount(entry)}
+                                  </p>
+                                </div>
+                                <div className="flex flex-col items-center justify-center gap-2 text-center">
+                                  <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100">Suggested match</Badge>
+                                  <div className="text-2xl font-bold text-amber-700">{confidenceScore}%</div>
+                                  <div className="text-xs text-slate-500">confidence</div>
+                                </div>
+                                <div className="rounded-2xl bg-amber-50/60 p-3">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Ledger target</p>
+                                  <p className="mt-2 text-sm font-semibold text-slate-950">{suggestion?.targetLabel || 'No suggestion'}</p>
+                                  <p className="mt-1 text-xs text-slate-500">{suggestion?.reason || entry.reason || 'No matching explanation available.'}</p>
+                                </div>
+                                <div className="flex flex-wrap gap-2 lg:flex-col">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => {
+                                      if (!entry.suggestedTarget) return
+                                      applyManualTargets(
+                                        {
+                                          ...manualTargets,
+                                          [entry.externalId]: encodeTargetSelection(entry.suggestedTarget)
+                                        },
+                                        `Accepted suggestion for row ${entry.rowNo}`
+                                      )
+                                    }}
+                                  >
+                                    Match
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      setReviewFilter('needs-target')
+                                      setUnmatchedOpen(true)
+                                      pushToast('info', 'Moved to review queue', `Row ${entry.rowNo} remains unmatched and needs manual review.`)
+                                    }}
+                                  >
+                                    Needs Review
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+
+                        {!visibleSuggestedEntries.length ? (
+                          <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-center text-sm text-slate-500">
+                            No suggestion candidates are waiting right now. Unmatched rows without suggestions stay in the red review queue below.
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {suggestedEntries.length > visibleSuggestedEntries.length ? (
+                        <div className="border-t border-slate-100 pt-4">
+                          <Button variant="outline" size="sm" onClick={() => setSuggestedVisibleCount((current) => current + INITIAL_VISIBLE_ROWS)}>
+                            Show more suggestions
+                          </Button>
+                        </div>
+                      ) : null}
+                    </CardContent>
+                  </CollapsibleContent>
+                </Card>
+              </Collapsible>
+
               <Collapsible open={unmatchedOpen} onOpenChange={setUnmatchedOpen}>
                 <Card className="border-slate-200 bg-white shadow-sm">
                   <CardHeader className="p-0">
@@ -2201,7 +2494,7 @@ export default function BankStatementUploadClient({
                           <div>
                             <CardTitle className="text-base text-slate-950">Unmatched transactions</CardTitle>
                             <p className="mt-1 text-sm text-slate-500">
-                              {filteredUnsettledEntries.length} row{filteredUnsettledEntries.length === 1 ? '' : 's'} | {formatCurrency(filteredUnsettledEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0))}
+                              {reviewOnlyEntries.length} row{reviewOnlyEntries.length === 1 ? '' : 's'} | {formatCurrency(reviewOnlyEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0))}
                             </p>
                           </div>
                         </div>
@@ -2447,7 +2740,7 @@ export default function BankStatementUploadClient({
                       </Table>
                       </div>
 
-                      {filteredUnsettledEntries.length > visibleUnsettledEntries.length ? (
+                      {reviewOnlyEntries.length > visibleUnsettledEntries.length ? (
                         <div className="border-t border-slate-100 pt-4">
                           <Button variant="outline" size="sm" onClick={() => setUnmatchedVisibleCount((current) => current + INITIAL_VISIBLE_ROWS)}>
                             Show more unmatched rows
