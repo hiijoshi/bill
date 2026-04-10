@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { assertFinancialYearOpenForDate, FinancialYearValidationError } from '@/lib/financial-years'
+import { SALES_BILL_KIND } from '@/lib/sales-split'
 
 const cancelSalesBillSchema = z.object({
   companyId: z.string().trim().min(1, 'Company ID is required'),
@@ -26,7 +27,8 @@ export async function POST(request: NextRequest) {
       select: {
         id: true,
         status: true,
-        billDate: true
+        billDate: true,
+        invoiceKind: true
       }
     })
 
@@ -36,6 +38,13 @@ export async function POST(request: NextRequest) {
 
     if (String(salesBill.status || '').toLowerCase() === 'cancelled') {
       return NextResponse.json({ success: true, message: 'Sales bill already cancelled' })
+    }
+
+    if (String(salesBill.invoiceKind || SALES_BILL_KIND.REGULAR) !== SALES_BILL_KIND.REGULAR) {
+      return NextResponse.json(
+        { error: 'Split invoices must be cancelled or merged from the invoice split workspace.' },
+        { status: 400 }
+      )
     }
 
     await assertFinancialYearOpenForDate({

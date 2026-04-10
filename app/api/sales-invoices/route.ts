@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { ensureCompanyAccess } from '@/lib/api-security'
 import { z } from 'zod'
+import { buildOperationalSalesBillWhere, SALES_BILL_KIND, SALES_BILL_WORKFLOW_STATUS } from '@/lib/sales-split'
 
 const salesItemSchema = z.object({
   productId: z.string().min(1),
@@ -37,7 +38,7 @@ const salesInvoiceSchema = z.object({
 
 async function getSalesInvoices(firmId: string) {
   const salesInvoices = await prisma.salesBill.findMany({
-    where: { companyId: firmId },
+    where: buildOperationalSalesBillWhere({ companyId: firmId }),
     include: {
       party: true,
       salesItems: {
@@ -118,7 +119,9 @@ export async function POST(request: NextRequest) {
           totalAmount,
           receivedAmount: receivedAmount || 0,
           balanceAmount: balanceAmount || totalAmount,
-          status: status || 'unpaid'
+          status: status || 'unpaid',
+          invoiceKind: SALES_BILL_KIND.REGULAR,
+          workflowStatus: SALES_BILL_WORKFLOW_STATUS.POSTED
         }
       })
 

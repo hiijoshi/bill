@@ -42,6 +42,9 @@ export default async function SalesListPage({ searchParams }: PageProps) {
 
   const initialBills = Array.isArray(dataset)
     ? dataset.map((raw) => {
+        const childRows = Array.isArray((raw as { childSalesBills?: Array<Record<string, unknown>> }).childSalesBills)
+          ? ((raw as { childSalesBills?: Array<Record<string, unknown>> }).childSalesBills || [])
+          : []
         const totalAmount = clampNonNegative(raw?.totalAmount)
         const receivedAmount = clampNonNegative(raw?.receivedAmount)
         const explicitBalance = clampNonNegative(raw?.balanceAmount)
@@ -82,7 +85,60 @@ export default async function SalesListPage({ searchParams }: PageProps) {
                 otherAmount: clampNonNegative(item?.otherAmount),
                 insuranceAmount: clampNonNegative(item?.insuranceAmount)
               }))
-            : []
+            : [],
+          splitSummary:
+            raw && typeof raw === 'object'
+              ? {
+                  invoiceKind: String((raw as { invoiceKind?: unknown }).invoiceKind || ''),
+                  workflowStatus: String((raw as { workflowStatus?: unknown }).workflowStatus || ''),
+                  splitMethod:
+                    (raw as { splitMethod?: unknown }).splitMethod == null
+                      ? null
+                      : String((raw as { splitMethod?: unknown }).splitMethod),
+                  splitPartLabel:
+                    (raw as { splitPartLabel?: unknown }).splitPartLabel == null
+                      ? null
+                      : String((raw as { splitPartLabel?: unknown }).splitPartLabel),
+                  splitSuffix:
+                    (raw as { splitSuffix?: unknown }).splitSuffix == null
+                      ? null
+                      : String((raw as { splitSuffix?: unknown }).splitSuffix),
+                  childCount: childRows.length,
+                  parentBillId:
+                    (raw as { parentSalesBill?: { id?: unknown } }).parentSalesBill?.id == null
+                      ? null
+                      : String((raw as { parentSalesBill?: { id?: unknown } }).parentSalesBill?.id),
+                  parentBillNo:
+                    (raw as { parentSalesBill?: { billNo?: unknown } }).parentSalesBill?.billNo == null
+                      ? null
+                      : String((raw as { parentSalesBill?: { billNo?: unknown } }).parentSalesBill?.billNo),
+                }
+              : undefined,
+          parentSalesBill:
+            raw &&
+            typeof raw === 'object' &&
+            (raw as { parentSalesBill?: { id?: unknown; billNo?: unknown } }).parentSalesBill
+              ? {
+                  id: String((raw as { parentSalesBill?: { id?: unknown } }).parentSalesBill?.id || ''),
+                  billNo: String((raw as { parentSalesBill?: { billNo?: unknown } }).parentSalesBill?.billNo || ''),
+                }
+              : null,
+          childSalesBills:
+            raw &&
+            typeof raw === 'object' &&
+            childRows.length > 0
+              ? childRows.map((child) => ({
+                  id: String(child?.id || ''),
+                  billNo: String(child?.billNo || ''),
+                  totalAmount: clampNonNegative(child?.totalAmount),
+                  receivedAmount: clampNonNegative(child?.receivedAmount),
+                  balanceAmount: clampNonNegative(child?.balanceAmount),
+                  workflowStatus: String(child?.workflowStatus || ''),
+                  invoiceKind: String(child?.invoiceKind || ''),
+                  splitPartLabel: child?.splitPartLabel == null ? null : String(child.splitPartLabel),
+                  splitSuffix: child?.splitSuffix == null ? null : String(child.splitSuffix),
+                }))
+              : []
         }
       })
     : []

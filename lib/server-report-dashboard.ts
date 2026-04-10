@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma'
 import { buildDateRangeWhere } from '@/lib/financial-years'
 import { loadPaymentsListData } from '@/lib/server-payment-workspace'
+import { buildOperationalSalesBillWhere } from '@/lib/sales-split'
 
 export type ReportDashboardType = 'main' | 'purchase' | 'sales'
 
@@ -106,11 +107,11 @@ export async function loadReportDashboardData(
       : Promise.resolve([]),
     salesEnabled
       ? prisma.salesBill.findMany({
-          where: {
+          where: buildOperationalSalesBillWhere({
             companyId,
             status: { not: 'cancelled' },
             ...buildDateRangeWhere('billDate', options?.dateFrom || null, options?.dateTo || null)
-          },
+          }),
           select: {
             id: true,
             companyId: true,

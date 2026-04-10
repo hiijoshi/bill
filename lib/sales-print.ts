@@ -21,6 +21,12 @@ export interface SalesPrintItem {
 export interface SalesBillPrintData {
   id: string
   billNo: string
+  invoiceKind: string
+  workflowStatus: string
+  splitPartLabel: string | null
+  splitSuffix: string | null
+  parentBillId: string | null
+  parentBillNo: string | null
   billDateIso: string
   billDateLabel: string
   printDateLabel: string
@@ -53,6 +59,14 @@ export interface SalesBillPrintData {
   receivedAmount: number
   balanceAmount: number
   status: string
+  childBills: Array<{
+    id: string
+    billNo: string
+    totalAmount: number
+    status: string
+    splitPartLabel: string | null
+    splitSuffix: string | null
+  }>
 }
 
 type SalesPrintProduct = {
@@ -101,7 +115,23 @@ type SalesPrintCompanySource = {
 type SalesBillPrintSource = {
   id?: unknown
   billNo?: unknown
+  invoiceKind?: unknown
+  workflowStatus?: unknown
+  splitPartLabel?: unknown
+  splitSuffix?: unknown
   billDate?: unknown
+  parentSalesBill?: {
+    id?: unknown
+    billNo?: unknown
+  } | null
+  childSalesBills?: Array<{
+    id?: unknown
+    billNo?: unknown
+    totalAmount?: unknown
+    status?: unknown
+    splitPartLabel?: unknown
+    splitSuffix?: unknown
+  }> | null
   company?: SalesPrintCompanySource | null
   party?: SalesPrintPartySource | null
   salesItems?: SalesPrintItemSource[] | null
@@ -210,6 +240,12 @@ export function mapSalesBillToPrintData(bill: SalesBillPrintSource | null | unde
   return {
     id: String(bill?.id || ''),
     billNo: String(bill?.billNo || ''),
+    invoiceKind: toStringValue(bill?.invoiceKind, 'regular'),
+    workflowStatus: toStringValue(bill?.workflowStatus, 'posted'),
+    splitPartLabel: bill?.splitPartLabel == null ? null : toStringValue(bill.splitPartLabel, '').trim() || null,
+    splitSuffix: bill?.splitSuffix == null ? null : toStringValue(bill.splitSuffix, '').trim() || null,
+    parentBillId: bill?.parentSalesBill?.id == null ? null : toStringValue(bill.parentSalesBill.id),
+    parentBillNo: bill?.parentSalesBill?.billNo == null ? null : toStringValue(bill.parentSalesBill.billNo),
     billDateIso: String(bill?.billDate || ''),
     billDateLabel: formatDisplayDate(toDateValue(bill?.billDate)),
     printDateLabel: formatDisplayDate(new Date()),
@@ -243,6 +279,16 @@ export function mapSalesBillToPrintData(bill: SalesBillPrintSource | null | unde
     totalAmount: toNonNegativeNumber(bill?.totalAmount, 0),
     receivedAmount: toNonNegativeNumber(bill?.receivedAmount, 0),
     balanceAmount: toNonNegativeNumber(bill?.balanceAmount, 0),
-    status: toStringValue(bill?.status, 'unpaid')
+    status: toStringValue(bill?.status, 'unpaid'),
+    childBills: Array.isArray(bill?.childSalesBills)
+      ? bill.childSalesBills.map((child) => ({
+          id: toStringValue(child?.id),
+          billNo: toStringValue(child?.billNo),
+          totalAmount: toNonNegativeNumber(child?.totalAmount, 0),
+          status: toStringValue(child?.status, 'unpaid'),
+          splitPartLabel: child?.splitPartLabel == null ? null : toStringValue(child.splitPartLabel, '').trim() || null,
+          splitSuffix: child?.splitSuffix == null ? null : toStringValue(child.splitSuffix, '').trim() || null,
+        }))
+      : []
   }
 }

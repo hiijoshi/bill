@@ -37,6 +37,7 @@ import {
   FinancialYearValidationError,
   getFinancialYearDateFilter
 } from '@/lib/financial-years'
+import { SALES_BILL_KIND, SALES_BILL_WORKFLOW_STATUS } from '@/lib/sales-split'
 
 const paymentCreateSchema = z
   .object({
@@ -214,12 +215,24 @@ export async function POST(request: NextRequest) {
             totalAmount: true,
             receivedAmount: true,
             billDate: true,
-            partyId: true
+            partyId: true,
+            invoiceKind: true,
+            workflowStatus: true
           }
         })
 
         if (!bill) {
           return NextResponse.json({ error: 'Bill not found' }, { status: 404 })
+        }
+
+        if (
+          String(bill.invoiceKind || SALES_BILL_KIND.REGULAR) === SALES_BILL_KIND.SPLIT_PARENT ||
+          String(bill.workflowStatus || SALES_BILL_WORKFLOW_STATUS.POSTED) !== SALES_BILL_WORKFLOW_STATUS.POSTED
+        ) {
+          return NextResponse.json(
+            { error: 'Payment can only be recorded against posted regular invoices or posted split child invoices.' },
+            { status: 400 }
+          )
         }
 
         totalAmount = bill.totalAmount

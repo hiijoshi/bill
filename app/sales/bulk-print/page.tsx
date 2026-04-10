@@ -124,6 +124,25 @@ export default async function SalesBulkPrintPage({ searchParams }: PageProps) {
       id: { in: selectedIds }
     },
     include: {
+      parentSalesBill: {
+        select: {
+          id: true,
+          billNo: true
+        }
+      },
+      childSalesBills: {
+        select: {
+          id: true,
+          billNo: true,
+          totalAmount: true,
+          status: true,
+          splitPartLabel: true,
+          splitSuffix: true
+        },
+        orderBy: {
+          splitSequence: 'asc'
+        }
+      },
       company: {
         select: {
           id: true,

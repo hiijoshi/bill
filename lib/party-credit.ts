@@ -4,6 +4,7 @@ import {
   getPartyOpeningBalanceReference,
   getSignedPartyOpeningBalance
 } from '@/lib/party-opening-balance'
+import { buildOperationalSalesBillWhere } from '@/lib/sales-split'
 
 export const DEFAULT_PARTY_CREDIT_DAYS = 30
 
@@ -63,11 +64,11 @@ export async function getPartyCreditSnapshot({
 
   const [bills, openingPaymentsAggregate] = await Promise.all([
     prisma.salesBill.findMany({
-      where: {
+      where: buildOperationalSalesBillWhere({
         companyId,
         partyId,
         ...(excludeBillId ? { id: { not: excludeBillId } } : {}),
-      },
+      }),
       select: {
         billDate: true,
         balanceAmount: true,

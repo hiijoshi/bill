@@ -58,6 +58,23 @@ interface SalesBill {
   status: string
   createdAt: string
   updatedAt: string
+  splitSummary?: {
+    invoiceKind?: string
+    workflowStatus?: string
+    childCount?: number
+    parentBillId?: string | null
+    parentBillNo?: string | null
+  }
+  parentSalesBill?: {
+    id: string
+    billNo: string
+  } | null
+  childSalesBills?: Array<{
+    id: string
+    billNo: string
+    totalAmount: number
+    status: string
+  }>
 }
 
 interface RawSalesItem {
@@ -106,8 +123,26 @@ interface RawSalesBill {
   }>
   totalAmount?: unknown
   receivedAmount?: unknown
+  status?: unknown
   createdAt?: unknown
   updatedAt?: unknown
+  splitSummary?: {
+    invoiceKind?: unknown
+    workflowStatus?: unknown
+    childCount?: unknown
+    parentBillId?: unknown
+    parentBillNo?: unknown
+  }
+  parentSalesBill?: {
+    id?: unknown
+    billNo?: unknown
+  } | null
+  childSalesBills?: Array<{
+    id?: unknown
+    billNo?: unknown
+    totalAmount?: unknown
+    status?: unknown
+  }>
 }
 
 const clampNonNegative = (value: unknown): number => {
@@ -120,7 +155,15 @@ function normalizeSalesBill(raw: RawSalesBill): SalesBill {
   const totalAmount = clampNonNegative(raw?.totalAmount)
   const receivedAmount = clampNonNegative(raw?.receivedAmount)
   const balanceAmount = Math.max(0, totalAmount - receivedAmount)
-  const status = balanceAmount === 0 ? 'paid' : receivedAmount > 0 ? 'partial' : 'unpaid'
+  const normalizedStatus = String(raw?.status || '').trim().toLowerCase()
+  const status =
+    normalizedStatus === 'cancelled'
+      ? 'cancelled'
+      : balanceAmount === 0
+        ? 'paid'
+        : receivedAmount > 0
+          ? 'partial'
+          : 'unpaid'
 
   return {
     id: String(raw?.id || ''),
@@ -175,7 +218,30 @@ function normalizeSalesBill(raw: RawSalesBill): SalesBill {
     balanceAmount,
     status,
     createdAt: String(raw?.createdAt || ''),
-    updatedAt: String(raw?.updatedAt || '')
+    updatedAt: String(raw?.updatedAt || ''),
+    splitSummary: raw?.splitSummary
+      ? {
+          invoiceKind: String(raw.splitSummary.invoiceKind || ''),
+          workflowStatus: String(raw.splitSummary.workflowStatus || ''),
+          childCount: clampNonNegative(raw.splitSummary.childCount),
+          parentBillId: raw.splitSummary.parentBillId == null ? null : String(raw.splitSummary.parentBillId),
+          parentBillNo: raw.splitSummary.parentBillNo == null ? null : String(raw.splitSummary.parentBillNo),
+        }
+      : undefined,
+    parentSalesBill: raw?.parentSalesBill
+      ? {
+          id: String(raw.parentSalesBill.id || ''),
+          billNo: String(raw.parentSalesBill.billNo || ''),
+        }
+      : null,
+    childSalesBills: Array.isArray(raw?.childSalesBills)
+      ? raw.childSalesBills.map((child) => ({
+          id: String(child?.id || ''),
+          billNo: String(child?.billNo || ''),
+          totalAmount: clampNonNegative(child?.totalAmount),
+          status: String(child?.status || 'unpaid'),
+        }))
+      : [],
   }
 }
 
@@ -243,6 +309,23 @@ function SalesViewPageContent() {
       ? `/sales/entry?billId=${billId}&companyId=${encodeURIComponent(companyId)}`
       : `/sales/entry?billId=${billId}`
     router.push(editPath)
+  }
+
+  const handleManageSplit = () => {
+    if (!salesBill) return
+    const targetBillId = salesBill.splitSummary?.parentBillId || salesBill.parentSalesBill?.id || salesBill.id
+    const editPath = companyId
+      ? `/sales/entry?billId=${targetBillId}&companyId=${encodeURIComponent(companyId)}`
+      : `/sales/entry?billId=${targetBillId}`
+    router.push(editPath)
+  }
+
+  const handleOpenParent = () => {
+    if (!salesBill?.splitSummary?.parentBillId) return
+    const viewPath = companyId
+      ? `/sales/view?billId=${salesBill.splitSummary.parentBillId}&companyId=${encodeURIComponent(companyId)}`
+      : `/sales/view?billId=${salesBill.splitSummary.parentBillId}`
+    router.push(viewPath)
   }
 
   const handleCancel = () => {
@@ -325,6 +408,10 @@ function SalesViewPageContent() {
     0
   )
   const additionalChargeSummary = summarizeSalesAdditionalCharges(salesBill.additionalCharges || [])
+  const invoiceKind = String(salesBill.splitSummary?.invoiceKind || 'regular')
+  const isSplitParent = invoiceKind === 'split_parent'
+  const isSplitChild = invoiceKind === 'split_child'
+  const isSplitManaged = isSplitParent || isSplitChild
 
   return (
     <DashboardLayout companyId={companyId || ''}>
@@ -340,13 +427,24 @@ function SalesViewPageContent() {
               <h1 className="text-3xl font-bold">Sales Bill Details</h1>
             </div>
             <div className="flex gap-2">
-              {salesBill.status !== 'cancelled' ? (
+              {isSplitManaged ? (
+                <Button variant="outline" onClick={handleManageSplit}>
+                  <Edit className="w-4 h-4 mr-2" />
+                  Manage Split
+                </Button>
+              ) : salesBill.status !== 'cancelled' ? (
                 <Button variant="outline" onClick={handleEdit}>
                   <Edit className="w-4 h-4 mr-2" />
                   Edit
                 </Button>
               ) : null}
-              {salesBill.status !== 'cancelled' ? (
+              {isSplitChild && salesBill.splitSummary?.parentBillId ? (
+                <Button variant="outline" onClick={handleOpenParent}>
+                  <ArrowLeft className="w-4 h-4 mr-2" />
+                  Parent Invoice
+                </Button>
+              ) : null}
+              {salesBill.status !== 'cancelled' && !isSplitManaged ? (
                 <Button variant="outline" onClick={handleCancel}>
                   <Ban className="w-4 h-4 mr-2" />
                   Cancel
@@ -395,6 +493,66 @@ function SalesViewPageContent() {
               </div>
             </CardContent>
           </Card>
+
+          {isSplitParent || isSplitChild ? (
+            <Card className="mb-6">
+              <CardHeader>
+                <CardTitle>Split Hierarchy</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <div>
+                    <p className="text-sm text-gray-600">Invoice Role</p>
+                    <p className="font-semibold">{isSplitParent ? 'Parent Summary Invoice' : 'Split Child Invoice'}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Parent Reference</p>
+                    <p className="font-semibold">{salesBill.splitSummary?.parentBillNo || salesBill.billNo}</p>
+                    {isSplitChild && salesBill.splitSummary?.parentBillId ? (
+                      <Button type="button" variant="outline" className="mt-2" onClick={handleOpenParent}>
+                        Open Parent
+                      </Button>
+                    ) : null}
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Child Parts</p>
+                    <p className="font-semibold">{salesBill.splitSummary?.childCount || salesBill.childSalesBills?.length || 0}</p>
+                  </div>
+                </div>
+                {isSplitParent && (salesBill.childSalesBills?.length || 0) > 0 ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-sm font-semibold text-slate-900">Split Parts</p>
+                    <div className="mt-3 space-y-2">
+                      {salesBill.childSalesBills?.map((child) => (
+                        <div key={child.id} className="flex items-center justify-between rounded-md bg-white px-3 py-2">
+                          <div>
+                            <p className="font-medium text-slate-900">{child.billNo}</p>
+                            <p className="text-xs text-slate-500">{child.status}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-semibold text-slate-900">₹{child.totalAmount.toFixed(2)}</p>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="mt-2"
+                              onClick={() => {
+                                const childPath = companyId
+                                  ? `/sales/view?billId=${child.id}&companyId=${encodeURIComponent(companyId)}`
+                                  : `/sales/view?billId=${child.id}`
+                                router.push(childPath)
+                              }}
+                            >
+                              Open Part
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
 
           {/* Party Information */}
           <Card className="mb-6">

@@ -8,10 +8,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { AlertTriangle, MessageCircle, Pencil, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, MessageCircle, Pencil, Plus, SplitSquareVertical, Trash2 } from 'lucide-react'
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
 import { SearchableSelect, type SearchableSelectOption } from '@/components/ui/searchable-select'
+import SalesInvoiceSplitDialog from '@/components/sales/SalesInvoiceSplitDialog'
 import { invalidateAppDataCaches, notifyAppDataChanged } from '@/lib/app-live-data'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId, stripCompanyParamsFromUrl } from '@/lib/company-context'
 import { calculateTaxBreakdown, roundCurrency } from '@/lib/billing-calculations'
@@ -179,6 +180,13 @@ interface ExistingSalesBill {
     amount?: number | null
     remark?: string | null
   }>
+  splitSummary?: {
+    invoiceKind?: string
+    workflowStatus?: string
+    childCount?: number
+    parentBillId?: string | null
+    parentBillNo?: string | null
+  }
 }
 
 interface TransportOption {
@@ -239,6 +247,8 @@ export default function SalesEntryPage() {
   const itemIdSequence = useRef(0)
   const [companyId, setCompanyId] = useState('')
   const [editBillId, setEditBillId] = useState('')
+  const [splitDialogOpen, setSplitDialogOpen] = useState(false)
+  const [loadedSplitSummary, setLoadedSplitSummary] = useState<ExistingSalesBill['splitSummary'] | null>(null)
   const [parties, setParties] = useState<Party[]>([])
   const [accountingHeads, setAccountingHeads] = useState<AccountingHeadCharge[]>([])
   const [loading, setLoading] = useState(true)
@@ -700,6 +710,7 @@ export default function SalesEntryPage() {
     allTransports: TransportOption[]
   ) => {
     setEditBillId(bill.id)
+    setLoadedSplitSummary(bill.splitSummary || null)
     setInvoiceNo(String(bill.billNo || ''))
     {
       const parsedDate = new Date(bill.billDate)
@@ -790,7 +801,7 @@ export default function SalesEntryPage() {
     setManualGrandTotal(hasStoredManualOverride ? String(storedGrandTotal) : '')
   }, [updateTotals])
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (forceFresh = false) => {
     try {
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
 
@@ -865,7 +876,7 @@ export default function SalesEntryPage() {
             lastBillNumber: Number(billsData.lastBillNumber || 0)
           }
         },
-        { maxAgeMs: SALES_ENTRY_CACHE_AGE_MS }
+        { maxAgeMs: forceFresh ? 0 : SALES_ENTRY_CACHE_AGE_MS }
       )
 
       const nextParties = payload.parties
@@ -895,6 +906,7 @@ export default function SalesEntryPage() {
       const nextInvoiceNumber = lastBillNum <= 0 ? 1 : lastBillNum + 1
       setInvoiceNo(nextInvoiceNumber.toString())
 
+      setLoadedSplitSummary(null)
       setLoading(false)
     } catch (error) {
       if (error instanceof Error && 'status' in error && error.status === 401) {
@@ -1241,6 +1253,9 @@ export default function SalesEntryPage() {
         ? roundCurrency(creditLimit - outstandingAmount)
         : null
   const hasRisk = Boolean(partyRisk?.hasOverdue || partyRisk?.isOverLimit)
+  const isSplitManagedBill = Boolean(
+    loadedSplitSummary && String(loadedSplitSummary.invoiceKind || 'regular') !== 'regular'
+  )
 
   const handleRiskContinue = async () => {
     if (!pendingRequestData) {
@@ -1262,10 +1277,27 @@ export default function SalesEntryPage() {
         <div className="max-w-6xl mx-auto">
           <Card>
             <CardHeader>
-              <CardTitle className="text-2xl font-bold">{isEditMode ? 'Edit Sales Bill' : 'Sales Entry'}</CardTitle>
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <CardTitle className="text-2xl font-bold">{isEditMode ? 'Edit Sales Bill' : 'Sales Entry'}</CardTitle>
+                {isEditMode ? (
+                  <Button type="button" variant="outline" onClick={() => setSplitDialogOpen(true)}>
+                    <SplitSquareVertical className="mr-2 h-4 w-4" />
+                    Split Invoice
+                  </Button>
+                ) : null}
+              </div>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSubmit}>
+                {isSplitManagedBill ? (
+                  <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                    <p className="font-semibold">This invoice is already managed through the split workflow.</p>
+                    <p className="mt-1">
+                      Direct sales-entry updates are disabled for split parents and split child invoices. Use `Split Invoice`
+                      to edit parts, add new suffixes, or merge back safely.
+                    </p>
+                  </div>
+                ) : null}
                 {/* Section 1 - Basic Info */}
                 <div className="mb-8">
                   <h3 className="text-lg font-semibold mb-4 pb-2 border-b">1. Basic Info</h3>
@@ -1968,7 +2000,7 @@ export default function SalesEntryPage() {
                   <Button type="button" variant="outline" onClick={() => router.back()}>
                     Cancel
                   </Button>
-                  <Button type="submit" disabled={submitting}>
+                  <Button type="submit" disabled={submitting || isSplitManagedBill}>
                     {submitting ? 'Saving...' : isEditMode ? 'Update Sales Bill' : 'Save Sales Bill'}
                   </Button>
                 </div>
@@ -2027,6 +2059,20 @@ export default function SalesEntryPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {isEditMode && companyId && editBillId ? (
+        <SalesInvoiceSplitDialog
+          open={splitDialogOpen}
+          onOpenChange={setSplitDialogOpen}
+          companyId={companyId}
+          billId={editBillId}
+          expectedParentUpdatedAt={null}
+          onSaved={() => {
+            invalidateAppDataCaches(companyId, ['sales-bills'])
+            notifyAppDataChanged({ companyId, scopes: ['sales-bills'] })
+            void fetchData(true)
+          }}
+        />
+      ) : null}
     </DashboardLayout>
     )
   }
