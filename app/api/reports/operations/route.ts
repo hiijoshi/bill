@@ -102,8 +102,10 @@ type PaymentLedgerRow = {
 }
 
 type OperationsReportView =
+  | 'overview'
   | 'outstanding'
   | 'ledger'
+  | 'daily'
   | 'daily-transaction'
   | 'daily-consolidated'
   | 'bank-ledger'
@@ -111,8 +113,10 @@ type OperationsReportView =
 
 function normalizeReportView(value: string | null): OperationsReportView {
   if (
+    value === 'overview' ||
     value === 'outstanding' ||
     value === 'ledger' ||
+    value === 'daily' ||
     value === 'daily-transaction' ||
     value === 'daily-consolidated' ||
     value === 'bank-ledger' ||
@@ -120,7 +124,7 @@ function normalizeReportView(value: string | null): OperationsReportView {
   ) {
     return value
   }
-  return 'outstanding'
+  return 'overview'
 }
 
 const OPERATIONS_REPORT_CACHE_TTL_MS = 20_000
@@ -726,14 +730,16 @@ export async function GET(request: NextRequest) {
         : {})
     }
 
+      const needsOverviewView = requestedView === 'overview'
       const needsLedgerView = requestedView === 'ledger'
       const needsOutstandingView = requestedView === 'outstanding'
-      const needsDailyView = requestedView === 'daily-transaction' || requestedView === 'daily-consolidated'
+      const needsDailyView =
+        requestedView === 'daily' || requestedView === 'daily-transaction' || requestedView === 'daily-consolidated' || needsOverviewView
       const needsBankLedgerView = requestedView === 'bank-ledger'
       const needsCashLedgerView = requestedView === 'cash-ledger'
       const needsDetailedPayments = needsDailyView || needsBankLedgerView || needsCashLedgerView
       const needsPartyBalances = needsOutstandingView || needsLedgerView
-      const needsSummary = needsOutstandingView
+      const needsSummary = needsOutstandingView || needsOverviewView
 
       const [
       salesTotalAggregate,
@@ -2214,7 +2220,7 @@ export async function GET(request: NextRequest) {
         purchaseBalanceTotal,
         totalStockAdjustmentQty
       },
-      outstanding: requestedView === 'outstanding' ? outstandingRows : [],
+      outstanding: requestedView === 'outstanding' || requestedView === 'overview' ? outstandingRows : [],
       parties: needsLedgerView ? partiesWithContext : [],
       partyLedger: needsLedgerView
         ? {
@@ -2232,7 +2238,7 @@ export async function GET(request: NextRequest) {
         ? dailyTransactionRows.sort((a, b) => b.date.localeCompare(a.date) || a.type.localeCompare(b.type))
         : [],
       dailyTransactionSummary: needsDailyView ? dailySummaryRows : [],
-      dailyConsolidated: requestedView === 'daily-consolidated' ? dailySummaryRows : [],
+      dailyConsolidated: needsDailyView ? dailySummaryRows : [],
       bankLedger: needsBankLedgerView ? bankLedgerRows : [],
       cashLedger: needsCashLedgerView ? cashLedgerRows : [],
       filterOptions: {

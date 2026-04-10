@@ -12,7 +12,7 @@ import { APP_COMPANY_CHANGED_EVENT } from '@/lib/company-context'
 import type { DashboardLayoutInitialData } from '@/lib/app-shell-types'
 
 type ReportType = 'main' | 'purchase' | 'sales' | 'stock' | 'operations'
-type OperationsView = 'outstanding' | 'ledger' | 'daily-transaction' | 'daily-consolidated' | 'cash-ledger' | 'bank-ledger'
+type OperationsView = 'overview' | 'outstanding' | 'ledger' | 'daily' | 'cash-ledger' | 'bank-ledger'
 
 type CompanyOption = {
   id: string
@@ -58,7 +58,7 @@ export default function ReportsMainClient({
   initialLayoutData = null,
   companyOptions = [],
   initialReportType = 'main',
-  initialOperationsView = 'outstanding',
+  initialOperationsView = 'overview',
   initialSelectedPartyId = '',
   initialCompanyWarning = '',
   initialReportDashboardSeed = null,
@@ -103,7 +103,7 @@ export default function ReportsMainClient({
     if (companyId) {
       params.set('companyId', companyId)
     }
-    if (type === 'operations' && initialOperationsView !== 'outstanding') {
+    if (type === 'operations' && initialOperationsView !== 'overview') {
       params.set('view', initialOperationsView)
     }
 
