@@ -525,6 +525,21 @@ function downloadTextFile(fileName: string, content: string, type: string): void
   URL.revokeObjectURL(url)
 }
 
+function cloneFormData(source: FormData): FormData {
+  const next = new FormData()
+
+  source.forEach((value, key) => {
+    if (value instanceof File) {
+      next.append(key, value, value.name)
+      return
+    }
+
+    next.append(key, value)
+  })
+
+  return next
+}
+
 function submitStatementRequest(
   formData: FormData,
   action: RouteAction,
@@ -609,7 +624,7 @@ function submitStatementRequest(
       reject(new Error('Statement processing timed out. CSV and Excel uploads finish fastest.'))
     }
 
-    xhr.send(formData)
+    xhr.send(cloneFormData(formData))
   })
 
   return performRequest(true)
@@ -1444,8 +1459,8 @@ export default function BankStatementUploadClient({
     }
 
     const formData = new FormData()
-    formData.set('companyId', companyId)
-    formData.set('bankId', selectedBankId)
+    formData.set('companyId', normalizeText(companyId))
+    formData.set('bankId', normalizeText(selectedBankId))
     formData.set('action', action)
     formData.set('file', selectedFile)
     formData.set('manualTargets', JSON.stringify(manualTargets))

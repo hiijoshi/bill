@@ -578,14 +578,18 @@ export async function POST(request: NextRequest) {
 
   try {
     const formData = await request.formData()
-    const companyId = normalizeText(formData.get('companyId'))
+    const companyId =
+      normalizeText(formData.get('companyId')) ||
+      normalizeText(authResult.auth.companyId) ||
+      normalizeText(request.headers.get('x-auth-company-id')) ||
+      normalizeText(request.headers.get('x-company-id'))
     const bankId = normalizeText(formData.get('bankId'))
     const action = parseAction(formData.get('action'))
     const manualTargets = parseManualTargetMap(formData.get('manualTargets'))
     const file = formData.get('file')
 
     if (!companyId) {
-      return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
+      return NextResponse.json({ error: 'Company context is missing. Reopen the company and retry the bank statement upload.' }, { status: 400 })
     }
 
     auditCompanyId = companyId
