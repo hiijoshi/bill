@@ -1,22 +1,13 @@
 import { getSessionCookieNameCandidates, type SessionNamespace } from './session-cookies'
 
-function getCookieMap(): Map<string, string> {
-  if (typeof document === 'undefined') {
-    return new Map()
+function readCookieValue(name: string): string {
+  if (typeof document === 'undefined' || !name) {
+    return ''
   }
 
-  return new Map(
-    document.cookie
-      .split('; ')
-      .map((row) => {
-        const separatorIndex = row.indexOf('=')
-        if (separatorIndex <= 0) return null
-        const name = row.slice(0, separatorIndex)
-        const value = row.slice(separatorIndex + 1)
-        return [name, decodeURIComponent(value)] as const
-      })
-      .filter((entry): entry is readonly [string, string] => Boolean(entry))
-  )
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${escapedName}=([^;]*)`))
+  return match ? decodeURIComponent(match[1]) : ''
 }
 
 function resolveClientScopeSource(): string | null {
@@ -25,21 +16,34 @@ function resolveClientScopeSource(): string | null {
 }
 
 function resolveCsrfToken(namespace: SessionNamespace): string {
-  const cookieMap = getCookieMap()
   const scopeSource = resolveClientScopeSource()
   const candidateNames = getSessionCookieNameCandidates(namespace, scopeSource).map((candidate) => candidate.csrfToken)
 
   for (const cookieName of candidateNames) {
-    const exactMatch = cookieMap.get(cookieName)
+    const exactMatch = readCookieValue(cookieName)
     if (exactMatch) {
       return exactMatch
     }
   }
 
   const prefix = namespace === 'super_admin' ? 'super-admin-csrf-token' : 'csrf-token'
-  for (const [cookieName, value] of cookieMap.entries()) {
-    if (cookieName === prefix || cookieName.startsWith(`${prefix}__`)) {
-      return value
+  const cookieParts = typeof document === 'undefined'
+    ? []
+    : document.cookie
+        .split(';')
+        .map((part) => part.trim())
+        .filter(Boolean)
+
+  for (const cookiePart of cookieParts) {
+    const separatorIndex = cookiePart.indexOf('=')
+    if (separatorIndex <= 0) continue
+
+    const cookieName = cookiePart.slice(0, separatorIndex)
+    if (cookieName !== prefix && !cookieName.startsWith(`${prefix}__`)) continue
+
+    const cookieValue = cookiePart.slice(separatorIndex + 1)
+    if (cookieValue) {
+      return decodeURIComponent(cookieValue)
     }
   }
 
