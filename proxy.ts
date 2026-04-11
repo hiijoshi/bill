@@ -45,8 +45,26 @@ const businessAppRoutePrefixes = [
   '/stock', '/payment', '/reports', '/company'
 ]
 
+const blockedSourcePathPatterns = [
+  /(^|\/)page(?:\s+\d+)?\.tsx(?:\.backup)?$/i,
+  /\.(?:tsx|ts|jsx|js)\.backup$/i,
+  /\.backup$/i
+]
+
 function normalizePath(p: string) {
   return p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p
+}
+
+function isBlockedSourcePath(pathname: string): boolean {
+  const decodedPath = (() => {
+    try {
+      return decodeURIComponent(pathname)
+    } catch {
+      return pathname
+    }
+  })()
+
+  return blockedSourcePathPatterns.some((pattern) => pattern.test(decodedPath))
 }
 
 function isPublicApi(pathname: string): boolean {
@@ -222,6 +240,10 @@ export async function proxy(request: NextRequest) {
   const isSuperAdminPageRoute = !isApiRoute && pathname.startsWith('/super-admin')
   const isSuperAdminLoginPage = pathname === '/super-admin/login'
   const requestId = request.headers.get('x-request-id') || crypto.randomUUID()
+
+  if (isBlockedSourcePath(pathname)) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
 
   // Super admin remote access guard
   if ((isSuperAdminApiRoute || isSuperAdminPageRoute) && !isLocalSuperAdminAccessAllowed(request)) {
