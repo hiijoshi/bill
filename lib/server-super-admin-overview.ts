@@ -3,6 +3,7 @@ import { PERMISSION_MODULES, PERMISSION_MODULE_LABELS } from '@/lib/permissions'
 import { getSuperAdminLiveUpdate } from '@/lib/live-update-state'
 import { getOrSetServerCache, makeServerCacheKey } from '@/lib/server-cache'
 import { getConnectedUserCountsForCompanies, getLinkedCompaniesForUser } from '@/lib/super-admin-user-companies'
+import { getSuperAdminClosureQueue } from '@/lib/super-admin-subscription-data'
 
 type SuperAdminOverviewParams = {
   traderId?: string | null
@@ -17,6 +18,7 @@ export type SuperAdminOverviewSection =
   | 'traders'
   | 'companies'
   | 'users'
+  | 'closureQueue'
   | 'permissionPreview'
 
 const SUPER_ADMIN_OVERVIEW_CACHE_TTL_MS = 15_000
@@ -290,6 +292,22 @@ async function loadSuperAdminPermissionPreview(args: {
   )
 }
 
+async function loadSuperAdminClosureQueue(liveUpdateVersion: number) {
+  return getOrSetServerCache(
+    makeServerCacheKey('super-admin-overview:closure-queue', [liveUpdateVersion]),
+    SUPER_ADMIN_OVERVIEW_CACHE_TTL_MS,
+    async () => {
+      const result = await getSuperAdminClosureQueue(prisma, { limit: 6 })
+      return {
+        schemaReady: result.schemaReady,
+        schemaWarning: result.schemaWarning,
+        summary: result.summary,
+        rows: result.rows
+      }
+    }
+  )
+}
+
 export async function loadSuperAdminOverviewData(params: SuperAdminOverviewParams = {}) {
   const includeDeleted = params.includeDeleted === true
   const traderId = normalizeId(params.traderId)
@@ -303,6 +321,7 @@ export async function loadSuperAdminOverviewData(params: SuperAdminOverviewParam
   const includeTraders = sections.has('traders')
   const includeCompanies = sections.has('companies')
   const includeUsers = sections.has('users')
+  const includeClosureQueue = sections.has('closureQueue')
   const includePermissionPreview = sections.has('permissionPreview')
 
   const statsPromise = includeStats
@@ -312,8 +331,11 @@ export async function loadSuperAdminOverviewData(params: SuperAdminOverviewParam
   const tradersPromise = includeTraders
     ? loadSuperAdminTraders(includeDeleted, liveUpdateVersion)
     : Promise.resolve([])
+  const closureQueuePromise = includeClosureQueue
+    ? loadSuperAdminClosureQueue(liveUpdateVersion)
+    : Promise.resolve(null)
 
-  const [stats, traders] = await Promise.all([statsPromise, tradersPromise])
+  const [stats, traders, closureQueue] = await Promise.all([statsPromise, tradersPromise, closureQueuePromise])
 
   let companies: Array<{
     id: string
@@ -407,6 +429,11 @@ export async function loadSuperAdminOverviewData(params: SuperAdminOverviewParam
     ...(includeUsers
       ? {
           users
+        }
+      : {}),
+    ...(includeClosureQueue && closureQueue
+      ? {
+          closureQueue
         }
       : {}),
     ...(includePermissionPreview

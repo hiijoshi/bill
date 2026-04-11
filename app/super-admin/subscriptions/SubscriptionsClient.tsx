@@ -399,6 +399,7 @@ export default function SuperAdminTraderSubscriptionsClient({
               >
                 <option value="">All states</option>
                 <option value="closure_requested">Closure Requested</option>
+                <option value="backup_ready">Backup Ready</option>
                 <option value="deletion_pending">Deletion Pending</option>
                 <option value="active">Active</option>
                 <option value="trial">Trial</option>

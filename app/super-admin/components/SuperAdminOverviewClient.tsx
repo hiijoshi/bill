@@ -8,8 +8,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Building2, Lock, RefreshCw, Shield, Store, Unlock, Users } from 'lucide-react'
+import { Building2, Clock3, Download, Lock, RefreshCw, Shield, Store, Trash2, Unlock, Users } from 'lucide-react'
 import { subscribeSuperAdminDataChanged } from '@/lib/super-admin-live-data'
+import type { SuperAdminClosureQueueItem } from '@/lib/super-admin-subscription-data'
 
 type SuperAdminOverviewClientProps = {
   initialOverview: {
@@ -21,6 +22,7 @@ type SuperAdminOverviewClientProps = {
     traders: TraderRow[]
     companies: CompanyRow[]
     users: UserRow[]
+    closureQueue: ClosureQueueState
     permissionPreview: PermissionPreview | null
   }
   initialProfile?: {
@@ -69,7 +71,18 @@ type PermissionPreview = {
   permissions: PermissionRow[]
 }
 
-type OverviewSection = 'stats' | 'traders' | 'companies' | 'users' | 'permissionPreview'
+type ClosureQueueState = {
+  schemaReady: boolean
+  schemaWarning: string | null
+  summary: {
+    closureRequested: number
+    backupReady: number
+    deletionPending: number
+  }
+  rows: SuperAdminClosureQueueItem[]
+}
+
+type OverviewSection = 'stats' | 'traders' | 'companies' | 'users' | 'closureQueue' | 'permissionPreview'
 
 type Point = {
   x: number
@@ -83,11 +96,50 @@ function buildConnectorPath(from: Point, to: Point): string {
   return `M ${from.x} ${from.y} C ${controlX1} ${from.y}, ${controlX2} ${to.y}, ${to.x} ${to.y}`
 }
 
+function formatDate(value?: string | null) {
+  if (!value) return '-'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return '-'
+  return new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium' }).format(parsed)
+}
+
+function getClosureQueueHref(item: SuperAdminClosureQueueItem) {
+  const params = new URLSearchParams()
+  params.set('traderId', item.id)
+  params.set('state', item.queueStage)
+  return `/super-admin/subscriptions?${params.toString()}`
+}
+
+function getClosureQueueBadgeVariant(stage: SuperAdminClosureQueueItem['queueStage']): 'default' | 'secondary' | 'destructive' {
+  if (stage === 'deletion_pending') return 'destructive'
+  if (stage === 'backup_ready') return 'secondary'
+  return 'default'
+}
+
+function getClosureQueueStageLabel(stage: SuperAdminClosureQueueItem['queueStage']) {
+  if (stage === 'deletion_pending') return 'Deletion Pending'
+  if (stage === 'backup_ready') return 'Backup Ready'
+  return 'Closure Requested'
+}
+
+function getClosureQueueMetaLabel(item: SuperAdminClosureQueueItem) {
+  if (item.queueStage === 'deletion_pending') {
+    return `Scheduled delete: ${formatDate(item.scheduledDeletionAt)}`
+  }
+
+  if (item.queueStage === 'backup_ready') {
+    return `Backup ready: ${formatDate(item.latestReadyBackupAt)}`
+  }
+
+  return `Requested: ${formatDate(item.closureRequestedAt)}`
+}
+
 export default function SuperAdminOverviewClient({ initialOverview, initialProfile = null }: SuperAdminOverviewClientProps) {
   const [summaryStats, setSummaryStats] = useState(initialOverview.stats)
   const [traders, setTraders] = useState<TraderRow[]>(initialOverview.traders || [])
   const [companies, setCompanies] = useState<CompanyRow[]>(initialOverview.companies || [])
   const [users, setUsers] = useState<UserRow[]>(initialOverview.users || [])
+  const [closureQueue, setClosureQueue] = useState<ClosureQueueState>(initialOverview.closureQueue)
   const [permissionPreview, setPermissionPreview] = useState<PermissionPreview | null>(initialOverview.permissionPreview || null)
 
   const [selectedTraderId, setSelectedTraderId] = useState<string | null>(null)
@@ -286,6 +338,31 @@ export default function SuperAdminOverviewClient({ initialOverview, initialProfi
       if ('users' in payload) {
         setUsers(Array.isArray(payload.users) ? payload.users : [])
       }
+      if ('closureQueue' in payload) {
+        setClosureQueue(
+          payload.closureQueue && typeof payload.closureQueue === 'object'
+            ? {
+                schemaReady: Boolean(payload.closureQueue.schemaReady),
+                schemaWarning: typeof payload.closureQueue.schemaWarning === 'string' ? payload.closureQueue.schemaWarning : null,
+                summary: {
+                  closureRequested: Number(payload.closureQueue.summary?.closureRequested || 0),
+                  backupReady: Number(payload.closureQueue.summary?.backupReady || 0),
+                  deletionPending: Number(payload.closureQueue.summary?.deletionPending || 0)
+                },
+                rows: Array.isArray(payload.closureQueue.rows) ? payload.closureQueue.rows : []
+              }
+            : {
+                schemaReady: true,
+                schemaWarning: null,
+                summary: {
+                  closureRequested: 0,
+                  backupReady: 0,
+                  deletionPending: 0
+                },
+                rows: []
+              }
+        )
+      }
       if ('permissionPreview' in payload) {
         setPermissionPreview(
           payload.permissionPreview && Array.isArray(payload.permissionPreview.permissions)
@@ -344,12 +421,14 @@ export default function SuperAdminOverviewClient({ initialOverview, initialProfi
         'traders',
         ...(selectedTraderId ? (['companies'] as OverviewSection[]) : []),
         ...(selectedCompanyId ? (['users'] as OverviewSection[]) : []),
+        'closureQueue',
         ...(selectedUserId ? (['permissionPreview'] as OverviewSection[]) : [])
       ]
     }
 
     return [
       'stats',
+      'closureQueue',
       ...(selectedTraderId ? (['companies'] as OverviewSection[]) : (['traders'] as OverviewSection[])),
       ...(selectedCompanyId ? (['users'] as OverviewSection[]) : []),
       ...(selectedUserId ? (['permissionPreview'] as OverviewSection[]) : [])
@@ -596,6 +675,104 @@ export default function SuperAdminOverviewClient({ initialOverview, initialProfi
                 User: {selectedUser?.userId || 'Not selected'}
               </Badge>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="relative border-slate-200">
+          <RefreshOverlay refreshing={refreshing} label="Refreshing closure queue" />
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle className="text-base">Closure Requests Queue</CardTitle>
+                <p className="mt-1 text-sm text-slate-500">
+                  Review backup-ready traders, deletion approvals, and closure requests from one place.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Link href="/super-admin/subscriptions?state=closure_requested">
+                  <Button size="sm" variant="outline">Open Closure Reviews</Button>
+                </Link>
+                <Link href="/super-admin/subscriptions?state=deletion_pending">
+                  <Button size="sm" variant="outline">Open Deletion Pending</Button>
+                </Link>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {closureQueue.schemaWarning ? (
+              <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                {closureQueue.schemaWarning}
+              </div>
+            ) : null}
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Closure Requested</p>
+                    <p className="mt-1 text-2xl font-semibold text-blue-900">{closureQueue.summary.closureRequested}</p>
+                  </div>
+                  <Clock3 className="h-5 w-5 text-blue-700" />
+                </div>
+              </div>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Backup Ready</p>
+                    <p className="mt-1 text-2xl font-semibold text-amber-900">{closureQueue.summary.backupReady}</p>
+                  </div>
+                  <Download className="h-5 w-5 text-amber-700" />
+                </div>
+              </div>
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-red-700">Deletion Pending</p>
+                    <p className="mt-1 text-2xl font-semibold text-red-900">{closureQueue.summary.deletionPending}</p>
+                  </div>
+                  <Trash2 className="h-5 w-5 text-red-700" />
+                </div>
+              </div>
+            </div>
+
+            {closureQueue.rows.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-200 px-4 py-6 text-sm text-slate-500">
+                No traders are waiting in the closure workflow right now.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {closureQueue.rows.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="min-w-0 space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-slate-900">{item.name}</p>
+                          <Badge variant={getClosureQueueBadgeVariant(item.queueStage)}>
+                            {getClosureQueueStageLabel(item.queueStage)}
+                          </Badge>
+                          {item.locked ? <Badge variant="outline">Locked</Badge> : null}
+                        </div>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                          <span>{getClosureQueueMetaLabel(item)}</span>
+                          <span>Plan: {item.currentPlanName || 'Not assigned'}</span>
+                          <span>Subscription: {item.subscriptionState.replace(/_/g, ' ')}</span>
+                          <span>Days left: {item.daysLeft ?? '-'}</span>
+                        </div>
+                        <p className="text-sm text-slate-600">{item.lifecycleMessage || 'Closure workflow is active for this trader.'}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Link href={getClosureQueueHref(item)}>
+                          <Button size="sm">Open Review</Button>
+                        </Link>
+                        <Link href={`/super-admin/traders/${item.id}`}>
+                          <Button size="sm" variant="outline">Trader Details</Button>
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 

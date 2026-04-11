@@ -10,13 +10,23 @@ export default async function SuperAdminDashboardPage() {
   }
 
   const overview = await loadSuperAdminOverviewData({
-    sections: ['stats', 'traders', 'companies', 'users', 'permissionPreview']
+    sections: ['stats', 'traders', 'companies', 'users', 'closureQueue', 'permissionPreview']
   })
   const initialOverview = {
     stats: overview.stats || { traders: 0, companies: 0, users: 0 },
     traders: overview.traders || [],
     companies: overview.companies || [],
     users: overview.users || [],
+    closureQueue: overview.closureQueue || {
+      schemaReady: true,
+      schemaWarning: null,
+      summary: {
+        closureRequested: 0,
+        backupReady: 0,
+        deletionPending: 0
+      },
+      rows: []
+    },
     permissionPreview: overview.permissionPreview || null
   }
   const initialProfile = {

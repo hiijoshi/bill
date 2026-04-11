@@ -145,6 +145,26 @@ export type TraderSubscriptionListItem = {
   amount: number | null
   currency: string | null
   billingCycle: string | null
+  latestReadyBackupAt: string | null
+  closureRequestedAt: string | null
+  scheduledDeletionAt: string | null
+}
+
+export type SuperAdminClosureQueueStage = 'closure_requested' | 'backup_ready' | 'deletion_pending'
+
+export type SuperAdminClosureQueueItem = {
+  id: string
+  name: string
+  locked: boolean
+  queueStage: SuperAdminClosureQueueStage
+  currentPlanName: string | null
+  subscriptionState: string
+  dataLifecycleState: string
+  lifecycleMessage: string | null
+  daysLeft: number | null
+  latestReadyBackupAt: string | null
+  closureRequestedAt: string | null
+  scheduledDeletionAt: string | null
 }
 
 export type TraderSubscriptionDetailPayload = {
@@ -250,6 +270,17 @@ export type SuperAdminTraderSubscriptionDetailResult = {
   schemaReady: boolean
   schemaWarning: string | null
   detail: TraderSubscriptionDetailPayload | null
+}
+
+export type SuperAdminClosureQueueResult = {
+  schemaReady: boolean
+  schemaWarning: string | null
+  summary: {
+    closureRequested: number
+    backupReady: number
+    deletionPending: number
+  }
+  rows: SuperAdminClosureQueueItem[]
 }
 
 export type SuperAdminSubscriptionBootstrap = {
@@ -401,6 +432,67 @@ function buildLifecycleMessage(args: {
   }
 
   return args.subscriptionMessage
+}
+
+function hasClosureRequestMessage(message: string | null | undefined) {
+  return String(message || '').toLowerCase().includes('closure request submitted')
+}
+
+function deriveClosureQueueStage(row: TraderSubscriptionListItem): SuperAdminClosureQueueStage | null {
+  if (row.dataLifecycleState === 'deletion_pending') {
+    return 'deletion_pending'
+  }
+
+  if (row.dataLifecycleState === 'backup_ready') {
+    return 'backup_ready'
+  }
+
+  if (hasClosureRequestMessage(row.lifecycleMessage)) {
+    return 'closure_requested'
+  }
+
+  return null
+}
+
+function toTimestamp(value: string | null | undefined) {
+  if (!value) return 0
+  const parsed = new Date(value)
+  const time = parsed.getTime()
+  return Number.isFinite(time) ? time : 0
+}
+
+function compareClosureQueueItems(left: SuperAdminClosureQueueItem, right: SuperAdminClosureQueueItem) {
+  const priority: Record<SuperAdminClosureQueueStage, number> = {
+    deletion_pending: 0,
+    backup_ready: 1,
+    closure_requested: 2
+  }
+
+  if (priority[left.queueStage] !== priority[right.queueStage]) {
+    return priority[left.queueStage] - priority[right.queueStage]
+  }
+
+  if (left.queueStage === 'deletion_pending' && right.queueStage === 'deletion_pending') {
+    const leftTime = toTimestamp(left.scheduledDeletionAt) || Number.MAX_SAFE_INTEGER
+    const rightTime = toTimestamp(right.scheduledDeletionAt) || Number.MAX_SAFE_INTEGER
+    if (leftTime !== rightTime) {
+      return leftTime - rightTime
+    }
+  } else if (left.queueStage === 'backup_ready' && right.queueStage === 'backup_ready') {
+    const leftTime = toTimestamp(left.latestReadyBackupAt)
+    const rightTime = toTimestamp(right.latestReadyBackupAt)
+    if (leftTime !== rightTime) {
+      return rightTime - leftTime
+    }
+  } else {
+    const leftTime = toTimestamp(left.closureRequestedAt)
+    const rightTime = toTimestamp(right.closureRequestedAt)
+    if (leftTime !== rightTime) {
+      return rightTime - leftTime
+    }
+  }
+
+  return left.name.localeCompare(right.name)
 }
 
 function compareRelevantSubscriptions(left: TraderSubscriptionListRow, right: TraderSubscriptionListRow) {
@@ -723,7 +815,10 @@ async function fetchSuperAdminTraderSubscriptionRows(
       endDate: subscription?.endDate?.toISOString() || null,
       amount: subscription?.amount ?? null,
       currency: subscription?.currency ?? null,
-      billingCycle: subscription?.billingCycle || subscription?.plan?.billingCycle || null
+      billingCycle: subscription?.billingCycle || subscription?.plan?.billingCycle || null,
+      latestReadyBackupAt: lifecycle?.latestReadyBackupAt?.toISOString() || null,
+      closureRequestedAt: lifecycle?.closureRequestedAt?.toISOString() || null,
+      scheduledDeletionAt: lifecycle?.scheduledDeletionAt?.toISOString() || null
     }
   })
 
@@ -880,6 +975,58 @@ export async function getSuperAdminTraderSubscriptionDetail(
     schemaReady,
     schemaWarning: schemaReady ? null : SUBSCRIPTION_SCHEMA_WARNING_MESSAGE,
     detail
+  }
+}
+
+export async function getSuperAdminClosureQueue(
+  db: DbClient,
+  options: {
+    limit?: number
+    now?: Date
+  } = {}
+): Promise<SuperAdminClosureQueueResult> {
+  const schemaReady = await ensureSubscriptionManagementSchemaReady(db)
+  const rows = await fetchSuperAdminTraderSubscriptionRows(db, schemaReady, {
+    includeLocked: true,
+    now: options.now
+  })
+  const queueRows: SuperAdminClosureQueueItem[] = []
+
+  for (const row of rows) {
+    const queueStage = deriveClosureQueueStage(row)
+    if (!queueStage) continue
+
+    queueRows.push({
+      id: row.id,
+      name: row.name,
+      locked: row.locked,
+      queueStage,
+      currentPlanName: row.currentPlanName,
+      subscriptionState: row.subscriptionState,
+      dataLifecycleState: row.dataLifecycleState,
+      lifecycleMessage: row.lifecycleMessage,
+      daysLeft: row.daysLeft,
+      latestReadyBackupAt: row.latestReadyBackupAt,
+      closureRequestedAt: row.closureRequestedAt,
+      scheduledDeletionAt: row.scheduledDeletionAt
+    })
+  }
+
+  const sortedRows = queueRows.sort(compareClosureQueueItems)
+  const limit =
+    typeof options.limit === 'number' && Number.isFinite(options.limit)
+      ? Math.max(1, Math.trunc(options.limit))
+      : 6
+
+  return {
+    schemaReady,
+    schemaWarning: schemaReady ? null : SUBSCRIPTION_SCHEMA_WARNING_MESSAGE,
+    summary: {
+      closureRequested: sortedRows.filter((row) => row.queueStage === 'closure_requested').length,
+      backupReady: sortedRows.filter((row) => row.queueStage === 'backup_ready').length,
+      deletionPending: sortedRows.filter((row) => row.queueStage === 'deletion_pending').length
+    },
+    rows: sortedRows.slice(0, limit)
   }
 }
 
