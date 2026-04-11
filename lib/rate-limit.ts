@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 // Simple in-memory rate limiting store
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
+let lastCleanupAt = 0
 
 interface RateLimitConfig {
   windowMs: number // Time window in milliseconds
@@ -9,6 +10,18 @@ interface RateLimitConfig {
 }
 
 type RateLimitedHandler = (request: NextRequest, ...args: unknown[]) => Promise<unknown> | unknown
+
+function cleanupExpiredRateLimitEntries(now: number) {
+  if (now - lastCleanupAt < 60_000) {
+    return
+  }
+  lastCleanupAt = now
+  for (const [key, entry] of rateLimitStore.entries()) {
+    if (now > entry.resetTime) {
+      rateLimitStore.delete(key)
+    }
+  }
+}
 
 export function rateLimit(config: RateLimitConfig) {
   return function (
@@ -26,6 +39,7 @@ export function rateLimit(config: RateLimitConfig) {
                           request.headers.get('x-real-ip') || 
                           'unknown'
       const now = Date.now()
+      cleanupExpiredRateLimitEntries(now)
       
       // Get or create rate limit entry
       let entry = rateLimitStore.get(identifier)
@@ -71,13 +85,3 @@ export function rateLimit(config: RateLimitConfig) {
     return descriptor
   }
 }
-
-// Clean up expired entries periodically
-setInterval(() => {
-  const now = Date.now()
-  for (const [key, entry] of rateLimitStore.entries()) {
-    if (now > entry.resetTime) {
-      rateLimitStore.delete(key)
-    }
-  }
-}, 60000) // Clean up every minute
