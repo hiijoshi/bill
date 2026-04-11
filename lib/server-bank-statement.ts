@@ -105,6 +105,50 @@ const STATEMENT_REFERENCE_HEADERS = new Set(
   ['Reference', 'Txn Ref', 'Transaction Ref', 'UTR', 'Ref No', 'Cheque No', 'Chq No', 'Voucher No'].map(normalizeCsvHeader)
 )
 
+const PLACEHOLDER_DATE_VALUES = new Set([
+  'mm/dd/yyyy',
+  'dd/mm/yyyy',
+  'yyyy-mm-dd',
+  'date'
+])
+
+const NON_TRANSACTION_ROW_PATTERNS = [
+  /\bstatement of account\b/i,
+  /\bbank statement\b/i,
+  /\bopening balance\b/i,
+  /\bclosing balance\b/i,
+  /\bavailable balance\b/i,
+  /\btotal credit amount\b/i,
+  /\btotal debit amount\b/i,
+  /\bnumber of transactions\b/i,
+  /^transactions?$/i,
+  /^page\s+\d+/i
+]
+
+const NON_TRANSACTION_TEXT_PATTERNS = [
+  ...NON_TRANSACTION_ROW_PATTERNS,
+  /^\s*statement period\b/i,
+  /^\s*generated on\b/i,
+  /^\s*account (?:name|number|no)\b/i,
+  /^\s*customer id\b/i,
+  /^\s*branch(?: name)?\b/i,
+  /^\s*from date\b/i,
+  /^\s*to date\b/i
+]
+
+const TRANSACTION_HEADER_PATTERNS = [
+  /^\s*(?:txn\s+)?date\b.*\b(?:description|narration|particular|remarks?)\b/i,
+  /^\s*(?:txn\s+)?date\b.*\b(?:debit|credit|withdrawal|deposit|balance|amount)\b/i,
+  /^\s*(?:description|narration|particulars?|remarks?)\b.*\b(?:debit|credit|withdrawal|deposit|balance|amount)\b/i,
+  /^\s*(?:withdrawals?|debit)\b.*\b(?:deposits?|credit)\b.*\bbalance\b/i
+]
+
+type NumericLineMatch = {
+  raw: string
+  index: number
+  value: number
+}
+
 function rowHasAnyHeader(headers: string[], candidates: Set<string>): boolean {
   return headers.some((header) => candidates.has(header))
 }
@@ -120,6 +164,11 @@ function buildStructuredCsvRecord(headers: string[], rawRow: string[]): CsvImpor
   return record
 }
 
+function hasNonZeroAmountCell(value: string): boolean {
+  const parsed = parseAmountValue(value)
+  return typeof parsed === 'number' && parsed > 0
+}
+
 function shouldSkipStructuredStatementRow(row: CsvImportRow): boolean {
   const values = Object.values(row).map((value) => normalizeText(value)).filter(Boolean)
   if (values.length === 0) return true
@@ -129,16 +178,47 @@ function shouldSkipStructuredStatementRow(row: CsvImportRow): boolean {
     getCsvValue(row, ['Description', 'Narration', 'Particular', 'Particulars', 'Details', 'Remarks', 'Remark'])
   )
   const dateValue = normalizeText(getCsvValue(row, ['Date', 'Txn Date', 'Transaction Date', 'Posted Date', 'Value Date', 'Entry Date']))
+  const referenceValue = normalizeText(
+    getCsvValue(row, ['Reference', 'Txn Ref', 'Transaction Ref', 'UTR', 'Ref No', 'Cheque No', 'Chq No', 'Voucher No'])
+  )
+  const debitValue = normalizeText(
+    getCsvValue(row, ['Debit', 'Withdrawal', 'Debit Amount', 'Dr Amount', 'Dr', 'Withdrawals', 'Debit (Rs)'])
+  )
+  const creditValue = normalizeText(
+    getCsvValue(row, ['Credit', 'Deposit', 'Credit Amount', 'Cr Amount', 'Cr', 'Deposits', 'Credit (Rs)'])
+  )
+  const amountValue = normalizeText(getCsvValue(row, ['Amount', 'Txn Amount', 'Transaction Amount', 'Amount (Rs)']))
+  const normalizedDateValue = normalizeForCompare(dateValue)
+  const descriptor = `${typeValue} ${descriptionValue}`.trim()
+  const hasTransactionAmount =
+    hasNonZeroAmountCell(debitValue) ||
+    hasNonZeroAmountCell(creditValue) ||
+    hasNonZeroAmountCell(amountValue)
 
   if (!dateValue && (typeValue === 'total' || descriptionValue === 'total')) {
+    return true
+  }
+
+  if (PLACEHOLDER_DATE_VALUES.has(normalizedDateValue)) {
+    return true
+  }
+
+  if (NON_TRANSACTION_ROW_PATTERNS.some((pattern) => pattern.test(descriptor))) {
+    return true
+  }
+
+  if (!hasTransactionAmount && !dateValue && !descriptionValue && !referenceValue) {
+    return true
+  }
+
+  if (!hasTransactionAmount && !typeValue) {
     return true
   }
 
   return false
 }
 
-function extractStructuredStatementCsvRows(text: string): StructuredStatementCsvRow[] {
-  const rawRows = parseCsvRows(text)
+function extractStructuredStatementRowsFromMatrix(rawRows: string[][]): StructuredStatementCsvRow[] {
   if (rawRows.length === 0) return []
 
   const headerRowIndex = rawRows.findIndex((rawRow) => {
@@ -167,6 +247,11 @@ function extractStructuredStatementCsvRows(text: string): StructuredStatementCsv
       rowNo: headerRowIndex + index + 2
     }))
     .filter(({ row }) => !shouldSkipStructuredStatementRow(row))
+}
+
+function extractStructuredStatementCsvRows(text: string): StructuredStatementCsvRow[] {
+  const rawRows = parseCsvRows(text).map((row) => row.map((cell) => normalizeText(cell)))
+  return extractStructuredStatementRowsFromMatrix(rawRows)
 }
 
 function extractInternalLedgerPdfRows(text: string): StructuredStatementCsvRow[] {
@@ -255,6 +340,129 @@ function parseAmountValue(raw: string): number | null {
   const parsed = Number(normalized)
   if (!Number.isFinite(parsed)) return null
   return Math.abs(parsed)
+}
+
+function isPlaceholderDateValue(value: string): boolean {
+  return PLACEHOLDER_DATE_VALUES.has(normalizeForCompare(value))
+}
+
+function extractAmountMatchesFromLine(line: string): NumericLineMatch[] {
+  const ignoredRanges = Array.from(line.matchAll(DATE_PATTERN)).map((match) => {
+    const start = match.index ?? -1
+    return [start, start + match[0].length] as const
+  })
+
+  return Array.from(line.matchAll(AMOUNT_PATTERN))
+    .flatMap((match) => {
+      const index = match.index ?? -1
+      const parsedValue = parseAmountValue(match[0])
+      if (index < 0 || parsedValue === null) {
+        return []
+      }
+
+      return {
+        raw: match[0],
+        index,
+        value: parsedValue
+      }
+    })
+    .filter((match) => {
+      if (!match.raw || match.index < 0) return false
+
+      const insideIgnoredRange = ignoredRanges.some(([start, end]) => match.index >= start && match.index < end)
+      if (insideIgnoredRange) return false
+
+      const previousCharacter = line[match.index - 1] || ''
+      const nextCharacter = line[match.index + match.raw.length] || ''
+      const prefixSlice = line.slice(Math.max(0, match.index - 2), match.index)
+      const suffixSlice = line.slice(match.index + match.raw.length, match.index + match.raw.length + 2)
+      const hasUnsupportedPrefix = /[a-z]/i.test(previousCharacter) && !/^(?:cr|dr)$/i.test(prefixSlice)
+      const hasUnsupportedSuffix = /[a-z]/i.test(nextCharacter) && !/^(?:cr|dr)$/i.test(suffixSlice)
+
+      if (hasUnsupportedPrefix || hasUnsupportedSuffix) {
+        return false
+      }
+
+      return true
+    })
+}
+
+function looksLikeStatementHeaderLine(line: string): boolean {
+  return TRANSACTION_HEADER_PATTERNS.some((pattern) => pattern.test(line))
+}
+
+function shouldIgnoreStatementLine(line: string): boolean {
+  const normalized = normalizeText(line).replace(/\s+/g, ' ')
+  if (!normalized) return true
+  if (isPlaceholderDateValue(normalized)) return true
+  if (looksLikeStatementHeaderLine(normalized)) return true
+  return NON_TRANSACTION_TEXT_PATTERNS.some((pattern) => pattern.test(normalized))
+}
+
+function inferTrailingColumnAmount(line: string): { amount: number | null; direction: StatementDirection | null } {
+  const numericMatches = extractAmountMatchesFromLine(line)
+  if (numericMatches.length < 2) {
+    return { amount: null, direction: null }
+  }
+
+  const trailingValues = numericMatches.slice(-3).map((match) => match.value)
+  const candidateValues = (trailingValues.length >= 3 ? trailingValues.slice(0, 2) : trailingValues.slice(-2)).map((value) =>
+    Number(value.toFixed(2))
+  )
+
+  if (candidateValues.length < 2) {
+    return { amount: null, direction: null }
+  }
+
+  const [firstValue, secondValue] = candidateValues
+  const firstIsZero = firstValue <= 0
+  const secondIsZero = secondValue <= 0
+
+  if (!firstIsZero && secondIsZero) {
+    return { amount: firstValue, direction: 'out' }
+  }
+
+  if (firstIsZero && !secondIsZero) {
+    return { amount: secondValue, direction: 'in' }
+  }
+
+  return { amount: null, direction: null }
+}
+
+function looksLikeTransactionStart(line: string): boolean {
+  if (shouldIgnoreStatementLine(line)) return false
+
+  const dateMatch = DATE_PATTERN.exec(line)
+  if (!dateMatch || (dateMatch.index ?? 0) > 4) return false
+  if (isPlaceholderDateValue(dateMatch[0])) return false
+  if (!parseStatementDate(dateMatch[0])) return false
+
+  const directionMatch = line.match(DIRECTION_PATTERN)
+  const directAmount = chooseAmountFromLine(line, directionMatch)
+  if (directAmount.amount && directAmount.direction) {
+    return true
+  }
+
+  const inferredAmount = inferTrailingColumnAmount(line)
+  return Boolean(inferredAmount.amount && inferredAmount.direction)
+}
+
+function shouldSkipStatementTextBlock(block: string): boolean {
+  if (shouldIgnoreStatementLine(block)) return true
+
+  const dateMatch = DATE_PATTERN.exec(block)
+  if (!dateMatch || isPlaceholderDateValue(dateMatch[0]) || !parseStatementDate(dateMatch[0])) {
+    return true
+  }
+
+  const directionMatch = block.match(DIRECTION_PATTERN)
+  const directAmount = chooseAmountFromLine(block, directionMatch)
+  if (directAmount.amount && directAmount.direction) {
+    return false
+  }
+
+  const inferredAmount = inferTrailingColumnAmount(block)
+  return !(inferredAmount.amount && inferredAmount.direction)
 }
 
 async function ensurePdfCanvasGlobals(): Promise<void> {
@@ -564,7 +772,7 @@ function chooseAmountFromLine(
   line: string,
   directionMatch: RegExpMatchArray | null
 ): { amount: number | null; direction: StatementDirection | null } {
-  const amountMatches = Array.from(line.matchAll(AMOUNT_PATTERN))
+  const amountMatches = extractAmountMatchesFromLine(line)
   if (amountMatches.length === 0) {
     return { amount: null, direction: null }
   }
@@ -590,18 +798,33 @@ function chooseAmountFromLine(
   }
 
   if (!direction) {
+    const inferredFromColumns = inferTrailingColumnAmount(line)
+    if (inferredFromColumns.amount && inferredFromColumns.direction) {
+      return inferredFromColumns
+    }
+
     return { amount: null, direction: null }
   }
 
   const directionIndex = directionMatch?.index ?? -1
-  let preferredAmount = amountMatches[0]?.[0] || ''
+  const directionEnd = directionIndex >= 0 ? directionIndex + (directionMatch?.[0]?.length || 0) : -1
+  let preferredAmount = amountMatches[0]?.raw || ''
 
   if (directionIndex >= 0) {
-    const beforeDirection = amountMatches.filter((match) => (match.index ?? 0) < directionIndex)
-    const afterDirection = amountMatches.filter((match) => (match.index ?? 0) > directionIndex)
-    preferredAmount = beforeDirection.at(-1)?.[0] || afterDirection[0]?.[0] || preferredAmount
+    const beforeDirection = amountMatches.filter((match) => match.index < directionIndex && match.value > 0)
+    const afterDirection = amountMatches.filter((match) => match.index >= directionEnd && match.value > 0)
+    const nearestBefore = beforeDirection.at(-1) || null
+    const nearestAfter = afterDirection[0] || null
+
+    if (nearestBefore && nearestAfter) {
+      const beforeDistance = Math.max(0, directionIndex - (nearestBefore.index + nearestBefore.raw.length))
+      const afterDistance = Math.max(0, nearestAfter.index - directionEnd)
+      preferredAmount = beforeDistance <= afterDistance ? nearestBefore.raw : nearestAfter.raw
+    } else {
+      preferredAmount = nearestBefore?.raw || nearestAfter?.raw || preferredAmount
+    }
   } else if (amountMatches.length > 1) {
-    preferredAmount = amountMatches[0]?.[0] || preferredAmount
+    preferredAmount = amountMatches[0]?.raw || preferredAmount
   }
 
   return {
@@ -626,10 +849,14 @@ function extractReferenceFromLine(line: string): string | null {
 }
 
 function cleanStatementDescription(line: string): string {
-  return normalizeText(line)
+  const cleaned = normalizeText(line)
     .replace(/\s+/g, ' ')
+    .replace(DATE_PATTERN, ' ')
     .replace(/\s+\b(?:cr|credit|dr|debit)\b\s*/gi, ' ')
+    .replace(/(?:\s+-?\d[\d,]*(?:\.\d{1,2})?){1,3}\s*$/g, ' ')
     .trim()
+
+  return cleaned || normalizeText(line).replace(/\s+/g, ' ')
 }
 
 function groupStatementTextBlocks(text: string): string[] {
@@ -642,11 +869,16 @@ function groupStatementTextBlocks(text: string): string[] {
   let current = ''
 
   for (const line of sourceLines) {
-    const dateMatch = DATE_PATTERN.exec(line)
-    const startsNewBlock = Boolean(dateMatch && (dateMatch.index ?? 0) <= 4)
+    if (shouldIgnoreStatementLine(line)) {
+      continue
+    }
+
+    const startsNewBlock = looksLikeTransactionStart(line)
 
     if (!current) {
-      current = line
+      if (startsNewBlock) {
+        current = line
+      }
       continue
     }
 
@@ -663,7 +895,7 @@ function groupStatementTextBlocks(text: string): string[] {
     blocks.push(current)
   }
 
-  return blocks
+  return blocks.filter((block) => !shouldSkipStatementTextBlock(block))
 }
 
 function parseStatementTextBlock(block: string, rowNo: number, bankId: string): ParsedStatementResult {
@@ -676,7 +908,10 @@ function parseStatementTextBlock(block: string, rowNo: number, bankId: string): 
   }
 
   const directionMatch = block.match(DIRECTION_PATTERN)
-  const { amount, direction } = chooseAmountFromLine(block, directionMatch)
+  const resolvedAmount = chooseAmountFromLine(block, directionMatch)
+  const inferredAmount = (!resolvedAmount.amount || !resolvedAmount.direction) ? inferTrailingColumnAmount(block) : null
+  const amount = resolvedAmount.amount ?? inferredAmount?.amount ?? null
+  const direction = resolvedAmount.direction ?? inferredAmount?.direction ?? null
   if (!amount || !direction) {
     return { rowNo, reason: 'Could not determine debit / credit amount' }
   }
@@ -700,18 +935,46 @@ function parseStatementTextBlock(block: string, rowNo: number, bankId: string): 
 async function parseExcelStatement(buffer: Buffer, bankId: string): Promise<ParsedStatementResult[]> {
   const xlsxModule = await import('xlsx')
   const workbook = xlsxModule.read(buffer, { type: 'buffer', cellDates: false, raw: false })
-  const firstSheetName = workbook.SheetNames[0]
-  if (!firstSheetName) {
+  if (workbook.SheetNames.length === 0) {
     throw new Error('Excel statement does not contain any worksheet')
   }
 
-  const sheet = workbook.Sheets[firstSheetName]
-  const rows = xlsxModule.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
-  if (rows.length === 0) {
+  const fallbackTexts: string[] = []
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName]
+    if (!sheet) continue
+
+    const rawRows = xlsxModule.utils.sheet_to_json<(string | number | null)[]>(sheet, {
+      header: 1,
+      defval: '',
+      raw: false,
+      blankrows: false
+    }) as Array<Array<string | number | null>>
+
+    if (rawRows.length === 0) {
+      continue
+    }
+
+    const structuredRows = extractStructuredStatementRowsFromMatrix(
+      rawRows.map((row) => row.map((cell) => normalizeText(cell)))
+    )
+    if (structuredRows.length > 0) {
+      return structuredRows.map(({ row, rowNo }) => parseStatementRow(row, rowNo, bankId))
+    }
+
+    const fallbackText = normalizeText(xlsxModule.utils.sheet_to_csv(sheet))
+    if (fallbackText) {
+      fallbackTexts.push(fallbackText)
+    }
+  }
+
+  const combinedFallbackText = fallbackTexts.join('\n')
+  if (!combinedFallbackText) {
     throw new Error('Uploaded Excel statement is empty')
   }
 
-  return rows.map((row, index) => parseStatementRow(normalizeWorksheetRow(row), index + 2, bankId))
+  return parseTextStatement(combinedFallbackText, bankId)
 }
 
 async function extractPdfText(buffer: Buffer): Promise<ExtractedStatementText> {
