@@ -43,7 +43,6 @@ export default function MandiTradePage() {
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-2">
               <div className="w-10 h-10 bg-slate-800 rounded-lg flex items-center justify-center">
-                <i className="fas fa-chart-line text-white text-lg"></i>
               </div>
               <span className="text-xl font-bold text-slate-800">MandiTrade</span>
             </div>
@@ -54,8 +53,8 @@ export default function MandiTradePage() {
               <a href="#contact" className="text-gray-600 hover:text-blue-600 transition-colors text-sm font-medium">Contact</a>
             </div>
             <div className="hidden md:flex items-center space-x-4">
-              <button className="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors">Login</button>
-              <button className="btn-glow bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-all shadow-md hover:shadow-lg">Book a Demo</button>
+              <a href="/login" className="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors">Login</a>
+              <a href="https://calendly.com/yashrajmalhotraindustries-acc1/30min?back=1" className="btn-glow bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-all shadow-md hover:shadow-lg">Book a Demo</a>
             </div>
             <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden p-2 rounded-lg hover:bg-gray-100">
               <i className="fas fa-bars text-xl text-gray-700"></i>
@@ -92,7 +91,7 @@ export default function MandiTradePage() {
               </p>
               <div className="flex flex-col sm:flex-row gap-4">
                 <button className="btn-glow bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl text-base font-semibold transition-all shadow-lg hover:shadow-xl flex items-center justify-center space-x-2">
-                  <span>Book a Demo</span>
+                  <a href="https://calendly.com/yashrajmalhotraindustries-acc1/30min?back=1"><span>Book a Demo</span></a>
                   <i className="fas fa-arrow-right"></i>
                 </button>
                 <button className="bg-white hover:bg-gray-50 text-slate-800 px-8 py-4 rounded-xl text-base font-semibold transition-all border border-slate-200 shadow-sm hover:shadow flex items-center justify-center space-x-2">
@@ -361,58 +360,149 @@ export default function MandiTradePage() {
         </div>
       </section>
 
-      {/* Pricing Section */}
-      <section id="pricing" className="py-20 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-3xl mx-auto mb-16 fade-in">
-            <span className="tag-badge bg-blue-50 text-blue-600 px-4 py-2 rounded-full font-semibold">Pricing</span>
-            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-slate-800 mt-6 mb-4">Simple, Transparent Pricing</h2>
-            <p className="text-lg text-gray-600">Choose the plan that fits your business needs. No hidden fees.</p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-            {[
-              { name: 'Starter', price: '₹999', desc: 'Perfect for small traders', features: ['1 Company', 'Basic Stock Tracking', 'Payment Management', 'Email Support'], disabled: ['Advanced Reports'], popular: false, dark: false },
-              { name: 'Professional', price: '₹2,499', desc: 'For growing businesses', features: ['Up to 3 Companies', 'Advanced Stock Analytics', 'Complete Payment Suite', 'Priority Support', 'Advanced Reports & Export'], disabled: [], popular: true, dark: true },
-              { name: 'Enterprise', price: 'Custom', desc: 'For large operations', features: ['Unlimited Companies', 'Custom Integrations', 'Dedicated Account Manager', '24/7 Phone Support', 'On-premise Deployment'], disabled: [], popular: false, dark: false }
-            ].map((plan, i) => (
-              <div key={i} className={`card-hover rounded-2xl p-8 shadow-xl relative fade-in ${plan.dark ? 'bg-slate-800 transform scale-105' : 'bg-white border border-slate-200 shadow-sm'} ${plan.popular ? 'transform scale-105' : ''}`}>
-                {plan.popular && (
-                  <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
-                    <span className="bg-blue-600 text-white text-sm font-bold px-4 py-1 rounded-full">Most Popular</span>
-                  </div>
-                )}
-                <div className="mb-6">
-                  <h3 className={`text-xl font-bold mb-2 ${plan.dark ? 'text-white' : 'text-slate-800'}`}>{plan.name}</h3>
-                  <p className={`text-sm ${plan.dark ? 'text-gray-400' : 'text-gray-500'}`}>{plan.desc}</p>
-                </div>
-                <div className="mb-6">
-                  <span className={`text-4xl font-bold ${plan.dark ? 'text-white' : 'text-slate-800'}`}>{plan.price}</span>
-                  {plan.price !== 'Custom' && <span className={plan.dark ? 'text-gray-400' : 'text-gray-500'}>/month</span>}
-                </div>
-                <ul className="space-y-3 mb-8">
-                  {plan.features.map((feature, j) => (
-                    <li key={j} className="flex items-center space-x-3">
-                      <i className={`fas fa-check ${plan.dark ? 'text-blue-400' : 'text-green-500'}`}></i>
-                      <span className={plan.dark ? 'text-gray-300' : 'text-gray-600'}>{feature}</span>
-                    </li>
-                  ))}
-                  {plan.disabled.map((feature, j) => (
-                    <li key={j} className="flex items-center space-x-3 text-gray-400">
-                      <i className="fas fa-times"></i>
-                      <span>{feature}</span>
-                    </li>
-                  ))}
-                </ul>
-                <button className={`w-full px-6 py-3 rounded-xl font-semibold transition-all ${plan.dark ? 'btn-glow bg-blue-600 hover:bg-blue-700 text-white shadow-lg' : 'bg-slate-100 hover:bg-gray-200 text-slate-800'}`}>
-                  {plan.price === 'Custom' ? 'Contact Sales' : 'Get Started'}
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+{/* Pricing Section */}
+<section id="pricing" className="py-20 bg-white">
+  <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
 
-      {/* Contact Section */}
+    {/* Header */}
+    <div className="text-center max-w-3xl mx-auto mb-16 fade-in">
+      <span className="tag-badge bg-blue-50 text-blue-600 px-4 py-2 rounded-full font-semibold">
+        Pricing
+      </span>
+      <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-slate-800 mt-6 mb-4">
+        Simple, Transparent Pricing
+      </h2>
+      <p className="text-lg text-gray-600">
+        Start with a base plan and expand anytime with addons.
+      </p>
+    </div>
+
+    {/* Base Plan */}
+    <div className="max-w-md mx-auto mb-16">
+      {[
+        {
+          name: "Yearly Starter",
+          price: "₹5000",
+          billing: "yearly",
+          desc: "Perfect for individual traders with fixed limits",
+          features: [
+            "Full Feature Access",
+            "1 Trader Account (fixed)",
+            "1 Company (fixed)",
+            "1 User (fixed)"
+          ],
+          popular: true
+        }
+      ].map((plan, i) => (
+        <div key={i} className="relative bg-slate-800 text-white rounded-2xl p-8 shadow-xl transform scale-105">
+
+          {/* Badge */}
+          {plan.popular && (
+            <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
+              <span className="bg-blue-600 text-white text-sm font-bold px-4 py-1 rounded-full">
+                Most Popular
+              </span>
+            </div>
+          )}
+
+          <h3 className="text-2xl font-bold mb-2">{plan.name}</h3>
+          <p className="text-gray-400 mb-6">{plan.desc}</p>
+
+          <div className="mb-6">
+            <span className="text-4xl font-bold">{plan.price}</span>
+            <span className="text-gray-400">/{plan.billing}</span>
+          </div>
+
+          <ul className="space-y-3 mb-8">
+            {plan.features.map((feature, j) => (
+              <li key={j} className="flex items-center space-x-3">
+                <i className="fas fa-check text-blue-400"></i>
+                <span className="text-gray-300">{feature}</span>
+              </li>
+            ))}
+          </ul>
+
+          <a href="https://calendly.com/yashrajmalhotraindustries-acc1/30min?back=1" className="w-full px-6 py-3 rounded-xl font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-lg">
+            Get Started
+          </a>
+        </div>
+      ))}
+    </div>
+
+    {/* Addons Section */}
+    <div>
+      <h3 className="text-2xl font-bold text-center text-slate-800 mb-10">
+        Addons (Requires Base Plan)
+      </h3>
+
+      <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
+        {[
+          {
+            name: "Addon Plan",
+            price: "₹1999",
+            billing: "yearly",
+            desc: "Add a new company with a user",
+            features: [
+              "1 Additional Company",
+              "1 User included"
+            ]
+          },
+          {
+            name: "Extra User",
+            price: "₹999",
+            billing: "yearly",
+            desc: "Add users to existing companies",
+            features: [
+              "1 Additional User"
+            ]
+          },
+          {
+            name: "Company Only",
+            price: "₹1500",
+            billing: "yearly",
+            desc: "Add a company without a user",
+            features: [
+              "1 Company",
+              "No User Included"
+            ]
+          }
+        ].map((plan, i) => (
+          <div key={i} className="bg-white border border-slate-200 rounded-2xl p-8 shadow-sm card-hover">
+
+            <h3 className="text-xl font-bold text-slate-800 mb-2">
+              {plan.name}
+            </h3>
+            <p className="text-sm text-gray-500 mb-6">{plan.desc}</p>
+
+            <div className="mb-6">
+              <span className="text-3xl font-bold text-slate-800">
+                {plan.price}
+              </span>
+              <span className="text-gray-500">/{plan.billing}</span>
+            </div>
+
+            <ul className="space-y-3 mb-8">
+              {plan.features.map((feature, j) => (
+                <li key={j} className="flex items-center space-x-3">
+                  <i className="fas fa-check text-green-500"></i>
+                  <span className="text-gray-600">{feature}</span>
+                </li>
+              ))}
+            </ul>
+
+            <a href="https://calendly.com/yashrajmalhotraindustries-acc1/30min?back=1" className="w-full px-6 py-3 rounded-xl font-semibold bg-slate-100 hover:bg-gray-200 text-slate-800">
+              Add to Plan
+            </a>
+          </div>
+        ))}
+      </div>
+    </div>
+
+  </div>
+</section>
+
+
+
       <section id="contact" className="py-20 bg-slate-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-3xl mx-auto mb-16 fade-in">
@@ -421,28 +511,46 @@ export default function MandiTradePage() {
             <p className="text-lg text-gray-600">Have questions? We'd love to hear from you. Send us a message and we'll respond as soon as possible.</p>
           </div>
           <div className="grid lg:grid-cols-2 gap-12 max-w-6xl mx-auto">
-            <div className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm fade-in">
-              <form onSubmit={(e) => handleFormSubmit(e, 'contact')} className="space-y-6">
-                <div>
-                  <label className="block text-sm font-semibold text-slate-800 mb-2">Name *</label>
-                  <input type="text" required placeholder="Your name" className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 transition-all" />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-slate-800 mb-2">Email *</label>
-                  <input type="email" required placeholder="your@email.com" className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 transition-all" />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-slate-800 mb-2">Message *</label>
-                  <textarea rows={5} required placeholder="How can we help you?" className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 transition-all resize-none"></textarea>
-                </div>
-                <button type="submit" className="btn-glow w-full bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-semibold transition-all shadow-lg hover:shadow-xl">Send Message</button>
-              </form>
-            </div>
+           <div className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm fade-in">
+  <form onSubmit={(e) => handleFormSubmit(e, 'contact')} className="space-y-6">
+
+    <div>
+      <label className="block text-sm font-semibold text-slate-800 mb-2">Name *</label>
+      <input name="name" type="text" required placeholder="Your name"
+        className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 transition-all" />
+    </div>
+
+    <div>
+      <label className="block text-sm font-semibold text-slate-800 mb-2">Email *</label>
+      <input name="email" type="email" required placeholder="your@email.com"
+        className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 transition-all" />
+    </div>
+
+    {/* ✅ NEW PHONE FIELD */}
+    <div>
+      <label className="block text-sm font-semibold text-slate-800 mb-2">Phone *</label>
+      <input name="phone" type="tel" required placeholder="Your phone number"
+        className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 transition-all" />
+    </div>
+
+    <div>
+      <label className="block text-sm font-semibold text-slate-800 mb-2">Message *</label>
+      <textarea name="message" rows={5} required placeholder="How can we help you?"
+        className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 transition-all" />
+    </div>
+
+    <button type="submit"
+      className="btn-glow w-full bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-semibold transition-all shadow-lg hover:shadow-xl">
+      Send Message
+    </button>
+
+  </form>
+</div>
             <div className="space-y-8 fade-in">
               {[
-                { icon: 'fas fa-envelope', color: 'blue', title: 'Email Us', content: ['For general inquiries:', 'hello@manditrade.com', 'For support:', 'support@manditrade.com'] },
+                { icon: 'fas fa-envelope', color: 'blue', title: 'Email Us', content: ['For general inquiries:', 'emandibillings@gmail.com', 'For support:', 'emandibillings@gmail.com'] },
                 { icon: 'fas fa-phone', color: 'green', title: 'Call Us', content: ['Mon-Fri from 9am to 6pm:', '+91 98765 43210'] },
-                { icon: 'fas fa-map-marker-alt', color: 'purple', title: 'Visit Us', content: ['MandiTrade HQ', '123 Business Park, Sector 18', 'Gurugram, Haryana 122002', 'India'] }
+                { icon: 'fas fa-map-marker-alt', color: 'purple', title: 'Visit Us', content: ['MandiTrade HQ', 'Mandsaur, Madhya Pradesh 458001', 'India'] }
               ].map((contact, i) => (
                 <div key={i} className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm card-hover">
                   <div className="flex items-start space-x-4">
@@ -504,7 +612,7 @@ export default function MandiTradePage() {
           </div>
           <div className="border-t border-white/10 pt-8">
             <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
-              <p className="text-gray-400 text-sm">© 2024 MandiTrade. All rights reserved.</p>
+              <p className="text-gray-400 text-sm">© 2026 3Dumb Developers. All rights reserved.</p>
               <div className="flex items-center space-x-6">
                 {['Privacy Policy', 'Terms of Service', 'Cookie Policy'].map((link, i) => (
                   <a key={i} href="#" className="text-gray-400 hover:text-white text-sm transition-colors">{link}</a>
