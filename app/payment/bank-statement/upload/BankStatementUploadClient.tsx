@@ -530,7 +530,7 @@ function submitStatementRequest(
   action: RouteAction,
   onProgress: (value: number) => void
 ): Promise<StatementPayload> {
-  return new Promise((resolve, reject) => {
+  const performRequest = (allowRetry: boolean): Promise<StatementPayload> => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', '/api/payments/bank-statement/import')
     xhr.withCredentials = true
@@ -574,7 +574,27 @@ function submitStatementRequest(
       }
 
       if (xhr.status === 403 && /invalid csrf token/i.test(String(payload.error || ''))) {
-        reject(new Error('Upload security token expired. Refresh the page once and retry the bank statement upload.'))
+        if (!allowRetry) {
+          reject(new Error('Upload security token expired. Refresh the page once and retry the bank statement upload.'))
+          return
+        }
+
+        void fetch('/api/auth/refresh', {
+          method: 'POST',
+          credentials: 'include'
+        })
+          .then(async (response) => {
+            if (!response.ok) {
+              throw new Error('Session refresh failed')
+            }
+
+            onProgress(12)
+            return performRequest(false).then(resolve, reject)
+          })
+          .catch(() => {
+            reject(new Error('Upload security token expired. Refresh the page once and retry the bank statement upload.'))
+          })
+
         return
       }
 
@@ -591,6 +611,8 @@ function submitStatementRequest(
 
     xhr.send(formData)
   })
+
+  return performRequest(true)
 }
 
 function renderCsvValue(value: string): string {
