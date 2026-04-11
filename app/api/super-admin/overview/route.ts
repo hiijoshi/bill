@@ -7,6 +7,7 @@ const SUPER_ADMIN_OVERVIEW_SECTIONS = new Set<SuperAdminOverviewSection>([
   'traders',
   'companies',
   'users',
+  'closureQueue',
   'permissionPreview'
 ])
 
