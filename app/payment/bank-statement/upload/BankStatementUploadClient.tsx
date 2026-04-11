@@ -546,21 +546,14 @@ function submitStatementRequest(
   onProgress: (value: number) => void
 ): Promise<StatementPayload> {
   const performRequest = (allowRetry: boolean): Promise<StatementPayload> => new Promise((resolve, reject) => {
-    const normalizedCompanyId = normalizeText(formData.get('companyId'))
-    const requestUrl = normalizedCompanyId
-      ? `/api/payments/bank-statement/import?companyId=${encodeURIComponent(normalizedCompanyId)}`
-      : '/api/payments/bank-statement/import'
     const xhr = new XMLHttpRequest()
-    xhr.open('POST', requestUrl)
+    xhr.open('POST', '/api/payments/bank-statement/import')
     xhr.withCredentials = true
     xhr.timeout = action === 'import' ? 120_000 : 90_000
     xhr.responseType = 'text'
     const csrfToken = getCsrfTokenScoped('app')
     if (csrfToken) {
       xhr.setRequestHeader('x-csrf-token', csrfToken)
-    }
-    if (normalizedCompanyId) {
-      xhr.setRequestHeader('x-company-id', normalizedCompanyId)
     }
     xhr.setRequestHeader('x-requested-with', 'XMLHttpRequest')
 

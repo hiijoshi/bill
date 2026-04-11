@@ -7,7 +7,7 @@ import type {
   StatementTargetSelection,
   StatementTargetType
 } from '@/lib/bank-statement-types'
-import { ensureCompanyAccess, requireRoles } from '@/lib/api-security'
+import { ensureCompanyAccessForAction, requireRoles } from '@/lib/api-security'
 import {
   buildCashBankPaymentReference,
   CASH_BANK_PAYMENT_TYPE,
@@ -578,8 +578,8 @@ export async function POST(request: NextRequest) {
 
   try {
     const formData = await request.formData()
-    const companyId =
-      normalizeText(formData.get('companyId')) ||
+    const requestedCompanyId = normalizeText(formData.get('companyId'))
+    const scopedCompanyId =
       normalizeText(authResult.auth.companyId) ||
       normalizeText(request.headers.get('x-auth-company-id')) ||
       normalizeText(request.headers.get('x-company-id'))
@@ -587,6 +587,10 @@ export async function POST(request: NextRequest) {
     const action = parseAction(formData.get('action'))
     const manualTargets = parseManualTargetMap(formData.get('manualTargets'))
     const file = formData.get('file')
+    const companyId =
+      authResult.auth.role === 'super_admin'
+        ? requestedCompanyId || scopedCompanyId
+        : scopedCompanyId || requestedCompanyId
 
     if (!companyId) {
       return NextResponse.json({ error: 'Company context is missing. Reopen the company and retry the bank statement upload.' }, { status: 400 })
@@ -602,7 +606,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Upload a bank statement file first' }, { status: 400 })
     }
 
-    const denied = await ensureCompanyAccess(request, companyId)
+    const denied = await ensureCompanyAccessForAction(
+      request,
+      companyId,
+      action === 'preview' ? 'read' : 'write'
+    )
     if (denied) return denied
 
     const bank = await prisma.bank.findFirst({

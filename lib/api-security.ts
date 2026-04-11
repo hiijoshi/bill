@@ -496,6 +496,14 @@ export async function ensureCompanyAccess(
   request: NextRequest,
   companyId: string | null | undefined
 ): Promise<NextResponse | null> {
+  return ensureCompanyAccessForAction(request, companyId)
+}
+
+export async function ensureCompanyAccessForAction(
+  request: NextRequest,
+  companyId: string | null | undefined,
+  actionOverride?: 'read' | 'write'
+): Promise<NextResponse | null> {
   if (!companyId || companyId.trim().length === 0) {
     return badRequest('Company ID is required')
   }
@@ -510,7 +518,13 @@ export async function ensureCompanyAccess(
     return forbidden('Company access denied')
   }
 
-  const routePermission = resolveRoutePermission(request.nextUrl.pathname, request.method)
+  const routeMethod =
+    actionOverride === 'read'
+      ? 'GET'
+      : actionOverride === 'write'
+        ? 'POST'
+        : request.method
+  const routePermission = resolveRoutePermission(request.nextUrl.pathname, routeMethod)
   if (routePermission) {
     const hasPermission = await hasModulePermission(
       authResult.auth,
