@@ -533,6 +533,7 @@ function submitStatementRequest(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', '/api/payments/bank-statement/import')
+    xhr.withCredentials = true
     xhr.timeout = action === 'import' ? 120_000 : 90_000
     xhr.responseType = 'text'
     const csrfToken = getCsrfTokenScoped('app')
@@ -569,6 +570,11 @@ function submitStatementRequest(
 
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(payload)
+        return
+      }
+
+      if (xhr.status === 403 && /invalid csrf token/i.test(String(payload.error || ''))) {
+        reject(new Error('Upload security token expired. Refresh the page once and retry the bank statement upload.'))
         return
       }
 
