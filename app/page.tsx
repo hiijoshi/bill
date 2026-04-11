@@ -1,5 +1,11 @@
 'use client';
+import Link from 'next/link';
 import { useState, useEffect } from 'react';
+
+const LOGIN_HREF = '/login';
+const DEMO_SECTION_HREF = '#book-demo';
+const FEATURES_SECTION_HREF = '#features';
+const CONTACT_SECTION_HREF = '#contact';
 
 export default function MandiTradePage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -8,6 +14,7 @@ export default function MandiTradePage() {
   useEffect(() => {
     const handleScroll = () => setNavbarScrolled(window.scrollY > 50);
     window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
   const handleFormSubmit = (e: React.FormEvent, type: string) => {
@@ -54,8 +61,12 @@ export default function MandiTradePage() {
               <a href="#contact" className="text-gray-600 hover:text-blue-600 transition-colors text-sm font-medium">Contact</a>
             </div>
             <div className="hidden md:flex items-center space-x-4">
-              <button className="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors">Login</button>
-              <button className="btn-glow bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-all shadow-md hover:shadow-lg">Book a Demo</button>
+              <Link href={LOGIN_HREF} className="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors">
+                Login
+              </Link>
+              <a href={DEMO_SECTION_HREF} className="btn-glow bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-all shadow-md hover:shadow-lg">
+                Book a Demo
+              </a>
             </div>
             <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden p-2 rounded-lg hover:bg-gray-100">
               <i className="fas fa-bars text-xl text-gray-700"></i>
@@ -69,7 +80,12 @@ export default function MandiTradePage() {
               <a href="#pricing" onClick={() => setMobileMenuOpen(false)} className="block text-gray-700 hover:text-blue-600 py-2 text-sm font-medium">Pricing</a>
               <a href="#about" onClick={() => setMobileMenuOpen(false)} className="block text-gray-700 hover:text-blue-600 py-2 text-sm font-medium">About</a>
               <a href="#contact" onClick={() => setMobileMenuOpen(false)} className="block text-gray-700 hover:text-blue-600 py-2 text-sm font-medium">Contact</a>
-              <button className="w-full btn-glow bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold mt-2">Book a Demo</button>
+              <Link href={LOGIN_HREF} onClick={() => setMobileMenuOpen(false)} className="block text-gray-700 hover:text-blue-600 py-2 text-sm font-medium">
+                Login
+              </Link>
+              <a href={DEMO_SECTION_HREF} onClick={() => setMobileMenuOpen(false)} className="block w-full btn-glow bg-blue-600 hover:bg-blue-700 text-center text-white px-5 py-2.5 rounded-lg text-sm font-semibold mt-2">
+                Book a Demo
+              </a>
             </div>
           </div>
         )}
@@ -91,14 +107,14 @@ export default function MandiTradePage() {
                 Track purchases, sales, stock, and payments in one powerful dashboard. Simplify your trading operations and grow your business.
               </p>
               <div className="flex flex-col sm:flex-row gap-4">
-                <button className="btn-glow bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl text-base font-semibold transition-all shadow-lg hover:shadow-xl flex items-center justify-center space-x-2">
+                <a href={DEMO_SECTION_HREF} className="btn-glow bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl text-base font-semibold transition-all shadow-lg hover:shadow-xl flex items-center justify-center space-x-2">
                   <span>Book a Demo</span>
                   <i className="fas fa-arrow-right"></i>
-                </button>
-                <button className="bg-white hover:bg-gray-50 text-slate-800 px-8 py-4 rounded-xl text-base font-semibold transition-all border border-slate-200 shadow-sm hover:shadow flex items-center justify-center space-x-2">
+                </a>
+                <a href={FEATURES_SECTION_HREF} className="bg-white hover:bg-gray-50 text-slate-800 px-8 py-4 rounded-xl text-base font-semibold transition-all border border-slate-200 shadow-sm hover:shadow flex items-center justify-center space-x-2">
                   <i className="fas fa-play-circle text-blue-600"></i>
                   <span>View Features</span>
-                </button>
+                </a>
               </div>
               <div className="flex items-center space-x-6 pt-4">
                 <div className="flex -space-x-3">
@@ -306,7 +322,7 @@ export default function MandiTradePage() {
       </section>
 
       {/* Book a Demo Section */}
-      <section className="py-20 bg-gradient-to-br from-slate-800 to-slate-900 relative overflow-hidden">
+      <section id="book-demo" className="py-20 bg-gradient-to-br from-slate-800 to-slate-900 relative overflow-hidden">
         <div className="absolute inset-0 opacity-10">
           <div className="absolute top-0 left-0 w-96 h-96 bg-blue-600 rounded-full filter blur-3xl"></div>
           <div className="absolute bottom-0 right-0 w-96 h-96 bg-blue-400 rounded-full filter blur-3xl"></div>
@@ -403,9 +419,15 @@ export default function MandiTradePage() {
                     </li>
                   ))}
                 </ul>
-                <button className={`w-full px-6 py-3 rounded-xl font-semibold transition-all ${plan.dark ? 'btn-glow bg-blue-600 hover:bg-blue-700 text-white shadow-lg' : 'bg-slate-100 hover:bg-gray-200 text-slate-800'}`}>
-                  {plan.price === 'Custom' ? 'Contact Sales' : 'Get Started'}
-                </button>
+                {plan.price === 'Custom' ? (
+                  <a href={CONTACT_SECTION_HREF} className={`block w-full px-6 py-3 rounded-xl text-center font-semibold transition-all ${plan.dark ? 'btn-glow bg-blue-600 hover:bg-blue-700 text-white shadow-lg' : 'bg-slate-100 hover:bg-gray-200 text-slate-800'}`}>
+                    Contact Sales
+                  </a>
+                ) : (
+                  <Link href={LOGIN_HREF} className={`block w-full px-6 py-3 rounded-xl text-center font-semibold transition-all ${plan.dark ? 'btn-glow bg-blue-600 hover:bg-blue-700 text-white shadow-lg' : 'bg-slate-100 hover:bg-gray-200 text-slate-800'}`}>
+                    Get Started
+                  </Link>
+                )}
               </div>
             ))}
           </div>
