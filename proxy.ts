@@ -92,6 +92,25 @@ function getCookieCompanyId(request: NextRequest, scopeSource: string): string |
   )
 }
 
+function getMatchingCsrfCookieValues(
+  request: NextRequest,
+  namespace: 'app' | 'super_admin',
+  scopeSource: string
+): string[] {
+  const exactCandidates = getSessionCookieNameCandidates(namespace, scopeSource)
+    .map((cookieNames) => request.cookies.get(cookieNames.csrfToken)?.value?.trim() || '')
+    .filter((value) => value.length > 0)
+
+  const prefix = namespace === 'super_admin' ? 'super-admin-csrf-token' : 'csrf-token'
+  const prefixMatches = request.cookies
+    .getAll()
+    .filter((cookie) => cookie.name === prefix || cookie.name.startsWith(`${prefix}__`))
+    .map((cookie) => cookie.value?.trim() || '')
+    .filter((value) => value.length > 0)
+
+  return Array.from(new Set([...exactCandidates, ...prefixMatches]))
+}
+
 function getRequestIp(request: NextRequest): string {
   return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     request.headers.get('x-real-ip') || 'unknown'
@@ -313,13 +332,14 @@ export async function proxy(request: NextRequest) {
 
     // CSRF check for cookie-auth mutations
     if (!authHeader && mutatingMethods.has(request.method)) {
-      const sessionCookieCandidates = getSessionCookieNameCandidates(
-        isSuperAdminApiRoute ? 'super_admin' : 'app', scopeSource
+      const csrfHeader = request.headers.get('x-csrf-token')?.trim() || ''
+      const csrfCookieValues = getMatchingCsrfCookieValues(
+        request,
+        isSuperAdminApiRoute ? 'super_admin' : 'app',
+        scopeSource
       )
-      const csrfCookie = sessionCookieCandidates
-        .map(c => request.cookies.get(c.csrfToken)?.value).find(Boolean) || null
-      const csrfHeader = request.headers.get('x-csrf-token')
-      if (!csrfCookie || !csrfHeader || csrfCookie !== csrfHeader) {
+
+      if (!csrfHeader || csrfCookieValues.length === 0 || !csrfCookieValues.includes(csrfHeader)) {
         return NextResponse.json({ error: 'Invalid CSRF token' }, { status: 403 })
       }
     }
