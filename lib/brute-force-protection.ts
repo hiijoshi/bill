@@ -2,6 +2,20 @@ import { NextRequest } from 'next/server'
 
 // Enhanced brute force protection with exponential backoff
 const failedAttempts = new Map<string, { count: number; lastAttempt: number; lockoutUntil: number }>()
+let lastCleanupAt = 0
+
+function cleanupOldAttempts(now: number) {
+  if (now - lastCleanupAt < 60 * 60 * 1000) {
+    return
+  }
+  lastCleanupAt = now
+  const cutoff = now - (24 * 60 * 60 * 1000)
+  for (const [key, entry] of failedAttempts.entries()) {
+    if (entry.lastAttempt < cutoff && entry.lockoutUntil < now) {
+      failedAttempts.delete(key)
+    }
+  }
+}
 
 function getClientIdentifier(request: NextRequest): string {
   const forwarded = request.headers.get('x-forwarded-for')
@@ -23,6 +37,7 @@ function calculateLockoutDuration(attemptCount: number): number {
 export function checkBruteForce(request: NextRequest) {
   const identifier = getClientIdentifier(request)
   const now = Date.now()
+  cleanupOldAttempts(now)
   
   let entry = failedAttempts.get(identifier)
   
@@ -57,6 +72,7 @@ export function checkBruteForce(request: NextRequest) {
 export function recordFailedAttempt(request: NextRequest) {
   const identifier = getClientIdentifier(request)
   const now = Date.now()
+  cleanupOldAttempts(now)
   
   let entry = failedAttempts.get(identifier)
   if (!entry) {
@@ -79,15 +95,3 @@ export function recordSuccessfulAttempt(request: NextRequest) {
   const identifier = getClientIdentifier(request)
   failedAttempts.delete(identifier) // Reset on successful login
 }
-
-// Cleanup old entries periodically
-setInterval(() => {
-  const now = Date.now()
-  const cutoff = now - (24 * 60 * 60 * 1000) // 24 hours
-  
-  for (const [key, entry] of failedAttempts.entries()) {
-    if (entry.lastAttempt < cutoff && entry.lockoutUntil < now) {
-      failedAttempts.delete(key)
-    }
-  }
-}, 60 * 60 * 1000) // Clean up every hour
