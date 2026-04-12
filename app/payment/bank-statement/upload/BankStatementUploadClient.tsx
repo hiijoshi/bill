@@ -77,6 +77,25 @@ function statusTone(status: string) {
   return 'border-rose-200 bg-rose-50 text-rose-700'
 }
 
+function matchesReviewTab(
+  row: NormalizedStatementTransaction & {
+    matchCandidates: Array<{
+      id: string
+      paymentId: string
+      candidateRank: number
+      totalScore: number
+      reason: string | null
+      decision: string
+    }>
+  },
+  tab: ReviewTab
+) {
+  if (tab === 'all') return true
+  if (tab === 'settled') return row.matchStatus === 'settled'
+  if (tab === 'ambiguous') return row.matchStatus === 'ambiguous'
+  return row.matchStatus !== 'settled' && row.matchStatus !== 'ambiguous'
+}
+
 export default function BankStatementUploadClient({
   initialCompanyId,
   initialWorkspace,
@@ -268,10 +287,14 @@ export default function BankStatementUploadClient({
   }
 
   const rows = useMemo(() => batchDetail?.rows || [], [batchDetail?.rows])
+  const rowSummary = useMemo(() => ({
+    settled: rows.filter((row) => row.matchStatus === 'settled').length,
+    ambiguous: rows.filter((row) => row.matchStatus === 'ambiguous').length,
+    unsettled: rows.filter((row) => row.matchStatus !== 'settled' && row.matchStatus !== 'ambiguous').length
+  }), [rows])
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
-      const matchesTab =
-        reviewTab === 'all' ? true : row.matchStatus === reviewTab
+      const matchesTab = matchesReviewTab(row, reviewTab)
       const haystack = `${row.description} ${row.referenceNumber || ''} ${row.matchReason || ''}`.toLowerCase()
       const matchesSearch = deferredSearch.trim()
         ? haystack.includes(deferredSearch.trim().toLowerCase())
@@ -457,9 +480,9 @@ export default function BankStatementUploadClient({
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
                   {[
                     { label: 'Total Rows', value: batchDetail.batch.summary.totalRows, tone: 'text-slate-950' },
-                    { label: 'Settled', value: batchDetail.batch.summary.settledRows, tone: 'text-emerald-600' },
-                    { label: 'Unsettled', value: batchDetail.batch.summary.unsettledRows, tone: 'text-rose-600' },
-                    { label: 'Ambiguous', value: batchDetail.batch.summary.ambiguousRows, tone: 'text-amber-600' },
+                    { label: 'Settled', value: rowSummary.settled, tone: 'text-emerald-600' },
+                    { label: 'Unsettled', value: rowSummary.unsettled, tone: 'text-rose-600' },
+                    { label: 'Ambiguous', value: rowSummary.ambiguous, tone: 'text-amber-600' },
                     { label: 'Warnings', value: batchDetail.batch.summary.warningCount, tone: 'text-sky-600' }
                   ].map((item) => (
                     <Card key={item.label}>
@@ -487,7 +510,13 @@ export default function BankStatementUploadClient({
                         </div>
                         {(['all', 'settled', 'unsettled', 'ambiguous'] as ReviewTab[]).map((tab) => (
                           <Button key={tab} size="sm" variant={reviewTab === tab ? 'default' : 'outline'} onClick={() => setReviewTab(tab)}>
-                            {tab}
+                            {tab === 'all'
+                              ? `all (${rows.length})`
+                              : tab === 'settled'
+                                ? `settled (${rowSummary.settled})`
+                                : tab === 'unsettled'
+                                  ? `unsettled (${rowSummary.unsettled})`
+                                  : `ambiguous (${rowSummary.ambiguous})`}
                           </Button>
                         ))}
                       </div>
@@ -510,7 +539,11 @@ export default function BankStatementUploadClient({
                         <TableBody>
                           {filteredRows.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={7} className="py-10 text-center text-slate-500">No rows match the current filters.</TableCell>
+                              <TableCell colSpan={7} className="py-10 text-center text-slate-500">
+                                {reviewTab === 'unsettled'
+                                  ? 'No unmatched extracted rows are currently in the unsettled queue.'
+                                  : 'No rows match the current filters.'}
+                              </TableCell>
                             </TableRow>
                           ) : filteredRows.map((row) => (
                             <TableRow key={row.id}>
@@ -525,7 +558,11 @@ export default function BankStatementUploadClient({
                                 <div className="space-y-1">
                                   <div className="text-sm font-medium text-slate-900">{row.matchReason || 'No match yet'}</div>
                                   <div className="text-xs text-slate-500">
-                                    {row.matchedPaymentId ? `Payment ${row.matchedPaymentId}` : `${row.matchCandidates.length} candidates`}
+                                    {row.matchedPaymentId
+                                      ? `Payment ${row.matchedPaymentId}`
+                                      : row.matchCandidates.length > 0
+                                        ? `${row.matchCandidates.length} candidates`
+                                        : 'No system match found'}
                                   </div>
                                 </div>
                               </TableCell>
@@ -548,7 +585,9 @@ export default function BankStatementUploadClient({
                     <div className="grid gap-3 xl:hidden">
                       {filteredRows.length === 0 ? (
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                          No rows match the current filters.
+                          {reviewTab === 'unsettled'
+                            ? 'No unmatched extracted rows are currently in the unsettled queue.'
+                            : 'No rows match the current filters.'}
                         </div>
                       ) : filteredRows.map((row) => (
                         <button
@@ -566,6 +605,9 @@ export default function BankStatementUploadClient({
                           </div>
                           <div className="mt-3 text-sm font-medium text-slate-900">{currency(row.amount)}</div>
                           <div className="mt-1 text-xs text-slate-500">{row.matchReason || 'No match yet'}</div>
+                          {row.matchCandidates.length === 0 && !row.matchedPaymentId ? (
+                            <div className="mt-2 text-xs font-medium text-rose-600">No system match found</div>
+                          ) : null}
                         </button>
                       ))}
                     </div>
