@@ -126,6 +126,7 @@ const AUTH_CACHE_AGE_MS = 5 * 60_000
 
 interface SidebarProps {
   companyId: string
+  companyName?: string | null
   isCollapsed?: boolean
   isMobileOpen?: boolean
   onToggleCollapse?: () => void
@@ -134,6 +135,7 @@ interface SidebarProps {
 
 export default function Sidebar({
   companyId,
+  companyName = null,
   isCollapsed = false,
   isMobileOpen = false,
   onToggleCollapse,
@@ -273,6 +275,7 @@ export default function Sidebar({
   const activeParentTitles = menuItems
     .filter((item) => item.children?.length && isParentActive(item))
     .map((item) => item.title)
+  const activeCompanyLabel = String(companyName || '').trim() || companyId || 'Not selected'
 
   return (
     <>
@@ -326,7 +329,7 @@ export default function Sidebar({
           <div className="mt-2 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-white">Active company session</div>
-              <div className="truncate text-xs text-slate-300">{companyId || 'Not selected'}</div>
+              <div className="truncate text-xs text-slate-300">{activeCompanyLabel}</div>
             </div>
             <div className="rounded-full bg-emerald-400/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-300">
               Live
