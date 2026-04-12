@@ -3,11 +3,14 @@ import { prisma } from '@/lib/prisma'
 import { logBankStatementEvent } from '../audit'
 import { BankStatementError } from '../errors'
 import { serializeBankStatementBatch } from '../serializers'
+import { resolveBankStatementActorUser } from '../security/require-bank-statement-access'
 
 export async function finalizeBankStatementBatch(input: {
   auth: RequestAuthContext
   batchId: string
 }) {
+  const actorUser = await resolveBankStatementActorUser(input.auth)
+
   const batch = await prisma.bankStatementBatch.findUnique({
     where: { id: input.batchId }
   })
@@ -68,7 +71,7 @@ export async function finalizeBankStatementBatch(input: {
             linkType: row.reviewStatus === 'manually_linked' ? 'manual' : 'auto',
             confidence: row.matchConfidence,
             reason: row.matchReason,
-            createdByUserId: input.auth.userId
+            createdByUserId: actorUser?.id || null
           }
         })
 

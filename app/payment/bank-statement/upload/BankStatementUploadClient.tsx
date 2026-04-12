@@ -154,10 +154,16 @@ export default function BankStatementUploadClient({
       return
     }
 
+    const selectedBank = workspace?.banks.find((bank) => bank.id === selectedBankId)
+    if (!selectedBank) {
+      setErrorMessage('Selected bank account is no longer available in the active company workspace. Refresh and select again.')
+      return
+    }
+
     await runStage('Creating secure batch', async () => {
       const createResponse = await apiClient.postJson<BankStatementCreateBatchResponse>('/api/bank-statements/batches', {
         companyId,
-        bankId: selectedBankId,
+        bankId: selectedBank.id,
         fileName: selectedFile.name,
         fileMimeType: selectedFile.type || 'application/octet-stream',
         fileSizeBytes: selectedFile.size
