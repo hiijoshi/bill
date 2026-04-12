@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
+import { MetricRail, ModuleChrome } from '@/components/business/module-chrome'
 import { RefreshOverlay } from '@/components/performance/refresh-overlay'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -625,58 +626,63 @@ export default function SuperAdminOverviewClient({ initialOverview, initialProfi
       <div className="space-y-6">
         {error ? <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
 
-        <Card className="border-slate-200">
-          <CardContent className="pt-6">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <Shield className="h-6 w-6 text-blue-600" />
-                <div>
-                  <h2 className="text-xl font-semibold">Connected Tenant Explorer</h2>
-                  <p className="text-sm text-slate-500">
-                    Select trader, then company, then user. Data is isolated and never mixed.
-                  </p>
-                </div>
-              </div>
-              <Button variant="outline" onClick={() => refreshAll({ mode: 'full' })} disabled={refreshing}>
-                {refreshing ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                Refresh
-              </Button>
-            </div>
-
-            <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-center">
-                <p className="text-2xl font-semibold text-indigo-600">{traderSummaryCount}</p>
-                <p className="text-xs text-slate-500">Traders</p>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-center">
-                <p className="text-2xl font-semibold text-blue-600">{companySummaryCount}</p>
-                <p className="text-xs text-slate-500">Companies (selected scope)</p>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-center">
-                <p className="text-2xl font-semibold text-emerald-600">{userSummaryCount}</p>
-                <p className="text-xs text-slate-500">Users (selected scope)</p>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-center">
-                <p className="text-2xl font-semibold text-orange-600">{writeCount}</p>
-                <p className="text-xs text-slate-500">Write Privileges (selected user)</p>
-              </div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
-              <Badge variant={selectedTrader ? 'default' : 'secondary'}>
+        <ModuleChrome
+          eyebrow="Tenant Control"
+          title="Connected tenant explorer"
+          description="Super Admin sees tenant scope as a governed graph. Selection is always trader to company to user, so permission review and lock actions stay isolated and auditable."
+          badges={
+            <>
+              <Badge variant={selectedTrader ? 'default' : 'secondary'} className="rounded-full px-3 py-1">
                 Trader: {selectedTrader?.name || 'Not selected'}
               </Badge>
-              <span className="text-slate-400">→</span>
-              <Badge variant={selectedCompany ? 'default' : 'secondary'}>
+              <Badge variant={selectedCompany ? 'default' : 'secondary'} className="rounded-full px-3 py-1">
                 Company: {selectedCompany?.name || 'Not selected'}
               </Badge>
-              <span className="text-slate-400">→</span>
-              <Badge variant={selectedUser ? 'default' : 'secondary'}>
+              <Badge variant={selectedUser ? 'default' : 'secondary'} className="rounded-full px-3 py-1">
                 User: {selectedUser?.userId || 'Not selected'}
               </Badge>
-            </div>
-          </CardContent>
-        </Card>
+            </>
+          }
+          actions={
+            <Button variant="outline" className="rounded-xl" onClick={() => refreshAll({ mode: 'full' })} disabled={refreshing}>
+              {refreshing ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              Refresh
+            </Button>
+          }
+        >
+          <div className="flex items-center gap-3 pb-5">
+            <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
+              <Shield className="h-5 w-5" />
+            </span>
+            <p className="max-w-3xl text-sm leading-6 text-slate-600">
+              Select trader, then company, then user. Data never crosses scope boundaries, and lock-state changes remain attached to the correct tenant branch.
+            </p>
+          </div>
+          <MetricRail
+            items={[
+              {
+                label: 'Traders',
+                value: String(traderSummaryCount),
+                helper: 'Top-level tenant accounts'
+              },
+              {
+                label: 'Companies',
+                value: String(companySummaryCount),
+                helper: 'Scoped to current selection'
+              },
+              {
+                label: 'Users',
+                value: String(userSummaryCount),
+                helper: 'Visible under selected company'
+              },
+              {
+                label: 'Write Access',
+                value: String(writeCount),
+                helper: `${readCount} readable modules in preview`
+              }
+            ]}
+          />
+        </ModuleChrome>
 
         <Card className="relative border-slate-200">
           <RefreshOverlay refreshing={refreshing} label="Refreshing closure queue" />

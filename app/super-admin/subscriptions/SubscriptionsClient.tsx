@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
-import { authHeadersScoped } from '@/lib/csrf'
+import { MetricRail, ModuleChrome } from '@/components/business/module-chrome'
 import type {
   SuperAdminSubscriptionPlan,
   TraderSubscriptionDetailPayload,
@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { apiClient } from '@/lib/http/api-client'
 
 type ActionFormState = {
   action:
@@ -243,6 +244,11 @@ export default function SuperAdminTraderSubscriptionsClient({
   }, [detailCache])
 
   useEffect(() => {
+    if (plans.length > 0) return
+    void loadPlans()
+  }, [loadPlans, plans.length])
+
+  useEffect(() => {
     if (!requestedTraderId) {
       if (!selectedTraderId && traders.length > 0) {
         setSelectedTraderId(traders[0].id)
@@ -342,16 +348,10 @@ export default function SuperAdminTraderSubscriptionsClient({
         replaceExisting: form.replaceExisting
       }
 
-      const response = await fetch(`/api/super-admin/trader-subscriptions/${selectedTraderId}/actions`, {
-        method: 'POST',
-        headers: authHeadersScoped('super_admin'),
-        body: JSON.stringify(payload)
-      })
-
-      const result = (await response.json().catch(() => ({}))) as { error?: string }
-      if (!response.ok) {
-        throw new Error(result.error || 'Failed to apply subscription action')
-      }
+      await apiClient.postJson<{ success?: boolean }>(
+        `/api/super-admin/trader-subscriptions/${selectedTraderId}/actions`,
+        payload
+      )
 
       setForm(createEmptyActionForm())
       await Promise.all([loadTraders(), loadDetail(selectedTraderId)])
@@ -378,6 +378,52 @@ export default function SuperAdminTraderSubscriptionsClient({
             {schemaWarning}
           </div>
         ) : null}
+
+        <ModuleChrome
+          eyebrow="Subscription Control"
+          title={stateFilter === 'closure_requested' ? 'Closure workflow and renewals' : 'Trader entitlement operations'}
+          description="This workspace centralizes trader plan assignment, lifecycle enforcement, backup readiness, and closure review without mixing tenant scopes. It is optimized for dense desktop administration while staying readable on smaller devices."
+          badges={
+            <>
+              <Badge variant="outline" className="rounded-full bg-white/80 px-3 py-1">
+                Traders: {traders.length}
+              </Badge>
+              <Badge variant="outline" className="rounded-full bg-white/80 px-3 py-1">
+                Plans: {plans.length}
+              </Badge>
+              {selectedTraderDetail?.trader?.name ? (
+                <Badge variant="secondary" className="rounded-full px-3 py-1">
+                  Focus: {selectedTraderDetail.trader.name}
+                </Badge>
+              ) : null}
+            </>
+          }
+        >
+          <MetricRail
+            items={[
+              {
+                label: 'Selected Trader',
+                value: selectedTraderDetail?.trader?.name || 'None',
+                helper: selectedTraderDetail?.currentSubscription?.planName || 'Choose a trader to manage'
+              },
+              {
+                label: 'Lifecycle',
+                value: formatLabel(selectedTraderDetail?.dataLifecycle?.state || selectedTraderDetail?.entitlement?.lifecycleState || stateFilter || 'all'),
+                helper: 'Read from current data lifecycle state'
+              },
+              {
+                label: 'Companies',
+                value: selectedTraderDetail?.trader ? `${selectedTraderDetail.trader.currentCompanies}/${selectedTraderDetail.trader.maxCompanies ?? 'U'}` : '-',
+                helper: 'Usage against tenant cap'
+              },
+              {
+                label: 'Users',
+                value: selectedTraderDetail?.trader ? `${selectedTraderDetail.trader.currentUsers}/${selectedTraderDetail.trader.maxUsers ?? 'U'}` : '-',
+                helper: schemaReady ? 'Schema ready' : 'Schema not ready'
+              }
+            ]}
+          />
+        </ModuleChrome>
 
         <Card>
           <CardHeader className="pb-3">
