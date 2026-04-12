@@ -365,6 +365,7 @@ export default function DashboardLayout({
       <Suspense fallback={<div className="w-20 border-r bg-white" />}>
         <Sidebar
           companyId={resolvedCompanyId}
+          companyName={currentCompanyName}
           isCollapsed={isSidebarCollapsed}
           isMobileOpen={isMobileSidebarOpen}
           onToggleCollapse={toggleSidebar}
