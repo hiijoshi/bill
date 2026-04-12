@@ -1,11 +1,14 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Clock3, Download, LifeBuoy, Lock, RefreshCw, ShieldCheck } from 'lucide-react'
 
+import { MetricRail, ModuleChrome } from '@/components/business/module-chrome'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { apiClient } from '@/lib/http/api-client'
 
 type SubscriptionFeature = {
   featureKey: string
@@ -133,6 +136,9 @@ interface SubscriptionOverviewProps {
   initialHistory?: HistoryPayload | null
 }
 
+const surfaceCardClass =
+  'overflow-hidden rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.16)]'
+
 export default function SubscriptionOverview({
   initialCurrent = null,
   initialHistory = null
@@ -150,21 +156,10 @@ export default function SubscriptionOverview({
     setError(null)
 
     try {
-      const [currentResponse, historyResponse] = await Promise.all([
-        fetch('/api/subscription/current', { cache: 'no-store' }),
-        fetch('/api/subscription/history', { cache: 'no-store' })
+      const [currentPayload, historyPayload] = await Promise.all([
+        apiClient.getJson<CurrentPayload>('/api/subscription/current'),
+        apiClient.getJson<HistoryPayload>('/api/subscription/history')
       ])
-
-      const currentPayload = (await currentResponse.json().catch(() => ({}))) as CurrentPayload
-      const historyPayload = (await historyResponse.json().catch(() => ({}))) as HistoryPayload
-
-      if (!currentResponse.ok) {
-        throw new Error(currentPayload?.entitlement?.message || 'Failed to load subscription summary')
-      }
-
-      if (!historyResponse.ok) {
-        throw new Error('Failed to load subscription history')
-      }
 
       setCurrent(currentPayload)
       setHistory(historyPayload)
@@ -196,17 +191,7 @@ export default function SubscriptionOverview({
       setActionError(null)
 
       try {
-        const response = await fetch('/api/subscription/actions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ action })
-        })
-        const payload = (await response.json().catch(() => ({}))) as { error?: string }
-        if (!response.ok) {
-          throw new Error(payload.error || 'Failed to submit request')
-        }
+        await apiClient.postJson<{ success?: boolean }>('/api/subscription/actions', { action })
 
         await load()
       } catch (actionLoadError) {
@@ -219,62 +204,108 @@ export default function SubscriptionOverview({
   )
 
   const latestReadyBackup = current?.dataLifecycle?.latestReadyBackup || null
+  const metricItems = [
+    {
+      label: 'Plan State',
+      value: formatLifecycleLabel(currentLifecycleState),
+      helper: current?.currentSubscription?.planName || 'No plan assigned'
+    },
+    {
+      label: 'Days Left',
+      value: String(current?.entitlement?.daysLeft ?? current?.currentSubscription?.daysLeft ?? '-'),
+      helper: formatDate(current?.currentSubscription?.endDate)
+    },
+    {
+      label: 'Companies',
+      value: `${current?.capacity?.currentCompanies ?? 0}/${current?.capacity?.maxCompanies ?? 'U'}`,
+      helper: 'Capacity in active scope'
+    },
+    {
+      label: 'Users',
+      value: `${current?.capacity?.currentUsers ?? 0}/${current?.capacity?.maxUsers ?? 'U'}`,
+      helper: current?.dataLifecycle?.readOnlyMode ? 'Workspace is in read-only mode' : 'Workspace access is active'
+    }
+  ]
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {error ? (
-        <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+        <div className="rounded-[1.25rem] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
       ) : null}
       {actionError ? (
-        <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{actionError}</div>
+        <div className="rounded-[1.25rem] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{actionError}</div>
       ) : null}
 
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold text-slate-900">Current Plan</h2>
-          <p className="text-sm text-slate-600">
-            Review trial or subscription status, expiry, included features, and payment history.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {current?.dataLifecycle?.allowBackupRequest ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void runAction('request_backup')}
-              disabled={loading || actionLoading}
-            >
-              {actionLoading ? 'Please wait...' : 'Request Backup'}
+      <ModuleChrome
+        eyebrow="Subscription"
+        title="Plan, access, and data safety"
+        description="A premium control surface for entitlement status, expiry, backup readiness, and lifecycle actions. Business users can read the important state first, then move into history and retention details."
+        badges={
+          <>
+            <Badge variant="outline" className="rounded-full bg-white/80 px-3 py-1">
+              <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
+              {current?.currentSubscription?.planName || 'No active plan'}
+            </Badge>
+            <Badge variant={getBadgeVariant(currentLifecycleState)} className="rounded-full px-3 py-1">
+              <Clock3 className="mr-1.5 h-3.5 w-3.5" />
+              {formatLifecycleLabel(currentLifecycleState)}
+            </Badge>
+            <Badge variant="outline" className="rounded-full bg-white/80 px-3 py-1">
+              <Lock className="mr-1.5 h-3.5 w-3.5" />
+              {current?.dataLifecycle?.readOnlyMode ? 'Read only' : 'Full access'}
+            </Badge>
+          </>
+        }
+        actions={
+          <>
+            {current?.dataLifecycle?.allowBackupRequest ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-xl"
+                onClick={() => void runAction('request_backup')}
+                disabled={loading || actionLoading}
+              >
+                <LifeBuoy className="mr-2 h-4 w-4" />
+                {actionLoading ? 'Please wait...' : 'Request Backup'}
+              </Button>
+            ) : null}
+            {current?.dataLifecycle?.allowClosureRequest ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-xl"
+                onClick={() => void runAction('request_closure')}
+                disabled={loading || actionLoading}
+              >
+                <Lock className="mr-2 h-4 w-4" />
+                {current?.dataLifecycle?.closureRequestedAt ? 'Update Closure' : 'Request Closure'}
+              </Button>
+            ) : null}
+            {latestReadyBackup?.id ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-xl"
+                onClick={() => window.open(`/api/subscription/backups/${latestReadyBackup.id}/download`, '_blank', 'noopener')}
+                disabled={loading}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Download Backup
+              </Button>
+            ) : null}
+            <Button variant="outline" size="sm" className="rounded-xl" onClick={() => void load()} disabled={loading || actionLoading}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
             </Button>
-          ) : null}
-          {current?.dataLifecycle?.allowClosureRequest ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void runAction('request_closure')}
-              disabled={loading || actionLoading}
-            >
-              {current?.dataLifecycle?.closureRequestedAt ? 'Update Closure Request' : 'Request Closure'}
-            </Button>
-          ) : null}
-          {latestReadyBackup?.id ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => window.open(`/api/subscription/backups/${latestReadyBackup.id}/download`, '_blank', 'noopener')}
-              disabled={loading}
-            >
-              Download Backup
-            </Button>
-          ) : null}
-          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading || actionLoading}>
-            Refresh
-          </Button>
-        </div>
-      </div>
+          </>
+        }
+      >
+        <MetricRail items={metricItems} />
+      </ModuleChrome>
 
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className={surfaceCardClass}>
+        <CardHeader className="border-b border-slate-100 pb-4">
           <CardTitle className="flex flex-wrap items-center justify-between gap-3">
             <span>{current?.currentSubscription?.planName || 'Subscription Not Assigned'}</span>
             <Badge variant={getBadgeVariant(currentLifecycleState)}>
@@ -329,8 +360,8 @@ export default function SubscriptionOverview({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className={surfaceCardClass}>
+        <CardHeader className="border-b border-slate-100 pb-4">
           <CardTitle>Access and Backup</CardTitle>
         </CardHeader>
         <CardContent>
@@ -369,8 +400,8 @@ export default function SubscriptionOverview({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className={surfaceCardClass}>
+        <CardHeader className="border-b border-slate-100 pb-4">
           <CardTitle>Included Features</CardTitle>
         </CardHeader>
         <CardContent>
@@ -407,8 +438,8 @@ export default function SubscriptionOverview({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className={surfaceCardClass}>
+        <CardHeader className="border-b border-slate-100 pb-4">
           <CardTitle>Backup History</CardTitle>
         </CardHeader>
         <CardContent>
@@ -459,8 +490,8 @@ export default function SubscriptionOverview({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className={surfaceCardClass}>
+        <CardHeader className="border-b border-slate-100 pb-4">
           <CardTitle>Subscription History</CardTitle>
         </CardHeader>
         <CardContent>
@@ -499,8 +530,8 @@ export default function SubscriptionOverview({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className={surfaceCardClass}>
+        <CardHeader className="border-b border-slate-100 pb-4">
           <CardTitle>Payment History</CardTitle>
         </CardHeader>
         <CardContent>

@@ -6,6 +6,20 @@ import { SessionProvider } from "@/components/SessionProvider";
 import { useEffect, useState } from "react";
 import { isAbortError } from "@/lib/http";
 import { getSessionCookieNameCandidates } from "@/lib/session-cookies";
+import { IBM_Plex_Mono, Manrope } from "next/font/google";
+
+const appSans = Manrope({
+  subsets: ["latin"],
+  variable: "--font-app-sans",
+  display: "swap",
+})
+
+const appMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-app-mono",
+  display: "swap",
+})
 
 function NetworkStatusBanner() {
   const [isOnline, setIsOnline] = useState(true)
@@ -124,8 +138,8 @@ export default function RootLayout({
         urlString === '/api/super-admin/auth' ||
         urlString === `${window.location.origin}/api/super-admin/auth`
       const isBankStatementImportApi =
-        urlString === '/api/payments/bank-statement/import' ||
-        urlString === `${window.location.origin}/api/payments/bank-statement/import`
+        urlString.startsWith('/api/bank-statements/') ||
+        urlString.startsWith(`${window.location.origin}/api/bank-statements/`)
       const isSubscriptionManagementApi =
         urlString.startsWith('/api/super-admin/trader-subscriptions') ||
         urlString.startsWith(`${window.location.origin}/api/super-admin/trader-subscriptions`) ||
@@ -313,7 +327,7 @@ export default function RootLayout({
 
   return (
     <html lang="en">
-      <body className="motion-minimal-app antialiased">
+      <body className={`${appSans.variable} ${appMono.variable} motion-minimal-app app-chrome antialiased`}>
         <NetworkStatusBanner />
         <SessionProvider>
           <ErrorBoundary>

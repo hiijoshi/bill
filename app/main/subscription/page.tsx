@@ -27,7 +27,7 @@ export default async function MainSubscriptionPage() {
       companyId={shellBootstrap?.activeCompanyId || ''}
       initialData={shellBootstrap?.layoutData || null}
     >
-      <div className="p-6 md:p-8">
+      <div className="min-h-full bg-[#f5f5f7] p-6 md:p-8">
         <div className="mx-auto max-w-7xl">
           <SubscriptionOverview
             initialCurrent={overview.current}

@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation'
 
 import BankStatementUploadClient from '@/app/payment/bank-statement/upload/BankStatementUploadClient'
-import { loadBankStatementWorkspace } from '@/lib/server-bank-statement-workspace'
+import { loadBankStatementWorkspace } from '@/lib/bank-statements/queries/load-workspace'
 import { loadServerAppShellBootstrap } from '@/lib/server-app-shell'
 
 type PageProps = {
