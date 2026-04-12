@@ -2,6 +2,7 @@ import type { RequestAuthContext } from '@/lib/api-security'
 import { prisma } from '@/lib/prisma'
 import { logBankStatementEvent } from '../audit'
 import { BankStatementError } from '../errors'
+import { resolveBankStatementActorUser } from '../security/require-bank-statement-access'
 
 export async function reviewBankStatementRow(input: {
   auth: RequestAuthContext
@@ -12,6 +13,8 @@ export async function reviewBankStatementRow(input: {
     | { action: 'ignore' }
     | { action: 'accept_match' }
 }) {
+  const actorUser = await resolveBankStatementActorUser(input.auth)
+
   const row = await prisma.bankStatementRow.findUnique({
     where: { id: input.rowId },
     include: {
@@ -61,7 +64,7 @@ export async function reviewBankStatementRow(input: {
         matchConfidence: 100,
         matchReason: 'Manually linked by reviewer.',
         reviewStatus: 'manually_linked',
-        reviewedByUserId: input.auth.userId,
+        reviewedByUserId: actorUser?.id || null,
         reviewedAt: new Date()
       }
     })
@@ -93,7 +96,7 @@ export async function reviewBankStatementRow(input: {
       where: { id: row.id },
       data: {
         reviewStatus: 'accepted',
-        reviewedByUserId: input.auth.userId,
+        reviewedByUserId: actorUser?.id || null,
         reviewedAt: new Date()
       }
     })
@@ -118,7 +121,7 @@ export async function reviewBankStatementRow(input: {
         matchStatus: 'ignored',
         reviewStatus: 'ignored',
         matchedPaymentId: null,
-        reviewedByUserId: input.auth.userId,
+        reviewedByUserId: actorUser?.id || null,
         reviewedAt: new Date(),
         ignoredAt: new Date(),
         matchReason: 'Ignored during reconciliation review.'
@@ -145,7 +148,7 @@ export async function reviewBankStatementRow(input: {
       matchedPaymentId: null,
       matchConfidence: null,
       reviewStatus: 'rejected',
-      reviewedByUserId: input.auth.userId,
+      reviewedByUserId: actorUser?.id || null,
       reviewedAt: new Date(),
       matchReason: 'Marked unsettled during review.'
     }

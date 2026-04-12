@@ -140,6 +140,9 @@
   body {
     @apply bg-background text-foreground;
     min-height: 100dvh;
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
     background-image:
       radial-gradient(circle at top left, rgba(112, 157, 255, 0.16), transparent 26%),
       radial-gradient(circle at top right, rgba(37, 211, 185, 0.12), transparent 24%),
@@ -150,6 +153,7 @@
 
 .app-chrome {
   position: relative;
+  min-height: 100dvh;
 }
 
 .app-chrome::before {
@@ -218,6 +222,14 @@
   45% {
     transform: translate(var(--loader-x), var(--loader-y)) translate(-50%, -50%) scale(1);
     opacity: 0.96;
+  }
+}
+
+@media (display-mode: standalone) {
+  html,
+  body {
+    overscroll-behavior-y: contain;
+    background-attachment: fixed;
   }
 }
 

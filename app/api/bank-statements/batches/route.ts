@@ -16,6 +16,25 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => null)
     const parsed = createBankStatementBatchSchema.safeParse(body)
 
+    console.info('[bank-statements] POST /api/bank-statements/batches', {
+      body:
+        body && typeof body === 'object'
+          ? {
+              companyId: typeof (body as Record<string, unknown>).companyId === 'string'
+                ? (body as Record<string, unknown>).companyId
+                : null,
+              bankId: typeof (body as Record<string, unknown>).bankId === 'string'
+                ? (body as Record<string, unknown>).bankId
+                : null,
+              fileName: typeof (body as Record<string, unknown>).fileName === 'string'
+                ? (body as Record<string, unknown>).fileName
+                : null
+            }
+          : null,
+      authUserId: authResult.auth.userId,
+      authUserDbId: authResult.auth.userDbId
+    })
+
     if (!parsed.success) {
       return NextResponse.json(
         {
