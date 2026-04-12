@@ -1,0 +1,58 @@
+import type {
+  BankStatementBatchListItem,
+  BankStatementWorkspacePayload
+} from './types'
+
+export type BankStatementApiErrorCode =
+  | 'AUTH_REQUIRED'
+  | 'FORBIDDEN'
+  | 'COMPANY_SCOPE_DENIED'
+  | 'BANK_SCOPE_DENIED'
+  | 'BATCH_NOT_FOUND'
+  | 'ROW_NOT_FOUND'
+  | 'CSRF_INVALID'
+  | 'VALIDATION_FAILED'
+  | 'FILE_INVALID'
+  | 'FILE_TOO_LARGE'
+  | 'UNSUPPORTED_FILE_TYPE'
+  | 'UPLOAD_FAILED'
+  | 'INTERNAL_ERROR'
+
+export type BankStatementApiErrorResponse = {
+  ok: false
+  error: {
+    code: BankStatementApiErrorCode
+    message: string
+    retryable?: boolean
+    details?: Record<string, unknown>
+  }
+}
+
+export type BankStatementCreateBatchRequest = {
+  companyId: string
+  bankId: string
+  fileName: string
+  fileMimeType: string
+  fileSizeBytes: number
+}
+
+export type BankStatementCreateBatchResponse = {
+  ok: true
+  data: {
+    batch: BankStatementBatchListItem
+  }
+}
+
+export type BankStatementWorkspaceResponse = {
+  ok: true
+  data: BankStatementWorkspacePayload
+}
+
+export type CsrfBootstrapResponse = {
+  ok: true
+  data: {
+    csrfToken: string
+    namespace: 'app' | 'super_admin'
+    refreshedAt: string
+  }
+}

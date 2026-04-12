@@ -1,10 +1,11 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { BarChart3, FileClock, Package, Receipt, ShoppingCart } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
+import { MetricRail, ModuleChrome } from '@/components/business/module-chrome'
 import OperationsReportWorkspace from '@/components/reports/OperationsReportWorkspace'
 import ReportDashboard from '@/components/reports/ReportDashboard'
 import StockReportDashboard from '@/components/reports/StockReportDashboard'
@@ -66,12 +67,7 @@ export default function ReportsMainClient({
   initialOperationsReportSeed = null
 }: ReportsMainClientProps) {
   const router = useRouter()
-  const [companyId, setCompanyId] = useState(initialCompanyId)
-
-  useEffect(() => {
-    if (!initialCompanyId) return
-    setCompanyId(initialCompanyId)
-  }, [initialCompanyId])
+  const companyId = initialCompanyId
 
   useEffect(() => {
     const onCompanyChanged = (event: Event) => {
@@ -111,6 +107,11 @@ export default function ReportsMainClient({
   }
 
   const reportTypeLabel = useMemo(() => initialReportType, [initialReportType])
+  const reportTypeTitle = reportTypeLabel === 'main'
+    ? 'Unified Reports'
+    : reportTypeLabel === 'operations'
+      ? 'Operational Ledgers'
+      : `${reportTypeLabel.charAt(0).toUpperCase()}${reportTypeLabel.slice(1)} Reports`
 
   return (
     <DashboardLayout companyId={companyId} lockViewport initialData={initialLayoutData}>
@@ -122,45 +123,81 @@ export default function ReportsMainClient({
             </div>
           ) : null}
 
-          <section className="overflow-hidden rounded-[2rem] border border-black/5 bg-[#fbfaf8] shadow-[0_24px_60px_-40px_rgba(15,23,42,0.16)]">
-            <div className="px-4 py-4 md:px-6">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-500">Reports</p>
-                  <h1 className="mt-1 text-xl font-semibold tracking-tight text-slate-950 md:text-2xl">Switch report</h1>
-                </div>
-
-                <div className="flex overflow-x-auto pb-1">
-                  <div className="flex min-w-max gap-2">
-                    {[
-                      { key: 'main', label: 'Dashboard', icon: BarChart3 },
-                      { key: 'purchase', label: 'Purchase', icon: ShoppingCart },
-                      { key: 'sales', label: 'Sales', icon: Receipt },
-                      { key: 'stock', label: 'Stock', icon: Package },
-                      { key: 'operations', label: 'Operations', icon: FileClock }
-                    ].map((item) => {
-                      const active = reportTypeLabel === item.key
-                      return (
-                        <button
-                          key={item.key}
-                          type="button"
-                          onClick={() => openReport(item.key as ReportType)}
-                          className={`inline-flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-sm font-medium transition-colors ${
-                            active
-                              ? 'border-slate-900 bg-slate-900 text-white'
-                              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                          }`}
-                        >
-                          <item.icon className="h-4 w-4" />
-                          <span>{item.label}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
+          <ModuleChrome
+            eyebrow="Reports Workspace"
+            title={reportTypeTitle}
+            description="Business reports are grouped by workflow, not by technical endpoints. Desktop users get fast switching and dense data review, while smaller screens stay readable with the same scoped filters and export behavior."
+            badges={
+              <>
+                <span className="inline-flex rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-semibold text-slate-600">
+                  Scope: {companyId ? 'Single company' : 'Assigned companies'}
+                </span>
+                <span className="inline-flex rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-semibold text-slate-600">
+                  View: {reportTypeTitle}
+                </span>
+                {initialReportType === 'operations' ? (
+                  <span className="inline-flex rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-semibold text-slate-600">
+                    Ledger focus: {initialOperationsView.replace(/-/g, ' ')}
+                  </span>
+                ) : null}
+              </>
+            }
+            actions={
+              <div className="flex overflow-x-auto pb-1">
+                <div className="flex min-w-max gap-2">
+                  {[
+                    { key: 'main', label: 'Dashboard', icon: BarChart3 },
+                    { key: 'purchase', label: 'Purchase', icon: ShoppingCart },
+                    { key: 'sales', label: 'Sales', icon: Receipt },
+                    { key: 'stock', label: 'Stock', icon: Package },
+                    { key: 'operations', label: 'Operations', icon: FileClock }
+                  ].map((item) => {
+                    const active = reportTypeLabel === item.key
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => openReport(item.key as ReportType)}
+                        className={`inline-flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-sm font-medium transition-colors ${
+                          active
+                            ? 'border-slate-900 bg-slate-900 text-white'
+                            : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.label}</span>
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
-            </div>
-          </section>
+            }
+          >
+            <MetricRail
+              items={[
+                {
+                  label: 'Companies',
+                  value: String(companyOptions.length || (companyId ? 1 : 0)),
+                  helper: companyId ? 'Scoped to selected company' : 'Available in assigned scope'
+                },
+                {
+                  label: 'Module',
+                  value: initialReportType === 'main' ? 'Summary' : initialReportType,
+                  helper: initialReportType === 'operations' ? 'Ledger and daily views' : 'Reporting workspace'
+                },
+                {
+                  label: 'Operations View',
+                  value: initialReportType === 'operations' ? initialOperationsView : 'N/A',
+                  helper: 'Only active for operations reports'
+                },
+                {
+                  label: 'Layout',
+                  value: companyId ? 'Focused' : 'Portfolio',
+                  helper: 'Desktop dense, mobile simplified'
+                }
+              ]}
+            />
+          </ModuleChrome>
 
           {initialReportType === 'stock' ? (
             <StockReportDashboard

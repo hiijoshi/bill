@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import dynamic from 'next/dynamic'
+import { MetricRail, ModuleChrome } from '@/components/business/module-chrome'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -281,7 +281,7 @@ export default function SalesEntryPage() {
   const [advanceError, setAdvanceError] = useState('')
   useEffect(() => {
     setInvoiceDate(getDefaultTransactionDateInput(financialYear))
-  }, [financialYear?.id])
+  }, [financialYear, financialYear?.id])
 
   // Invoice Tab 3 - Items
   const [currentItem, setCurrentItem] = useState(createEmptyCurrentItem)
@@ -1273,9 +1273,61 @@ export default function SalesEntryPage() {
 
   return (
     <DashboardLayout companyId={companyId}>
-      <div className="p-6">
-        <div className="max-w-6xl mx-auto">
-          <Card>
+      <div className="min-h-full bg-[#f5f5f7] p-6 md:p-8">
+        <div className="mx-auto max-w-6xl space-y-6">
+          <ModuleChrome
+            eyebrow="Sales Entry"
+            title={isEditMode ? 'Update invoice with confidence' : 'Fast invoice creation workspace'}
+            description="This transaction flow is tuned for daily billing work: quick party selection, transport capture, live mandi charge preview, and risk-aware submission without slowing down keyboard-heavy desktop use."
+            badges={
+              <>
+                <span className="inline-flex rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-semibold text-slate-600">
+                  Items: {currentFormItems.length}
+                </span>
+                <span className="inline-flex rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-semibold text-slate-600">
+                  Date: {invoiceDate || 'Not selected'}
+                </span>
+                <span className="inline-flex rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-semibold text-slate-600">
+                  Risk: {hasRisk ? 'Review required' : 'Within limits'}
+                </span>
+              </>
+            }
+            actions={
+              isEditMode ? (
+                <Button type="button" variant="outline" className="rounded-xl" onClick={() => setSplitDialogOpen(true)}>
+                  <SplitSquareVertical className="mr-2 h-4 w-4" />
+                  Split Invoice
+                </Button>
+              ) : undefined
+            }
+          >
+            <MetricRail
+              items={[
+                {
+                  label: 'Invoice',
+                  value: invoiceNo || 'Draft',
+                  helper: isEditMode ? 'Editing existing bill' : 'New sales invoice'
+                },
+                {
+                  label: 'Subtotal',
+                  value: `₹${totalAmount.toFixed(2)}`,
+                  helper: `${currentFormItems.length} line item${currentFormItems.length === 1 ? '' : 's'}`
+                },
+                {
+                  label: 'Grand Total',
+                  value: `₹${grandTotal.toFixed(2)}`,
+                  helper: `Mandi charges ₹${mandiChargePreview.totalChargeAmount.toFixed(2)}`
+                },
+                {
+                  label: 'Outstanding',
+                  value: `₹${outstandingAmount.toFixed(2)}`,
+                  helper: hasRisk ? `Remaining ${formatRemainingLimitText(remainingLimit)}` : 'Buyer looks within limit'
+                }
+              ]}
+            />
+          </ModuleChrome>
+
+          <Card className="overflow-hidden rounded-[1.85rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
             <CardHeader>
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <CardTitle className="text-2xl font-bold">{isEditMode ? 'Edit Sales Bill' : 'Sales Entry'}</CardTitle>

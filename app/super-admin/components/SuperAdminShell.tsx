@@ -133,17 +133,17 @@ export default function SuperAdminShell({ title, subtitle, children, initialProf
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="mx-auto flex max-w-[1500px]">
+    <div className="min-h-screen bg-transparent">
+      <div className="mx-auto flex max-w-[1550px] gap-4 p-4 xl:p-5">
         <aside
           className={cn(
-            'sticky top-0 h-screen border-r border-slate-200 bg-white px-3 py-4 transition-all',
+            'premium-panel sticky top-0 h-[calc(100dvh-2rem)] rounded-[2rem] px-3 py-4 transition-all',
             isSidebarCollapsed ? 'w-[84px]' : 'w-[220px]'
           )}
         >
           <div
             className={cn(
-              'mb-4 flex items-center rounded-xl bg-slate-900 px-3 py-3 text-white',
+              'mb-4 flex items-center rounded-[1.35rem] bg-slate-950 px-3 py-3 text-white',
               isSidebarCollapsed ? 'justify-center' : 'justify-between'
             )}
           >
@@ -173,7 +173,7 @@ export default function SuperAdminShell({ title, subtitle, children, initialProf
               type="button"
               size="icon"
               variant="outline"
-              className="mb-4 w-full"
+              className="mb-4 w-full rounded-xl"
               onClick={() => setIsSidebarCollapsed(false)}
             >
               <PanelLeftOpen className="h-4 w-4" />
@@ -190,11 +190,11 @@ export default function SuperAdminShell({ title, subtitle, children, initialProf
                   key={item.href}
                   href={item.href}
                   className={cn(
-                    'flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors',
+                    'flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm transition-colors',
                     isSidebarCollapsed && 'justify-center px-2',
                     active
-                      ? 'bg-slate-900 text-white'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      ? 'bg-slate-950 text-white shadow-[0_12px_26px_rgba(15,23,42,0.16)]'
+                      : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
                   )}
                   title={item.label}
                 >
@@ -206,13 +206,21 @@ export default function SuperAdminShell({ title, subtitle, children, initialProf
           </nav>
         </aside>
 
-        <main className="flex-1 p-6">
-          <header className="mb-5 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3">
-            <div>
-              <h1 className="text-xl font-semibold text-slate-900">{title}</h1>
-              {subtitle ? <p className="text-xs text-slate-500">{subtitle}</p> : null}
-            </div>
-            <div className="flex items-center gap-2">
+        <main className="min-w-0 flex-1">
+          <header className="premium-panel mb-5 rounded-[2rem] px-5 py-5 md:px-6">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div className="max-w-3xl">
+                <div className="inline-flex rounded-full border border-slate-200 bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  Super Admin Control Plane
+                </div>
+                <h1 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-slate-950 md:text-3xl">{title}</h1>
+                {subtitle ? <p className="mt-2 text-sm leading-6 text-slate-600">{subtitle}</p> : null}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  Privileged session
+                </div>
               {currentUserId ? (
                 <HeaderAccountPanel
                   name={currentUserName}
@@ -228,10 +236,11 @@ export default function SuperAdminShell({ title, subtitle, children, initialProf
                   ]}
                 />
               ) : null}
-              <Button variant="outline" size="sm" onClick={handleBack} className="gap-2">
+              <Button variant="outline" size="sm" onClick={handleBack} className="gap-2 rounded-xl">
                 <ArrowLeft className="h-4 w-4" />
                 Back
               </Button>
+              </div>
             </div>
           </header>
 

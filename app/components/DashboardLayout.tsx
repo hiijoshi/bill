@@ -1,8 +1,8 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { LogOut, Menu, User } from 'lucide-react'
+import { Building2, CalendarRange, Layers3, LogOut, Menu, ShieldCheck, User } from 'lucide-react'
 import Sidebar from './Sidebar'
 import HeaderAccountPanel from '@/components/account/HeaderAccountPanel'
 import { Button } from '@/components/ui/button'
@@ -18,6 +18,7 @@ import {
 import { switchClientFinancialYear } from '@/lib/client-financial-years'
 import { useClientFinancialYear } from '@/lib/use-client-financial-year'
 import type { DashboardLayoutInitialData, SubscriptionBannerPayload } from '@/lib/app-shell-types'
+import { usePlatformClasses } from '@/lib/platform'
 
 interface DashboardLayoutProps {
   children: React.ReactNode
@@ -88,6 +89,7 @@ export default function DashboardLayout({
   } = useClientFinancialYear({
     initialPayload: initialData?.financialYearPayload || undefined
   })
+  const { profile, container, shellPadding, topBarHeight } = usePlatformClasses()
   const router = useRouter()
 
   const loadShellContext = useCallback(async (force = false) => {
@@ -309,6 +311,12 @@ export default function DashboardLayout({
     (bannerState !== 'active' && bannerState !== 'trial'
       ? true
       : Number(subscriptionBanner?.entitlement?.daysLeft || 0) <= 7)
+  const platformLabel = useMemo(() => {
+    if (profile.runtimePlatform === 'ios') return 'iOS workspace'
+    if (profile.runtimePlatform === 'android') return 'Android workspace'
+    return profile.isDesktop ? 'Web command center' : 'Web workspace'
+  }, [profile])
+  const densityLabel = profile.density === 'compact' ? 'Dense layout' : 'Comfort layout'
 
   const handleFinancialYearSwitch = async (nextFinancialYearId: string | null) => {
     const normalizedId = String(nextFinancialYearId || '').trim() || null
@@ -349,7 +357,11 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className={lockViewport ? 'flex h-dvh overflow-hidden bg-gray-50' : 'flex h-dvh overflow-hidden bg-gray-50'}>
+    <div
+      className={lockViewport ? 'grid-pattern flex h-dvh overflow-hidden bg-transparent' : 'grid-pattern flex h-dvh overflow-hidden bg-transparent'}
+      data-platform={profile.runtimePlatform}
+      data-viewport={profile.viewport}
+    >
       <Suspense fallback={<div className="w-20 border-r bg-white" />}>
         <Sidebar
           companyId={resolvedCompanyId}
@@ -359,127 +371,169 @@ export default function DashboardLayout({
           onCloseMobile={closeMobileSidebar}
         />
       </Suspense>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {/* Top Navigation Bar */}
-        <div className="shrink-0 border-b bg-white px-4 py-3 shadow-sm md:px-6">
-          <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 md:gap-4">
-            <div className="flex min-w-0 flex-wrap items-center gap-3">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsMobileSidebarOpen(true)}
-                className="inline-flex h-9 w-9 rounded-lg border border-slate-200 p-0 text-slate-600 md:hidden"
-                aria-label="Open navigation"
-              >
-                <Menu className="h-4 w-4" />
-              </Button>
-              <h1 className="text-xl font-semibold text-gray-900">Dashboard</h1>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-2 self-start md:self-auto">
-              {showFinancialYearSwitcher ? (
-                <div className="flex min-w-[220px] max-w-[320px] items-center gap-2">
-                  <Select
-                    value={financialYear?.id || undefined}
-                    onValueChange={(value) => {
-                      void handleFinancialYearSwitch(value)
-                    }}
-                    disabled={isSwitchingFinancialYear}
-                  >
-                    <SelectTrigger
-                      className="h-10 w-full rounded-2xl border-slate-200 bg-white text-sm text-slate-700"
-                      aria-label="Change financial year"
-                    >
-                      <SelectValue placeholder="Financial Year" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {financialYearPayload.financialYears.map((row) => (
-                        <SelectItem key={row.id} value={row.id}>
-                          {row.label}{row.status !== 'open' ? ` (${row.status})` : row.isActive ? ' (Active)' : ''}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {isUsingExplicitFinancialYear ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="rounded-2xl"
-                      onClick={() => {
-                        void handleFinancialYearSwitch(null)
-                      }}
-                      disabled={isSwitchingFinancialYear}
-                    >
-                      Active FY
-                    </Button>
+      <div className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${shellPadding}`}>
+        <div className="premium-panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-[2rem]">
+          <div className={`shrink-0 border-b border-white/55 bg-white/55 px-4 py-3 shadow-sm md:px-6 ${topBarHeight}`}>
+            <div className={`${container} flex flex-wrap items-start justify-between gap-4`}>
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsMobileSidebarOpen(true)}
+                  className="inline-flex h-10 w-10 rounded-2xl border-white/60 bg-white/70 p-0 text-slate-700 md:hidden"
+                  aria-label="Open navigation"
+                >
+                  <Menu className="h-4 w-4" />
+                </Button>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-white/65 bg-slate-950 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-white">
+                      {platformLabel}
+                    </span>
+                    <span className="rounded-full border border-slate-200 bg-white/75 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                      {densityLabel}
+                    </span>
+                  </div>
+                  <h1 className="mt-2 text-[1.45rem] font-semibold tracking-[-0.03em] text-slate-950 md:text-[1.75rem]">
+                    Business Operations Hub
+                  </h1>
+                  <p className="mt-1 max-w-2xl text-sm text-slate-600">
+                    Run purchases, payments, ledgers, stock, and reporting from one structured workspace built for long-form business operations.
+                  </p>
+                </div>
+              </div>
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[320px] sm:items-end">
+                <div className="flex w-full flex-wrap items-center justify-end gap-2">
+                  {showFinancialYearSwitcher ? (
+                    <div className="flex min-w-[220px] flex-1 items-center gap-2 sm:max-w-[320px] sm:flex-none">
+                      <div className="hidden h-10 w-10 items-center justify-center rounded-2xl border border-white/65 bg-white/75 text-slate-500 sm:flex">
+                        <CalendarRange className="h-4 w-4" />
+                      </div>
+                      <Select
+                        value={financialYear?.id || undefined}
+                        onValueChange={(value) => {
+                          void handleFinancialYearSwitch(value)
+                        }}
+                        disabled={isSwitchingFinancialYear}
+                      >
+                        <SelectTrigger
+                          className="h-11 w-full rounded-2xl border-white/70 bg-white/80 text-sm text-slate-700"
+                          aria-label="Change financial year"
+                        >
+                          <SelectValue placeholder="Financial Year" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {financialYearPayload.financialYears.map((row) => (
+                            <SelectItem key={row.id} value={row.id}>
+                              {row.label}{row.status !== 'open' ? ` (${row.status})` : row.isActive ? ' (Active)' : ''}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {isUsingExplicitFinancialYear ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="rounded-2xl"
+                          onClick={() => {
+                            void handleFinancialYearSwitch(null)
+                          }}
+                          disabled={isSwitchingFinancialYear}
+                        >
+                          Active FY
+                        </Button>
+                      ) : null}
+                    </div>
                   ) : null}
+                  {showCompanySwitcher ? (
+                    <div className="flex min-w-[220px] flex-1 items-center gap-2 sm:max-w-[280px] sm:flex-none">
+                      <div className="hidden h-10 w-10 items-center justify-center rounded-2xl border border-white/65 bg-white/75 text-slate-500 sm:flex">
+                        <Building2 className="h-4 w-4" />
+                      </div>
+                      <Select
+                        value={resolvedCompanyId || undefined}
+                        onValueChange={(value) => {
+                          void handleCompanySwitch(value)
+                        }}
+                        disabled={isSwitchingCompany}
+                      >
+                        <SelectTrigger
+                          className="h-11 w-full rounded-2xl border-white/70 bg-white/80 text-sm text-slate-700"
+                          aria-label="Change active company"
+                        >
+                          <SelectValue placeholder="Change company" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {availableCompanies.map((company) => (
+                            <SelectItem key={company.id} value={company.id} disabled={company.locked}>
+                              {company.name}{company.locked ? ' (Locked)' : ''}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
+                  {headerActions}
+                  {currentUser && (
+                    <HeaderAccountPanel
+                      name={currentUserName}
+                      userId={currentUser}
+                      role={currentUserRole}
+                      contextLabel={currentCompanyName || 'Workspace not selected'}
+                      menuItems={[
+                        { label: 'Profile', icon: User, onClick: () => router.push('/main/profile') },
+                        { label: 'Logout', icon: LogOut, onClick: handleLogout, tone: 'danger', separatorBefore: true }
+                      ]}
+                    />
+                  )}
                 </div>
-              ) : null}
-              {showCompanySwitcher ? (
-                <div className="min-w-[180px] max-w-[240px]">
-                  <Select
-                    value={resolvedCompanyId || undefined}
-                    onValueChange={(value) => {
-                      void handleCompanySwitch(value)
-                    }}
-                    disabled={isSwitchingCompany}
-                  >
-                    <SelectTrigger
-                      className="h-10 w-full rounded-2xl border-slate-200 bg-white text-sm text-slate-700"
-                      aria-label="Change active company"
-                    >
-                      <SelectValue placeholder="Change company" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableCompanies.map((company) => (
-                        <SelectItem key={company.id} value={company.id} disabled={company.locked}>
-                          {company.name}{company.locked ? ' (Locked)' : ''}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <div className="flex flex-wrap items-center justify-end gap-2 text-xs font-medium text-slate-600">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700">
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    Secure session
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/80 px-3 py-1">
+                    <Layers3 className="h-3.5 w-3.5" />
+                    {currentCompanyName || 'No company selected'}
+                  </span>
                 </div>
-              ) : null}
-              {headerActions}
-              {currentUser && (
-                <HeaderAccountPanel
-                  name={currentUserName}
-                  userId={currentUser}
-                  role={currentUserRole}
-                  contextLabel={currentCompanyName || 'Workspace not selected'}
-                  menuItems={[
-                    { label: 'Profile', icon: User, onClick: () => router.push('/main/profile') },
-                    { label: 'Logout', icon: LogOut, onClick: handleLogout, tone: 'danger', separatorBefore: true }
-                  ]}
-                />
-              )}
+              </div>
             </div>
+            {companySwitchError ? (
+              <div className={`${container} mt-3`}>
+                <div className="rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {companySwitchError}
+                </div>
+              </div>
+            ) : null}
+            {financialYearSwitchError ? (
+              <div className={`${container} mt-3`}>
+                <div className="rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {financialYearSwitchError}
+                </div>
+              </div>
+            ) : null}
+            {shouldShowSubscriptionBanner ? (
+              <div className={`${container} mt-3`}>
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  <span className="font-semibold">
+                    {subscriptionBanner?.currentSubscription?.planName || 'Subscription'}
+                  </span>
+                  {' '}
+                  {subscriptionBanner?.dataLifecycle?.message ||
+                    subscriptionBanner?.entitlement?.message ||
+                    'Please contact admin for renewal or upgrade.'}
+                </div>
+              </div>
+            ) : null}
           </div>
-          {companySwitchError ? (
-            <div className="mx-auto mt-3 max-w-7xl rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {companySwitchError}
+          <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+            <div className={`${container} py-4 md:py-5`}>
+              {children}
             </div>
-          ) : null}
-          {financialYearSwitchError ? (
-            <div className="mx-auto mt-3 max-w-7xl rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {financialYearSwitchError}
-            </div>
-          ) : null}
-          {shouldShowSubscriptionBanner ? (
-            <div className="mx-auto mt-3 max-w-7xl rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              <span className="font-semibold">
-                {subscriptionBanner?.currentSubscription?.planName || 'Subscription'}
-              </span>
-              {' '}
-              {subscriptionBanner?.dataLifecycle?.message ||
-                subscriptionBanner?.entitlement?.message ||
-                'Please contact admin for renewal or upgrade.'}
-            </div>
-          ) : null}
+          </main>
         </div>
-        <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-          {children}
-        </main>
       </div>
     </div>
   )

@@ -270,12 +270,15 @@ export default function Sidebar({
     if (item.href && isActive(item.href)) return true
     return item.children?.some((child) => isActive(child.href))
   }
+  const activeParentTitles = menuItems
+    .filter((item) => item.children?.length && isParentActive(item))
+    .map((item) => item.title)
 
   return (
     <>
       <div
         className={cn(
-          'fixed inset-0 z-40 bg-slate-950/40 transition-opacity duration-200 md:hidden',
+          'fixed inset-0 z-40 bg-slate-950/55 backdrop-blur-sm transition-opacity duration-200 md:hidden',
           isMobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0'
         )}
         aria-hidden={!isMobileOpen}
@@ -283,39 +286,57 @@ export default function Sidebar({
       />
       <aside
         className={cn(
-          'z-50 flex h-dvh flex-col border-r border-slate-200 bg-white transition-all duration-300 ease-in-out md:relative md:z-auto md:h-auto',
-          isCollapsed ? 'md:w-16' : 'md:w-64',
-          'fixed inset-y-0 left-0 w-[18rem] max-w-[85vw] shadow-xl md:translate-x-0 md:shadow-none',
+          'z-50 flex h-dvh flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-all duration-300 ease-in-out md:relative md:z-auto md:h-auto',
+          isCollapsed ? 'md:w-20' : 'md:w-[18.5rem]',
+          'fixed inset-y-0 left-0 w-[18.5rem] max-w-[88vw] shadow-2xl md:translate-x-0 md:shadow-none',
           isMobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         )}
       >
-        <div className="flex flex-shrink-0 items-center justify-between p-4">
-          <h2 className={cn('text-lg font-semibold text-slate-900', isCollapsed && 'md:hidden')}>Navigation</h2>
+        <div className="flex flex-shrink-0 items-start justify-between border-b border-white/10 p-4">
+          <div className={cn('min-w-0', isCollapsed && 'md:hidden')}>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-200/80">Mbill OS</div>
+            <h2 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-white">Operations</h2>
+            <p className="mt-1 text-xs text-slate-300">
+              Purchases, ledgers, stock, and business controls in one workspace.
+            </p>
+          </div>
           <div className="flex items-center gap-2">
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               onClick={onCloseMobile}
-              className="h-8 w-8 rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-slate-50 hover:text-slate-900 md:hidden"
+              className="h-9 w-9 rounded-xl border-white/15 bg-white/5 p-1 text-slate-300 hover:bg-white/10 hover:text-white md:hidden"
               aria-label="Close navigation"
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               onClick={onToggleCollapse}
-              className="hidden h-8 w-8 rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-slate-50 hover:text-slate-900 md:inline-flex"
+              className="hidden h-9 w-9 rounded-xl border-white/15 bg-white/5 p-1 text-slate-300 hover:bg-white/10 hover:text-white md:inline-flex"
               aria-label={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
             >
               {isCollapsed ? <Menu className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
             </Button>
           </div>
         </div>
-        <nav className="flex-1 overflow-y-auto px-3 pb-4">
+        <div className={cn('mx-4 mt-4 rounded-2xl border border-white/10 bg-white/5 px-3 py-3', isCollapsed && 'md:hidden')}>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Workspace</div>
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-white">Active company session</div>
+              <div className="truncate text-xs text-slate-300">{companyId || 'Not selected'}</div>
+            </div>
+            <div className="rounded-full bg-emerald-400/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-300">
+              Live
+            </div>
+          </div>
+        </div>
+        <nav className="flex-1 overflow-y-auto px-3 py-4">
         {menuItems.map((item) => {
           const hasChildren = item.children && item.children.length > 0
-          const isOpen = openItems.includes(item.title)
+          const isOpen = openItems.includes(item.title) || activeParentTitles.includes(item.title)
           const active = isParentActive(item)
 
           if (!hasChildren) {
@@ -326,7 +347,7 @@ export default function Sidebar({
                   variant="ghost"
                   disabled
                   className={cn(
-                    'mb-2 h-12 w-full justify-between rounded-xl px-4 text-[15px] font-medium opacity-60 cursor-not-allowed',
+                    'mb-2 h-12 w-full justify-between rounded-2xl border border-white/6 px-4 text-[15px] font-medium opacity-60 cursor-not-allowed',
                     isCollapsed && 'h-11 justify-center px-0'
                   )}
                 >
@@ -349,10 +370,10 @@ export default function Sidebar({
                 <Button
                   variant="ghost"
                   className={cn(
-                    'mb-2 h-12 w-full justify-start rounded-xl px-4 text-[15px] font-medium transition-colors',
+                    'mb-2 h-12 w-full justify-start rounded-2xl px-4 text-[15px] font-medium transition-colors',
                     active
-                      ? 'bg-slate-900 text-white shadow-sm hover:bg-slate-900 hover:text-white'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+                      ? 'bg-white text-slate-950 shadow-[0_12px_26px_rgba(15,23,42,0.18)] hover:bg-white hover:text-slate-950'
+                      : 'text-slate-300 hover:bg-white/10 hover:text-white',
                     isCollapsed && 'h-11 justify-center px-0'
                   )}
                 >
@@ -369,10 +390,10 @@ export default function Sidebar({
                 <Button
                   variant="ghost"
                   className={cn(
-                    'mb-2 h-12 w-full justify-between rounded-xl px-4 text-[15px] font-medium transition-colors',
+                    'mb-2 h-12 w-full justify-between rounded-2xl px-4 text-[15px] font-medium transition-colors',
                     active
-                      ? 'bg-slate-900 text-white shadow-sm hover:bg-slate-900 hover:text-white'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+                      ? 'bg-white text-slate-950 shadow-[0_12px_26px_rgba(15,23,42,0.18)] hover:bg-white hover:text-slate-950'
+                      : 'text-slate-300 hover:bg-white/10 hover:text-white',
                     isCollapsed && 'h-11 justify-center px-0'
                   )}
                 >
@@ -392,10 +413,10 @@ export default function Sidebar({
                           variant="ghost"
                           size="sm"
                           className={cn(
-                            'mb-1.5 h-10 w-full justify-start rounded-lg px-4 text-sm transition-colors',
+                            'mb-1.5 h-10 w-full justify-start rounded-xl px-4 text-sm transition-colors',
                             isActive(child.href)
-                              ? 'bg-slate-100 font-medium text-slate-900'
-                              : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
+                              ? 'bg-white/12 font-medium text-white'
+                              : 'text-slate-400 hover:bg-white/8 hover:text-white'
                           )}
                         >
                           {child.title}
@@ -407,7 +428,7 @@ export default function Sidebar({
                         variant="ghost"
                         size="sm"
                         disabled
-                        className="w-full justify-between mb-1 opacity-60 cursor-not-allowed"
+                        className="mb-1 w-full justify-between rounded-xl opacity-60 cursor-not-allowed"
                       >
                         <span>{child.title}</span>
                         <span className="inline-flex items-center gap-1 text-[10px]">
@@ -423,6 +444,13 @@ export default function Sidebar({
           )
         })}
         </nav>
+        <div className={cn('border-t border-white/10 px-4 py-3', isCollapsed && 'md:hidden')}>
+          <div className="rounded-2xl bg-white/5 px-3 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Mode</div>
+            <div className="mt-1 text-sm font-semibold text-white">Business control center</div>
+            <div className="mt-1 text-xs text-slate-300">Designed for dense operations on desktop and clear task flow on mobile.</div>
+          </div>
+        </div>
       </aside>
     </>
   )

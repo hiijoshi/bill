@@ -242,6 +242,10 @@ model User {
   deletedAt   DateTime?
   // relations
   permissions UserPermission[]
+  uploadedBankStatementBatches BankStatementBatch[] @relation("BankStatementBatchUploadedBy")
+  reviewedBankStatementRows    BankStatementRow[]   @relation("BankStatementRowReviewedBy")
+  createdBankReconciliationLinks BankReconciliationLink[] @relation("BankReconciliationLinkCreatedBy")
+  bankStatementBatchEvents     BankStatementBatchEvent[] @relation("BankStatementBatchEventActor")
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
 
@@ -284,6 +288,10 @@ model Company {
   paymentModes         PaymentMode[]
   salesAdditionalCharges SalesAdditionalCharge[]
   userPermissions      UserPermission[]
+  bankStatementBatches BankStatementBatch[]
+  bankStatementRows    BankStatementRow[]
+  bankReconciliationLinks BankReconciliationLink[]
+  bankStatementBatchEvents BankStatementBatchEvent[]
   locked               Boolean               @default(false)
   deletedAt            DateTime?
   createdAt            DateTime              @default(now())
@@ -715,6 +723,8 @@ model Payment {
   txnRef                 String?
   note                   String?
   deletedAt              DateTime?
+  bankStatementMatchCandidates BankStatementMatchCandidate[]
+  bankReconciliationLinks BankReconciliationLink[]
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
@@ -777,6 +787,9 @@ model Bank {
   address       String?
   phone         String?
   isActive      Boolean  @default(true)
+  statementBatches BankStatementBatch[]
+  statementRows    BankStatementRow[]
+  reconciliationLinks BankReconciliationLink[]
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -934,6 +947,8 @@ model LedgerEntry {
   accountGroupSnapshot     String?
   counterpartyNameSnapshot String?
   note                     String?
+  bankStatementMatchCandidates BankStatementMatchCandidate[]
+  bankReconciliationLinks  BankReconciliationLink[]
   createdAt                DateTime        @default(now())
   updatedAt                DateTime        @updatedAt
 
@@ -942,6 +957,201 @@ model LedgerEntry {
   @@index([partyId], map: "idx_ledger_entries_party")
   @@index([farmerId], map: "idx_ledger_entries_farmer")
   @@index([accountingHeadId], map: "idx_ledger_entries_head")
+}
+
+model BankStatementBatch {
+  id                  String   @id @default(cuid())
+  companyId           String
+  company             Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bankId              String?
+  bank                Bank?    @relation(fields: [bankId], references: [id], onDelete: SetNull)
+  uploadedByUserId    String?
+  uploadedByUser      User?    @relation("BankStatementBatchUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  fileName            String
+  originalFileName    String?
+  fileMimeType        String
+  fileSizeBytes       Int
+  fileExtension       String?
+  documentKind        String
+  storageDisk         String    @default("local")
+  storageBucket       String?
+  storageKey          String?
+  uploadChecksum      String?
+  uploadStatus        String    @default("created")
+  batchStatus         String    @default("uploaded")
+  parseStatus         String    @default("pending")
+  matchStatus         String    @default("pending")
+  finalizeStatus      String    @default("pending")
+  duplicateBatchId    String?
+  duplicateConfidence Float?
+  parserType          String?
+  parserVersion       String?
+  parserConfidence    Float?
+  bankNameDetected    String?
+  accountNumberMasked String?
+  statementDateFrom   DateTime?
+  statementDateTo     DateTime?
+  openingBalance      Float?
+  closingBalance      Float?
+  totalRows           Int       @default(0)
+  parsedRows          Int       @default(0)
+  invalidRows         Int       @default(0)
+  settledRows         Int       @default(0)
+  unsettledRows       Int       @default(0)
+  ambiguousRows       Int       @default(0)
+  failedRows          Int       @default(0)
+  warningCount        Int       @default(0)
+  errorCode           String?
+  errorMessage        String?
+  errorDetailsJson    String?
+  sourceMetadataJson  String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  uploadedAt          DateTime?
+  parsedAt            DateTime?
+  matchedAt           DateTime?
+  finalizedAt         DateTime?
+
+  rows                BankStatementRow[]
+  reconciliationLinks BankReconciliationLink[]
+  events              BankStatementBatchEvent[]
+
+  @@index([companyId, createdAt], map: "idx_bank_statement_batches_company_created")
+  @@index([companyId, bankId, createdAt], map: "idx_bank_statement_batches_company_bank_created")
+  @@index([companyId, batchStatus, createdAt], map: "idx_bank_statement_batches_company_status_created")
+  @@index([uploadChecksum], map: "idx_bank_statement_batches_checksum")
+  @@index([duplicateBatchId], map: "idx_bank_statement_batches_duplicate")
+}
+
+model BankStatementRow {
+  id                  String   @id @default(cuid())
+  companyId           String
+  company             Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  uploadBatchId       String
+  batch               BankStatementBatch @relation(fields: [uploadBatchId], references: [id], onDelete: Cascade)
+  bankId              String?
+  bank                Bank?    @relation(fields: [bankId], references: [id], onDelete: SetNull)
+  sourceRowIndex      Int
+  sourcePageNumber    Int?
+  sourceSheetName     String?
+  transactionDate     DateTime?
+  valueDate           DateTime?
+  description         String
+  descriptionNormalized String?
+  debit               Float?
+  credit              Float?
+  amount              Float
+  direction           String
+  referenceNumber     String?
+  referenceNormalized String?
+  chequeNumber        String?
+  balance             Float?
+  transactionType     String?
+  rawRowJson          String?
+  parserType          String
+  parserConfidence    Float?
+  extractionStatus    String   @default("parsed")
+  duplicateFingerprint String
+  duplicateState      String   @default("unique")
+  duplicateOfRowId    String?
+  matchStatus         String   @default("unsettled")
+  matchedLedgerId     String?
+  matchedPaymentId    String?
+  matchConfidence     Float?
+  matchReason         String?
+  matchReasonJson     String?
+  reviewStatus        String   @default("pending")
+  reviewedByUserId    String?
+  reviewedByUser      User?    @relation("BankStatementRowReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  reviewedAt          DateTime?
+  ignoredAt           DateTime?
+  finalLinkId         String?  @unique
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  matchCandidates     BankStatementMatchCandidate[]
+  reconciliationLink  BankReconciliationLink?
+
+  @@unique([uploadBatchId, sourceRowIndex], map: "uniq_bank_statement_rows_batch_row")
+  @@index([companyId, uploadBatchId, matchStatus], map: "idx_bank_statement_rows_company_batch_match")
+  @@index([companyId, bankId, transactionDate, amount, direction], map: "idx_bank_statement_rows_company_bank_date_amount_direction")
+  @@index([duplicateFingerprint], map: "idx_bank_statement_rows_fingerprint")
+  @@index([matchedLedgerId], map: "idx_bank_statement_rows_matched_ledger")
+  @@index([reviewStatus, matchStatus], map: "idx_bank_statement_rows_review_match")
+}
+
+model BankStatementMatchCandidate {
+  id                  String   @id @default(cuid())
+  statementRowId      String
+  statementRow        BankStatementRow @relation(fields: [statementRowId], references: [id], onDelete: Cascade)
+  ledgerEntryId       String?
+  ledgerEntry         LedgerEntry? @relation(fields: [ledgerEntryId], references: [id], onDelete: Cascade)
+  paymentId           String?
+  payment             Payment?  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  candidateRank       Int
+  totalScore          Float
+  amountScore         Float      @default(0)
+  directionScore      Float      @default(0)
+  dateScore           Float      @default(0)
+  referenceScore      Float      @default(0)
+  narrationScore      Float      @default(0)
+  balanceScore        Float      @default(0)
+  decision            String     @default("candidate")
+  reason              String?
+  reasonJson          String?
+  isReserved          Boolean    @default(false)
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  @@unique([statementRowId, ledgerEntryId, paymentId], map: "uniq_bank_statement_candidates_row_target")
+  @@index([statementRowId, candidateRank], map: "idx_bank_statement_candidates_row_rank")
+  @@index([ledgerEntryId, decision], map: "idx_bank_statement_candidates_ledger_decision")
+  @@index([paymentId, decision], map: "idx_bank_statement_candidates_payment_decision")
+}
+
+model BankReconciliationLink {
+  id                  String   @id @default(cuid())
+  companyId           String
+  company             Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bankId              String?
+  bank                Bank?    @relation(fields: [bankId], references: [id], onDelete: SetNull)
+  statementBatchId    String
+  statementBatch      BankStatementBatch @relation(fields: [statementBatchId], references: [id], onDelete: Cascade)
+  statementRowId      String   @unique
+  statementRow        BankStatementRow @relation(fields: [statementRowId], references: [id], onDelete: Cascade)
+  ledgerEntryId       String?  @unique
+  ledgerEntry         LedgerEntry? @relation(fields: [ledgerEntryId], references: [id], onDelete: Cascade)
+  paymentId           String?  @unique
+  payment             Payment? @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  linkType            String   @default("auto")
+  confidence          Float?
+  reason              String?
+  reasonJson          String?
+  createdByUserId     String?
+  createdByUser       User?    @relation("BankReconciliationLinkCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([companyId, bankId, createdAt], map: "idx_bank_reconciliation_links_company_bank_created")
+  @@index([statementBatchId], map: "idx_bank_reconciliation_links_batch")
+}
+
+model BankStatementBatchEvent {
+  id                  String   @id @default(cuid())
+  batchId             String
+  batch               BankStatementBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  companyId           String
+  company             Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  actorUserId         String?
+  actorUser           User?    @relation("BankStatementBatchEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  eventType           String
+  stage               String?
+  payloadJson         String?
+  note                String?
+  createdAt           DateTime @default(now())
+
+  @@index([batchId, createdAt], map: "idx_bank_statement_batch_events_batch_created")
+  @@index([companyId, eventType, createdAt], map: "idx_bank_statement_batch_events_company_event_created")
 }
 
 model TransportBill {
