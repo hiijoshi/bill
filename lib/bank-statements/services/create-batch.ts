@@ -5,6 +5,11 @@ import { BANK_STATEMENT_DUPLICATE_LOOKBACK_DAYS } from '../constants'
 import type { BankStatementCreateBatchRequest } from '../contracts'
 import { BankStatementError } from '../errors'
 import { serializeBankStatementBatch } from '../serializers'
+import {
+  assertBankBelongsToCompany,
+  assertCompanyExists,
+  resolveBankStatementActorUser
+} from '../security/require-bank-statement-access'
 import { validateBankStatementFileInfo } from './validate-upload-file'
 
 function resolveDocumentKind(fileName: string, mimeType: string) {
@@ -41,11 +46,51 @@ export async function createBankStatementBatch(input: {
   auth: RequestAuthContext
   request: BankStatementCreateBatchRequest
 }) {
+  console.info('[bank-statements] create-batch:start', {
+    companyId: input.request.companyId,
+    bankId: input.request.bankId,
+    authUserId: input.auth.userId,
+    authUserDbId: input.auth.userDbId
+  })
+
   validateBankStatementFileInfo({
     fileName: input.request.fileName,
     fileMimeType: input.request.fileMimeType,
     fileSizeBytes: input.request.fileSizeBytes
   })
+
+  const [company, bank, actorUser] = await Promise.all([
+    assertCompanyExists(input.request.companyId),
+    assertBankBelongsToCompany(input.request.companyId, input.request.bankId),
+    resolveBankStatementActorUser(input.auth)
+  ])
+
+  if (actorUser && actorUser.traderId !== company.traderId) {
+    throw new BankStatementError('FORBIDDEN', 'Authenticated user does not belong to the selected company tenant.', {
+      status: 403,
+      details: {
+        actorUserId: actorUser.id,
+        actorTraderId: actorUser.traderId,
+        companyTraderId: company.traderId
+      }
+    })
+  }
+
+  if (
+    actorUser &&
+    input.auth.role !== 'super_admin' &&
+    actorUser.companyId &&
+    actorUser.companyId !== input.request.companyId
+  ) {
+    throw new BankStatementError('FORBIDDEN', 'Authenticated user is not assigned to the selected company.', {
+      status: 403,
+      details: {
+        actorUserId: actorUser.id,
+        actorCompanyId: actorUser.companyId,
+        requestCompanyId: input.request.companyId
+      }
+    })
+  }
 
   const checksum = createMetadataChecksum(input.request)
   const duplicateSince = subDays(new Date(), BANK_STATEMENT_DUPLICATE_LOOKBACK_DAYS)
@@ -66,9 +111,9 @@ export async function createBankStatementBatch(input: {
 
   const batch = await prisma.bankStatementBatch.create({
     data: {
-      companyId: input.request.companyId,
-      bankId: input.request.bankId,
-      uploadedByUserId: input.auth.userId,
+      companyId: company.id,
+      bankId: bank.id,
+      uploadedByUserId: actorUser?.id || null,
       fileName: input.request.fileName,
       originalFileName: input.request.fileName,
       fileMimeType: input.request.fileMimeType,
@@ -85,9 +130,17 @@ export async function createBankStatementBatch(input: {
       duplicateConfidence: existingDuplicate ? 0.92 : null,
       sourceMetadataJson: JSON.stringify({
         createdFrom: 'api',
-        metadataChecksum: checksum
+        metadataChecksum: checksum,
+        actorUserId: actorUser?.id || null
       })
     }
+  })
+
+  console.info('[bank-statements] create-batch:resolved', {
+    batchId: batch.id,
+    companyId: company.id,
+    bankId: bank.id,
+    actorUserId: actorUser?.id || null
   })
 
   if (!batch) {

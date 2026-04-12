@@ -68,6 +68,77 @@ export async function assertBankBelongsToCompany(companyId: string, bankId: stri
   return bank
 }
 
+export async function assertCompanyExists(companyId: string) {
+  const company = await prisma.company.findUnique({
+    where: { id: companyId },
+    select: {
+      id: true,
+      name: true,
+      traderId: true,
+      deletedAt: true
+    }
+  })
+
+  if (!company || company.deletedAt) {
+    throw new BankStatementError('COMPANY_SCOPE_DENIED', 'Selected company was not found or is inactive.', {
+      status: 404,
+      details: { companyId }
+    })
+  }
+
+  return company
+}
+
+export async function resolveBankStatementActorUser(auth: RequestAuthContext) {
+  const resolvedUser = auth.userDbId
+    ? await prisma.user.findFirst({
+        where: {
+          id: auth.userDbId,
+          traderId: auth.traderId,
+          deletedAt: null
+        },
+        select: {
+          id: true,
+          userId: true,
+          traderId: true,
+          companyId: true,
+          role: true
+        }
+      })
+    : await prisma.user.findFirst({
+        where: {
+          traderId: auth.traderId,
+          userId: auth.userId,
+          deletedAt: null
+        },
+        select: {
+          id: true,
+          userId: true,
+          traderId: true,
+          companyId: true,
+          role: true
+        }
+      })
+
+  if (!resolvedUser) {
+    if (auth.role === 'super_admin') {
+      return null
+    }
+
+    throw new BankStatementError('AUTH_REQUIRED', 'Authenticated user record was not found. Please sign in again.', {
+      status: 401,
+      retryable: true,
+      details: {
+        userId: auth.userId,
+        userDbId: auth.userDbId,
+        traderId: auth.traderId
+      }
+    })
+  }
+
+  return resolvedUser
+}
+
 export async function assertBatchBelongsToCompany(companyId: string, batchId: string) {
   const batch = await prisma.bankStatementBatch.findFirst({
     where: {
