@@ -12,6 +12,8 @@
     "build:analyze": "ANALYZE=true npm run build",
     "postinstall": "prisma generate",
     "start": "next start",
+    "start:prod": "PORT=${PORT:-3000} next start",
+    "deploy:prod": "bash scripts/deploy-production.sh",
     "lint": "eslint",
     "prisma:dbpush": "prisma db push",
     "prisma:migrate:deploy": "node scripts/prisma-migrate-deploy.mjs",
