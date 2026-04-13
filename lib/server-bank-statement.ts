@@ -279,57 +279,106 @@ function extractInternalLedgerPdfRows(text: string): StructuredStatementCsvRow[]
     return true
   })
 
-  const typeHeaderIndex = lines.findIndex((line) => normalizeForCompare(line) === 'type date voucher no')
-  const descriptionHeaderIndex = lines.findIndex((line) => normalizeForCompare(line) === 'particular')
-  const amountHeaderIndex = lines.findIndex((line) => normalizeForCompare(line) === 'debit (rs) credit (rs) balance')
-
-  if (typeHeaderIndex < 0 || descriptionHeaderIndex <= typeHeaderIndex || amountHeaderIndex <= descriptionHeaderIndex) {
+  const transactionStartIndex = lines.findIndex((line) => /^(payment|receipt)\s+\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}\b/i.test(line))
+  if (transactionStartIndex < 0) {
     return []
   }
 
-  const typeLines = lines
-    .slice(typeHeaderIndex + 1, descriptionHeaderIndex)
-    .filter((line) => normalizeForCompare(line) !== 'total')
-  const descriptionLines = lines
-    .slice(descriptionHeaderIndex + 1, amountHeaderIndex)
-    .filter((line) => normalizeForCompare(line) !== 'total')
-  const amountLines = lines
-    .slice(amountHeaderIndex + 1)
-    .filter((line) => normalizeForCompare(line) !== 'total')
-
-  const transactionCount = Math.min(typeLines.length, descriptionLines.length, amountLines.length)
-  if (transactionCount === 0) return []
-
   const rows: StructuredStatementCsvRow[] = []
+  let currentBlock: string[] = []
 
-  for (let index = 0; index < transactionCount; index += 1) {
-    const typeLine = typeLines[index]
-    const descriptionLine = descriptionLines[index]
-    const amountLine = amountLines[index]
+  const flushBlock = () => {
+    if (currentBlock.length === 0) return
 
-    const typeMatch = /^(.*?)\s+(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\s+(.*)$/.exec(typeLine)
-    const amountMatch = /^(-|[\d,]+(?:\.\d{1,2})?)\s+(-|[\d,]+(?:\.\d{1,2})?)\s+(.+)$/.exec(amountLine)
-
-    if (!typeMatch || !amountMatch) {
-      return []
+    const startLine = currentBlock[0]
+    const startMatch = /^(Payment|Receipt)\s+(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\s+(.*?)$/.exec(startLine)
+    if (!startMatch) {
+      currentBlock = []
+      return
     }
 
-    const [, typeValue, dateValue, voucherValue] = typeMatch
-    const [, debitValue, creditValue, balanceValue] = amountMatch
+    const [, typeValue, dateValue, voucherAndDescriptionRaw] = startMatch
+    const normalizedVoucherAndDescription = normalizeText(voucherAndDescriptionRaw)
+    const blockBody = currentBlock.slice(1)
+
+    let amountLineIndex = blockBody.findIndex((line) =>
+      /^-?[\d,]+(?:\.\d{1,2})?(?:\s+-?[\d,]+(?:\.\d{1,2})?){1,2}\s*(?:cr\.?|dr\.?)?$/i.test(line)
+    )
+
+    if (amountLineIndex < 0) {
+      amountLineIndex = blockBody.findIndex((line) => /^-?[\d,]+(?:\.\d{1,2})?(?:\s+-?[\d,]+(?:\.\d{1,2})?)+$/i.test(line))
+    }
+
+    if (amountLineIndex < 0) {
+      currentBlock = []
+      return
+    }
+
+    const descriptionLines = blockBody.slice(0, amountLineIndex)
+    const amountTokens = blockBody[amountLineIndex]
+      .split(/\s+/)
+      .map((token) => normalizeText(token))
+      .filter((token) => /^(?:[\d,]+(?:\.\d{1,2})?|cr\.?|dr\.?)$/i.test(token))
+
+    let balanceSuffix = ''
+    const nextLine = blockBody[amountLineIndex + 1] || ''
+    if (/^(cr\.?|dr\.?)$/i.test(nextLine)) {
+      balanceSuffix = ` ${normalizeText(nextLine)}`
+    } else if (/^(cr\.?|dr\.?)$/i.test(amountTokens.at(-1) || '')) {
+      balanceSuffix = ''
+    }
+
+    const numericTokens = amountTokens.filter((token) => /^[\d,]+(?:\.\d{1,2})?$/.test(token))
+    if (numericTokens.length < 2) {
+      currentBlock = []
+      return
+    }
+
+    const amountValue = numericTokens[0] || ''
+    const balanceValue = `${numericTokens.at(-1) || ''}${balanceSuffix}`.trim()
+    const voucherValue = normalizedVoucherAndDescription.split(/\s+/)[0] || ''
+    const hasExplicitVoucher = voucherValue === '-' || /^[a-z0-9-]+$/i.test(voucherValue)
+    const voucherNo = hasExplicitVoucher ? (voucherValue === '-' ? '' : voucherValue) : ''
+    const descriptionStart =
+      hasExplicitVoucher && normalizedVoucherAndDescription.startsWith(voucherValue)
+        ? normalizedVoucherAndDescription.slice(voucherValue.length).trim()
+        : normalizedVoucherAndDescription
+    const particular = [descriptionStart, ...descriptionLines].map((line) => normalizeText(line)).filter(Boolean).join(' ')
 
     rows.push({
-      rowNo: index + 2,
+      rowNo: rows.length + 2,
       row: {
         [normalizeCsvHeader('Type')]: normalizeText(typeValue),
         [normalizeCsvHeader('Date')]: normalizeText(dateValue),
-        [normalizeCsvHeader('Voucher No')]: normalizeText(voucherValue) === '-' ? '' : normalizeText(voucherValue),
-        [normalizeCsvHeader('Particular')]: normalizeText(descriptionLine),
-        [normalizeCsvHeader('Debit (Rs)')]: normalizeText(debitValue) === '-' ? '' : normalizeText(debitValue),
-        [normalizeCsvHeader('Credit (Rs)')]: normalizeText(creditValue) === '-' ? '' : normalizeText(creditValue),
-        [normalizeCsvHeader('Balance')]: normalizeText(balanceValue)
+        [normalizeCsvHeader('Voucher No')]: voucherNo,
+        [normalizeCsvHeader('Particular')]: particular,
+        [normalizeCsvHeader('Debit (Rs)')]: /^payment$/i.test(typeValue) ? amountValue : '',
+        [normalizeCsvHeader('Credit (Rs)')]: /^receipt$/i.test(typeValue) ? amountValue : '',
+        [normalizeCsvHeader('Balance')]: balanceValue
       }
     })
+
+    currentBlock = []
   }
+
+  for (const line of lines.slice(transactionStartIndex)) {
+    if (/^total\b/i.test(line)) {
+      flushBlock()
+      break
+    }
+
+    if (/^(payment|receipt)\s+\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}\b/i.test(line)) {
+      flushBlock()
+      currentBlock = [line]
+      continue
+    }
+
+    if (currentBlock.length > 0) {
+      currentBlock.push(line)
+    }
+  }
+
+  flushBlock()
 
   return rows
 }

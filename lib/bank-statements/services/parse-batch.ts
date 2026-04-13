@@ -117,12 +117,24 @@ export async function parseBankStatementBatch(input: {
       batchId: batch.id,
       storageKey: batch.storageKey
     })
+    console.info('[bank-statements] parse-batch:file-loaded', {
+      batchId: batch.id,
+      storageKey: batch.storageKey,
+      bytes: bytes.byteLength,
+      documentKind: batch.documentKind,
+      fileName: batch.fileName
+    })
     const parser = resolveStatementParser(detectKind(batch.documentKind))
     const file = new File([bytes], batch.fileName, {
       type: batch.fileMimeType
     })
 
     const extracted = await parser.extract(file, batch.bankId || '')
+    console.info('[bank-statements] parse-batch:extracted', {
+      batchId: batch.id,
+      parser: extracted.document.parser,
+      entries: extracted.entries.length
+    })
     const normalizedRows = extracted.entries.map((entry) =>
       normalizeStatementRow({
         bankId: batch.bankId || null,
@@ -234,6 +246,13 @@ export async function parseBankStatementBatch(input: {
       batch: serializeBankStatementBatch(updated)
     }
   } catch (error) {
+    console.error('[bank-statements] parse-batch:failed', {
+      batchId: batch.id,
+      documentKind: batch.documentKind,
+      fileName: batch.fileName,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    })
     const normalizedError = normalizeParseFailure(error)
 
     await prisma.bankStatementBatch.update({
