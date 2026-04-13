@@ -57,6 +57,14 @@ export async function POST(
       }
 
       bytes = Uint8Array.from(Buffer.from(fileBase64, 'base64'))
+    } else if (!contentType.includes('multipart/form-data')) {
+      companyId = String(request.headers.get('x-company-id') || '').trim()
+      fileName = decodeURIComponent(String(request.headers.get('x-file-name') || '').trim())
+      fileMimeType = decodeURIComponent(
+        String(request.headers.get('x-file-mime-type') || request.headers.get('content-type') || 'application/octet-stream').trim()
+      )
+      fileSizeBytes = Number(request.headers.get('x-file-size-bytes') || 0)
+      bytes = new Uint8Array(await request.arrayBuffer())
     } else {
       const formData = await request.formData()
       companyId = String(formData.get('companyId') || '').trim()
