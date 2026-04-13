@@ -210,21 +210,12 @@ export default function BankStatementUploadClient({
         fileSizeBytes: selectedFile.size
       })
       setStageProgress(45)
-      const fileBuffer = await selectedFile.arrayBuffer()
-      const bytes = new Uint8Array(fileBuffer)
-      let binary = ''
-      const chunkSize = 0x8000
-
-      for (let index = 0; index < bytes.length; index += chunkSize) {
-        binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
-      }
-
-      await apiClient.postJson(`/api/bank-statements/batches/${createResponse.data.batch.id}/file`, {
-        companyId,
-        fileName: selectedFile.name,
-        fileMimeType: selectedFile.type || 'application/octet-stream',
-        fileSizeBytes: selectedFile.size,
-        fileBase64: btoa(binary)
+      await apiClient.postBinary(`/api/bank-statements/batches/${createResponse.data.batch.id}/file`, selectedFile, {
+        'content-type': selectedFile.type || 'application/octet-stream',
+        'x-company-id': companyId,
+        'x-file-name': encodeURIComponent(selectedFile.name),
+        'x-file-mime-type': encodeURIComponent(selectedFile.type || 'application/octet-stream'),
+        'x-file-size-bytes': String(selectedFile.size)
       })
       setStageProgress(60)
       await apiClient.postJson(`/api/bank-statements/batches/${createResponse.data.batch.id}/parse`, { companyId })

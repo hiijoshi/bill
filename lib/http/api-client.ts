@@ -127,5 +127,25 @@ export const apiClient = {
 
       return response.json() as Promise<T>
     })
+  },
+
+  async postBinary<T>(url: string, body: Blob | ArrayBuffer | Uint8Array, headers: Record<string, string>): Promise<T> {
+    return withCsrfRetry(async (csrfToken) => {
+      const response = await fetch(url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'x-csrf-token': csrfToken,
+          ...headers
+        },
+        body: body as BodyInit
+      })
+
+      if (!response.ok) {
+        throw await parseApiError(response)
+      }
+
+      return response.json() as Promise<T>
+    })
   }
 }
