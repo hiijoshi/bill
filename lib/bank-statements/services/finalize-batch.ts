@@ -36,15 +36,31 @@ export async function finalizeBankStatementBatch(input: {
   await prisma.$transaction(async (tx) => {
     for (const row of rows) {
       if (row.matchStatus !== 'settled' || !row.matchedPaymentId) {
-        continue
+        if (!row.matchedLedgerId) {
+          continue
+        }
       }
 
       const conflicting = await tx.bankReconciliationLink.findFirst({
         where: {
-          paymentId: row.matchedPaymentId,
-          statementRowId: {
-            not: row.id
-          }
+          OR: [
+            row.matchedPaymentId
+              ? {
+                  paymentId: row.matchedPaymentId,
+                  statementRowId: {
+                    not: row.id
+                  }
+                }
+              : undefined,
+            row.matchedLedgerId
+              ? {
+                  ledgerEntryId: row.matchedLedgerId,
+                  statementRowId: {
+                    not: row.id
+                  }
+                }
+              : undefined
+          ].filter(Boolean) as Array<Record<string, unknown>>
         }
       })
 
@@ -67,6 +83,7 @@ export async function finalizeBankStatementBatch(input: {
             bankId: row.bankId,
             statementBatchId: batch.id,
             statementRowId: row.id,
+            ledgerEntryId: row.matchedLedgerId,
             paymentId: row.matchedPaymentId,
             linkType: row.reviewStatus === 'manually_linked' ? 'manual' : 'auto',
             confidence: row.matchConfidence,

@@ -23,6 +23,10 @@ export type BankStatementEventType = (typeof BANK_STATEMENT_EVENT_TYPE)[number]
 
 export type BankStatementDirection = 'debit' | 'credit'
 export type BankStatementDecision = 'candidate' | 'selected' | 'rejected' | 'ambiguous_candidate'
+export type BankStatementVoucherType =
+  | 'cash_bank_payment'
+  | 'cash_bank_receipt'
+  | 'journal'
 
 export type BankStatementDetectedMetadata = {
   bankNameDetected: string | null
@@ -78,6 +82,15 @@ export type NormalizedStatementTransaction = {
   matchConfidence: number | null
   matchReason: string | null
   matchReasonJson: string | null
+  draftAccountingHeadId: string | null
+  draftPartyId: string | null
+  draftSupplierId: string | null
+  draftVoucherType: BankStatementVoucherType | null
+  draftPaymentMode: string | null
+  draftRemarks: string | null
+  postedPaymentId: string | null
+  postedLedgerEntryId: string | null
+  postedAt: string | null
   reviewStatus: BankStatementReviewStatus
   reviewedByUserId: string | null
   reviewedAt: string | null
@@ -136,4 +149,22 @@ export type BankStatementWorkspacePayload = {
   companyId: string
   banks: BankStatementWorkspaceBank[]
   recentBatches: BankStatementBatchListItem[]
+}
+
+export type BankStatementLookupItem = {
+  id: string
+  label: string
+  meta?: string | null
+}
+
+export type BankStatementLookupPayload = {
+  accountingHeads: BankStatementLookupItem[]
+  parties: BankStatementLookupItem[]
+  suppliers: BankStatementLookupItem[]
+  paymentModes: BankStatementLookupItem[]
+  voucherTypes: Array<{
+    value: BankStatementVoucherType
+    label: string
+    direction: BankStatementDirection | 'both'
+  }>
 }

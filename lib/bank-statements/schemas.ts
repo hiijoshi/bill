@@ -58,6 +58,29 @@ export const reviewBankStatementRowSchema = z.discriminatedUnion('action', [
   })
 ])
 
+export const saveBankStatementDraftSchema = z.object({
+  companyId: z.string().trim().min(1),
+  accountingHeadId: z.string().trim().optional().nullable(),
+  partyId: z.string().trim().optional().nullable(),
+  supplierId: z.string().trim().optional().nullable(),
+  voucherType: z.enum(['cash_bank_payment', 'cash_bank_receipt', 'journal']).optional().nullable(),
+  paymentMode: z.string().trim().optional().nullable(),
+  remarks: z.string().trim().max(400).optional().nullable()
+}).superRefine((value, ctx) => {
+  if (!value.accountingHeadId && !value.partyId && !value.supplierId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['accountingHeadId'],
+      message: 'Select an accounting head, party, or supplier.'
+    })
+  }
+})
+
+export const postBankStatementRowsSchema = z.object({
+  companyId: z.string().trim().min(1),
+  rowIds: z.array(z.string().trim().min(1)).min(1).max(500)
+})
+
 export const finalizeBankStatementBatchSchema = z.object({
   confirm: z.literal(true)
 })

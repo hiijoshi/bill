@@ -1,4 +1,4 @@
-const SW_VERSION = 'mbill-pwa-v1'
+const SW_VERSION = 'mbill-pwa-v2'
 const STATIC_CACHE = `${SW_VERSION}-static`
 const RUNTIME_CACHE = `${SW_VERSION}-runtime`
 const OFFLINE_URL = '/offline'
@@ -56,7 +56,6 @@ self.addEventListener('fetch', (event) => {
   const requestUrl = new URL(request.url)
 
   if (requestUrl.origin === self.location.origin && requestUrl.pathname.startsWith('/api/')) {
-    event.respondWith(fetch(request))
     return
   }
 

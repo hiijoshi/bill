@@ -1015,12 +1015,28 @@ model BankStatementBatch {
   rows                BankStatementRow[]
   reconciliationLinks BankReconciliationLink[]
   events              BankStatementBatchEvent[]
+  storedFile          BankStatementStoredFile?
 
   @@index([companyId, createdAt], map: "idx_bank_statement_batches_company_created")
   @@index([companyId, bankId, createdAt], map: "idx_bank_statement_batches_company_bank_created")
   @@index([companyId, batchStatus, createdAt], map: "idx_bank_statement_batches_company_status_created")
   @@index([uploadChecksum], map: "idx_bank_statement_batches_checksum")
   @@index([duplicateBatchId], map: "idx_bank_statement_batches_duplicate")
+}
+
+model BankStatementStoredFile {
+  id            String             @id @default(cuid())
+  batchId       String             @unique
+  batch         BankStatementBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  fileName      String
+  fileMimeType  String
+  fileSizeBytes Int
+  checksum      String
+  bytes         Bytes
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([checksum], map: "idx_bank_statement_stored_files_checksum")
 }
 
 model BankStatementRow {
@@ -1060,6 +1076,15 @@ model BankStatementRow {
   matchConfidence     Float?
   matchReason         String?
   matchReasonJson     String?
+  draftAccountingHeadId String?
+  draftPartyId        String?
+  draftSupplierId     String?
+  draftVoucherType    String?
+  draftPaymentMode    String?
+  draftRemarks        String?
+  postedPaymentId     String?
+  postedLedgerEntryId String?
+  postedAt            DateTime?
   reviewStatus        String   @default("pending")
   reviewedByUserId    String?
   reviewedByUser      User?    @relation("BankStatementRowReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
@@ -1078,6 +1103,11 @@ model BankStatementRow {
   @@index([duplicateFingerprint], map: "idx_bank_statement_rows_fingerprint")
   @@index([matchedLedgerId], map: "idx_bank_statement_rows_matched_ledger")
   @@index([reviewStatus, matchStatus], map: "idx_bank_statement_rows_review_match")
+  @@index([draftAccountingHeadId], map: "idx_bank_statement_rows_draft_head")
+  @@index([draftPartyId], map: "idx_bank_statement_rows_draft_party")
+  @@index([draftSupplierId], map: "idx_bank_statement_rows_draft_supplier")
+  @@index([postedPaymentId], map: "idx_bank_statement_rows_posted_payment")
+  @@index([postedLedgerEntryId], map: "idx_bank_statement_rows_posted_ledger")
 }
 
 model BankStatementMatchCandidate {

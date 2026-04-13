@@ -98,12 +98,6 @@ function LoginPageContent() {
     try {
       clearClientCache()
 
-      // Validate trader ID is not empty
-      if (!traderId || traderId.trim() === '') {
-        setError('Trader ID is required')
-        return
-      }
-
       // Call login API
       const response = await fetch('/api/auth/login', {
         method: 'POST',
@@ -279,7 +273,7 @@ function LoginPageContent() {
             <form onSubmit={handleSubmit} className="space-y-6">
               {/* Trader ID Input */}
               <div>
-                <Label htmlFor="traderId">Trader ID</Label>
+                <Label htmlFor="traderId">Trader ID (optional)</Label>
                 <div className="relative">
                   <Building2 className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
                   <Input
@@ -287,9 +281,8 @@ function LoginPageContent() {
                     name="traderId"
                     type="text"
                     autoComplete="organization"
-                    required
                     className="pl-10"
-                    placeholder="Enter your trader ID"
+                    placeholder="Enter your trader ID (optional)"
                     disabled={loading}
                     value={traderId}
                     onChange={(event) => setTraderId(event.target.value)}

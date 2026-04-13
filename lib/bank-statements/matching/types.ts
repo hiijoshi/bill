@@ -1,5 +1,7 @@
 export type BankMovementCandidate = {
-  paymentId: string
+  paymentId: string | null
+  ledgerEntryId: string | null
+  targetType: 'payment' | 'ledger_entry'
   companyId: string
   amount: number
   payDate: Date
@@ -13,7 +15,9 @@ export type BankMovementCandidate = {
 }
 
 export type MatchScoredCandidate = {
-  paymentId: string
+  paymentId: string | null
+  ledgerEntryId: string | null
+  targetType: 'payment' | 'ledger_entry'
   totalScore: number
   amountScore: number
   directionScore: number

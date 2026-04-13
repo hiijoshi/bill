@@ -34,6 +34,7 @@ export async function uploadBankStatementBatchFile(input: {
     companyId: batch.companyId,
     batchId: batch.id,
     fileName: fileInfo.fileName,
+    fileMimeType: fileInfo.fileMimeType,
     bytes
   })
 

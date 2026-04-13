@@ -1,5 +1,6 @@
 import type {
   BankStatementBatchListItem,
+  BankStatementLookupPayload,
   BankStatementWorkspacePayload
 } from './types'
 
@@ -46,6 +47,26 @@ export type BankStatementCreateBatchResponse = {
 export type BankStatementWorkspaceResponse = {
   ok: true
   data: BankStatementWorkspacePayload
+}
+
+export type BankStatementLookupResponse = {
+  ok: true
+  data: BankStatementLookupPayload
+}
+
+export type BankStatementSaveDraftRequest = {
+  companyId: string
+  accountingHeadId?: string | null
+  partyId?: string | null
+  supplierId?: string | null
+  voucherType?: 'cash_bank_payment' | 'cash_bank_receipt' | 'journal' | null
+  paymentMode?: string | null
+  remarks?: string | null
+}
+
+export type BankStatementPostRowsRequest = {
+  companyId: string
+  rowIds: string[]
 }
 
 export type CsrfBootstrapResponse = {
