@@ -252,6 +252,9 @@ export function InvoiceTemplate({
         <div className="text-[18px] font-bold tracking-tight">{printData.companyName || '-'}</div>
         <div className="mt-1 text-[11px] leading-snug">{printData.companyAddress || '-'}</div>
         <div className="mt-1 text-[11px]">Contact: {printData.companyPhone || '-'}</div>
+        {printData.companyBankDisplay ? (
+          <div className="mt-1 text-[10px]">Bank Details: {printData.companyBankDisplay}</div>
+        ) : null}
       </div>
 
       {isSplitParent || isSplitChild ? (
@@ -435,6 +438,11 @@ export function InvoiceTemplate({
           <div className="pt-2 text-[10px] italic leading-snug">
             Declaration : We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.
           </div>
+          {printData.companyBankDisplay ? (
+            <div className="mt-3 rounded border border-black px-2 py-2 text-[10px] leading-snug">
+              <span className="font-semibold">Bank Details:</span> {printData.companyBankDisplay}
+            </div>
+          ) : null}
         </div>
         <div className="px-3 py-2">
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
@@ -474,17 +482,17 @@ export function DispatchTemplate({
         Mobile: {printData.companyPhone || '-'}
       </div>
 
-      <div className="grid grid-cols-2 border-b border-black text-[13px]">
-        <div className="border-r border-black px-2 py-1">
+      <div className="grid grid-cols-2 gap-2 px-2 py-2 text-[13px]">
+        <div>
           <span className="font-semibold">No.</span> {printData.billNo}
         </div>
-        <div className="px-2 py-1 text-right">
+        <div className="text-right">
           <span className="font-semibold">Date</span> {printData.billDateLabel}
         </div>
       </div>
 
       {printData.invoiceKind === 'split_child' ? (
-        <div className="border-b border-black px-2 py-1 text-[11px]">
+        <div className="px-2 py-1 text-[11px]">
           <span className="font-semibold">Parent Invoice Ref:</span> {printData.parentBillNo || '-'}
         </div>
       ) : null}
@@ -495,66 +503,66 @@ export function DispatchTemplate({
         </div>
       ) : null}
 
-      <div className="grid grid-cols-3 border-b border-black text-[12px]">
-        <div className="border-r border-black px-2 py-1"><span className="font-semibold">Goods Name</span>: {printData.items[0]?.productName || '-'}</div>
-        <div className="border-r border-black px-2 py-1"><span className="font-semibold">Quantity</span>: {toFixed2(printData.totalBags)}</div>
-        <div className="px-2 py-1"><span className="font-semibold">Value of Goods</span>: {toFixed2(printData.totalAmount)}</div>
+      <div className="grid grid-cols-3 gap-2 border-t border-black px-2 py-2 text-[12px]">
+        <div><span className="font-semibold">Goods Name</span>: {printData.items[0]?.productName || '-'}</div>
+        <div><span className="font-semibold">Quantity</span>: {toFixed2(printData.totalBags)}</div>
+        <div><span className="font-semibold">Value of Goods</span>: {toFixed2(printData.totalAmount)}</div>
       </div>
 
-      <div className="grid grid-cols-2 border-b border-black text-[12px]">
-        <div className="border-r border-black px-2 py-1"><span className="font-semibold">Dispatched to</span>: {printData.partyName || '-'}</div>
-        <div className="px-2 py-1">{printData.partyAddress || '-'}</div>
+      <div className="grid grid-cols-2 gap-2 px-2 py-1 text-[12px]">
+        <div><span className="font-semibold">Dispatched to</span>: {printData.partyName || '-'}</div>
+        <div>{printData.partyAddress || '-'}</div>
       </div>
 
-      <div className="grid grid-cols-2 border-b border-black text-[12px]">
-        <div className="border-r border-black px-2 py-1"><span className="font-semibold">Lorry Number</span>: {printData.lorryNo || '-'}</div>
-        <div className="px-2 py-1"><span className="font-semibold">Transport Name</span>: {printData.transportName || '-'}</div>
+      <div className="grid grid-cols-2 gap-2 px-2 py-1 text-[12px]">
+        <div><span className="font-semibold">Lorry Number</span>: {printData.lorryNo || '-'}</div>
+        <div><span className="font-semibold">Transport Name</span>: {printData.transportName || '-'}</div>
       </div>
 
-      <div className="grid grid-cols-2 border-b border-black text-[12px]">
-        <div className="border-r border-black px-2 py-1"><span className="font-semibold">Freight Per Qt</span>: {toFixed2(printData.freightPerQt)}</div>
-        <div className="px-2 py-1"><span className="font-semibold">To Pay</span>: {toFixed2(printData.toPay)}</div>
+      <div className="grid grid-cols-2 gap-2 px-2 py-1 text-[12px]">
+        <div><span className="font-semibold">Freight Per Qt</span>: {toFixed2(printData.freightPerQt)}</div>
+        <div><span className="font-semibold">To Pay</span>: {toFixed2(printData.toPay)}</div>
       </div>
 
-      <div className="border-b border-black px-2 py-1 text-center text-[13px] font-semibold">
+      <div className="border-y border-black px-2 py-1 text-center text-[13px] font-semibold">
         Goods Details
       </div>
 
-      <table className="w-full border-collapse text-[12px]">
+      <table className="w-full text-[12px]">
         <thead>
-          <tr className="border-b border-black">
-            <th className="w-[8%] border-r border-black px-1 py-0.5 text-left">S.No.</th>
-            <th className="w-[34%] border-r border-black px-1 py-0.5 text-left">Goods Details</th>
-            <th className="w-[16%] border-r border-black px-1 py-0.5 text-right">No. of Bags</th>
-            <th className="w-[20%] border-r border-black px-1 py-0.5 text-right">Weight/Bag Qt</th>
-            <th className="w-[22%] px-1 py-0.5 text-right">Total Weight Qt</th>
+          <tr>
+            <th className="w-[8%] px-1 py-1 text-left">S.No.</th>
+            <th className="w-[34%] px-1 py-1 text-left">Goods Details</th>
+            <th className="w-[16%] px-1 py-1 text-right">No. of Bags</th>
+            <th className="w-[20%] px-1 py-1 text-right">Weight/Bag Qt</th>
+            <th className="w-[22%] px-1 py-1 text-right">Total Weight Qt</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((item, index) => (
-            <tr key={`dispatch-row-${index}`} className="h-6 border-b border-black">
-              <td className="border-r border-black px-1 py-0.5">{item ? index + 1 : ''}</td>
-              <td className="border-r border-black px-1 py-0.5">{item?.productName || ''}</td>
-              <td className="border-r border-black px-1 py-0.5 text-right">{item ? toFixed2(item.bags) : ''}</td>
-              <td className="border-r border-black px-1 py-0.5 text-right">{item ? toFixed2(item.weightPerBagQt) : ''}</td>
+            <tr key={`dispatch-row-${index}`} className="h-6">
+              <td className="px-1 py-0.5">{item ? index + 1 : ''}</td>
+              <td className="px-1 py-0.5">{item?.productName || ''}</td>
+              <td className="px-1 py-0.5 text-right">{item ? toFixed2(item.bags) : ''}</td>
+              <td className="px-1 py-0.5 text-right">{item ? toFixed2(item.weightPerBagQt) : ''}</td>
               <td className="px-1 py-0.5 text-right">{item ? toFixed2(item.totalWeightQt) : ''}</td>
             </tr>
           ))}
-          <tr className="border-b border-black font-semibold">
-            <td className="border-r border-black px-1 py-0.5" colSpan={2}>Total</td>
-            <td className="border-r border-black px-1 py-0.5 text-right">{toFixed2(printData.totalBags)}</td>
-            <td className="border-r border-black px-1 py-0.5 text-right">
+          <tr className="border-t border-black font-semibold">
+            <td className="px-1 py-1" colSpan={2}>Total</td>
+            <td className="px-1 py-1 text-right">{toFixed2(printData.totalBags)}</td>
+            <td className="px-1 py-1 text-right">
               {printData.totalBags > 0 ? toFixed2(printData.totalWeightQt / printData.totalBags) : toFixed2(0)}
             </td>
-            <td className="px-1 py-0.5 text-right">{toFixed2(printData.totalWeightQt)}</td>
+            <td className="px-1 py-1 text-right">{toFixed2(printData.totalWeightQt)}</td>
           </tr>
         </tbody>
       </table>
 
-      <div className="border-b border-black px-2 py-1 text-[11px]">
-        <span className="font-semibold">Banker:</span> Bank Name / A/c No / IFSC
+      <div className="border-t border-black px-2 py-1 text-[11px]">
+        <span className="font-semibold">Banker:</span> {printData.companyBankDisplay || '-'}
       </div>
-      <div className="border-b border-black px-2 py-1 text-[10px] leading-tight">
+      <div className="px-2 py-1 text-[10px] leading-tight">
         <span className="font-semibold">Note:</span> Dispatch data generated from sales entry records.
       </div>
       <div className="px-2 py-2 text-right text-[12px] italic font-semibold">

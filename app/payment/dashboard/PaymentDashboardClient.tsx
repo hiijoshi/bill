@@ -87,6 +87,8 @@ interface Payment {
   status: 'pending' | 'paid'
   txnRef?: string
   note?: string
+  bankNameSnapshot?: string
+  bankBranchSnapshot?: string
   createdAt: string
 }
 
@@ -105,6 +107,8 @@ type PaymentApiRecord = {
   status?: 'pending' | 'paid'
   txnRef?: string
   note?: string
+  bankNameSnapshot?: string
+  bankBranchSnapshot?: string
   createdAt?: string
 }
 
@@ -207,6 +211,11 @@ const getPaymentModeLabel = (rawMode: unknown): string => {
   if (normalized === 'online') return 'Online'
   if (normalized === 'bank') return 'Bank Transfer'
   return value.toUpperCase() === value ? value : value.replace(/_/g, ' ')
+}
+
+const isCashDescriptor = (value: unknown): boolean => {
+  const normalized = String(value || '').trim().toLowerCase()
+  return normalized === 'cash' || normalized.startsWith('cash ') || normalized.includes(' cash')
 }
 
 interface PaymentDashboardClientProps {
@@ -413,6 +422,8 @@ export default function PaymentDashboardClient({
         status: payment.status === 'pending' ? 'pending' : 'paid',
         txnRef: payment.txnRef || '',
         note: payment.note || '',
+        bankNameSnapshot: payment.bankNameSnapshot || '',
+        bankBranchSnapshot: payment.bankBranchSnapshot || '',
         createdAt: payment.createdAt || payment.payDate || ''
       }))
       setPayments(normalizedPayments)
@@ -622,6 +633,51 @@ export default function PaymentDashboardClient({
       })
   }, [payments, paymentTypeFilter, partyFilter, modeFilter, dateFrom, dateTo])
 
+  const filteredCashSummary = useMemo(() => {
+    return filteredPayments.reduce(
+      (summary, payment) => {
+        const amount = clampNonNegative(payment.amount)
+        if (amount <= 0) {
+          return summary
+        }
+
+        if (payment.billType === SELF_TRANSFER_PAYMENT_TYPE) {
+          const fromCash = isCashDescriptor(payment.bankNameSnapshot)
+          const toCash = isCashDescriptor(payment.bankBranchSnapshot)
+
+          if (fromCash && !toCash) {
+            summary.cashOut += amount
+          } else if (!fromCash && toCash) {
+            summary.cashIn += amount
+          }
+
+          return summary
+        }
+
+        if (payment.modeCategory !== 'cash') {
+          return summary
+        }
+
+        if (payment.billType === 'sales' || payment.billType === 'cash_bank_receipt') {
+          summary.cashIn += amount
+        } else if (payment.billType === 'purchase' || payment.billType === 'cash_bank_payment') {
+          summary.cashOut += amount
+        }
+
+        return summary
+      },
+      {
+        cashIn: 0,
+        cashOut: 0
+      }
+    )
+  }, [filteredPayments])
+
+  const filteredCashBalance = useMemo(
+    () => clampNonNegative(filteredCashSummary.cashIn) - clampNonNegative(filteredCashSummary.cashOut),
+    [filteredCashSummary.cashIn, filteredCashSummary.cashOut]
+  )
+
   const hasPaymentDashboardData =
     purchaseBills.length > 0 || salesBills.length > 0 || payments.length > 0 || paymentModes.length > 0
 
@@ -665,7 +721,7 @@ export default function PaymentDashboardClient({
                 <Upload className="w-4 h-4 mr-1" />
                 Upload Bank Statement
               </Button>
-              <Button variant="outline" onClick={() => router.push('/payment/self-transfer/entry')}>
+              <Button variant="outline" onClick={() => router.push('/payment/cash-bank/entry?entry=self-transfer')}>
                 <Plus className="w-4 h-4 mr-1" />
                 Self Transfer
               </Button>
@@ -828,6 +884,24 @@ export default function PaymentDashboardClient({
               <CardTitle>Payment History</CardTitle>
             </CardHeader>
             <CardContent>
+              <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.16em] text-emerald-700">Cash In</p>
+                  <p className="mt-2 text-2xl font-semibold text-emerald-700">₹{filteredCashSummary.cashIn.toFixed(2)}</p>
+                  <p className="mt-1 text-xs text-emerald-800/80">Visible filtered cash receipts</p>
+                </div>
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.16em] text-rose-700">Cash Out</p>
+                  <p className="mt-2 text-2xl font-semibold text-rose-700">₹{filteredCashSummary.cashOut.toFixed(2)}</p>
+                  <p className="mt-1 text-xs text-rose-800/80">Visible filtered cash payments</p>
+                </div>
+                <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.16em] text-sky-700">Cash Balance</p>
+                  <p className="mt-2 text-2xl font-semibold text-sky-700">₹{filteredCashBalance.toFixed(2)}</p>
+                  <p className="mt-1 text-xs text-sky-800/80">Net cash movement for current filter</p>
+                </div>
+              </div>
+
               <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-6">
                 <div>
                   <Label htmlFor="paymentTypeFilter">Type</Label>

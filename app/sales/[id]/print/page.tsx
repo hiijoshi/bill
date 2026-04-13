@@ -129,7 +129,24 @@ export default async function SalesPrintPage({ params }: PageProps) {
           name: true,
           address: true,
           phone: true,
-          traderId: true
+          mandiAccountNumber: true,
+          traderId: true,
+          banks: {
+            where: {
+              isActive: true
+            },
+            select: {
+              name: true,
+              branch: true,
+              ifscCode: true,
+              accountNumber: true
+            },
+            orderBy: [
+              { name: 'asc' },
+              { createdAt: 'asc' }
+            ],
+            take: 1
+          }
         }
       },
       party: true,

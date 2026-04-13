@@ -1276,14 +1276,14 @@ export default function ReportDashboard({
 
   const reportTitle =
     reportType === 'purchase'
-      ? 'Purchase Report'
+      ? 'Mandi Purchase Report'
       : reportType === 'sales'
         ? 'Sales Report'
         : 'Report Dashboard'
 
   const reportDescription =
     reportType === 'purchase'
-      ? 'See total purchase, paid amount, pending amount, and payment details.'
+      ? 'See mandi-format purchase register data with farmer or supplier details, anubandh or reference values, bhugtan breakup, hammali, and pending payment tracking.'
       : reportType === 'sales'
         ? 'See total sales, received amount, pending amount, and collection details.'
         : 'See purchase, sales, paid, received, and pending amounts in one place.'
@@ -1376,8 +1376,8 @@ export default function ReportDashboard({
     if (reportType === 'purchase') {
       return [
         { label: 'Total Purchase', helper: 'Total bill amount', value: round2(totals.purchaseTotal), tone: 'text-slate-900', format: 'amount' as const },
-        { label: 'Paid', helper: 'Money already paid', value: round2(totals.purchasePaid), tone: 'text-rose-700', format: 'amount' as const },
-        { label: 'Pending', helper: 'Money still to pay', value: round2(totals.purchasePending), tone: 'text-amber-700', format: 'amount' as const },
+        { label: 'Bhugtan Paid', helper: 'Money already paid', value: round2(totals.purchasePaid), tone: 'text-rose-700', format: 'amount' as const },
+        { label: 'Bhugtan Pending', helper: 'Money still to pay', value: round2(totals.purchasePending), tone: 'text-amber-700', format: 'amount' as const },
         { label: 'Bills', helper: 'Bills in this report', value: summary.totalRecords, tone: 'text-sky-700', format: 'count' as const }
       ]
     }
@@ -1696,7 +1696,7 @@ export default function ReportDashboard({
         <CardHeader className="border-b border-slate-100 pb-5">
           <CardTitle className="text-2xl tracking-tight text-slate-950">
             {reportType === 'purchase'
-              ? 'Purchase Report Table'
+              ? 'Mandi Purchase Register'
               : reportType === 'sales'
                 ? 'Sales Report Table'
                 : 'Payment History Table'}
