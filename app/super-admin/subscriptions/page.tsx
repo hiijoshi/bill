@@ -22,39 +22,38 @@ export default async function SuperAdminTraderSubscriptionsPage({
 
   const { traderId, state } = await searchParams
 
+  let bootstrap
+  let initialError: string | null = null
+
   try {
-    const bootstrap = await getSuperAdminSubscriptionBootstrap(prisma, {
+    bootstrap = await getSuperAdminSubscriptionBootstrap(prisma, {
       requestedTraderId: traderId,
       state
     })
-
-    return (
-      <SuperAdminTraderSubscriptionsClient
-        requestedTraderId={traderId}
-        requestedState={state}
-        initialTraders={bootstrap.traders}
-        initialPlans={bootstrap.plans}
-        initialSelectedTraderId={bootstrap.selectedTraderId}
-        initialDetail={bootstrap.detail}
-        initialSchemaReady={bootstrap.schemaReady}
-        initialSchemaWarning={bootstrap.schemaWarning}
-      />
-    )
   } catch (error) {
     console.error('super-admin subscriptions page bootstrap failed:', error)
-
-    return (
-      <SuperAdminTraderSubscriptionsClient
-        requestedTraderId={traderId}
-        requestedState={state}
-        initialTraders={[]}
-        initialPlans={[]}
-        initialSelectedTraderId=""
-        initialDetail={null}
-        initialSchemaReady={true}
-        initialSchemaWarning={null}
-        initialError="Failed to load subscription workspace. Please retry once."
-      />
-    )
+    initialError = 'Failed to load subscription workspace. Please retry once.'
+    bootstrap = {
+      traders: [],
+      plans: [],
+      selectedTraderId: '',
+      detail: null,
+      schemaReady: true,
+      schemaWarning: null
+    }
   }
+
+  return (
+    <SuperAdminTraderSubscriptionsClient
+      requestedTraderId={traderId}
+      requestedState={state}
+      initialTraders={bootstrap.traders}
+      initialPlans={bootstrap.plans}
+      initialSelectedTraderId={bootstrap.selectedTraderId}
+      initialDetail={bootstrap.detail}
+      initialSchemaReady={bootstrap.schemaReady}
+      initialSchemaWarning={bootstrap.schemaWarning}
+      initialError={initialError}
+    />
+  )
 }
