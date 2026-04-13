@@ -595,6 +595,16 @@ export default function StockAdjustmentClient({
                 <p className="text-sm text-slate-600">
                   Use this page for official stock corrections. Stock out is blocked beyond available balance, while stock in is open for inward correction.
                 </p>
+                {selectedProductMetrics ? (
+                  <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-slate-600">
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1">
+                      Current stock: <span className="font-semibold text-slate-900">{formatQuantity(selectedProductMetrics.currentStock)} {selectedProductMetrics.unit}</span>
+                    </span>
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1">
+                      Product: <span className="font-semibold text-slate-900">{selectedProductMetrics.productName}</span>
+                    </span>
+                  </div>
+                ) : null}
               </CardHeader>
               <CardContent>
                 <form onSubmit={handleSubmit} className="space-y-6">

@@ -1247,7 +1247,7 @@ export default function OperationsReportWorkspace({
     })
   }, [bankLedgerOpeningBalance, filteredBankLedger, showCompanyColumn])
 
-  const cashLedgerStatementRows = useMemo(() => {
+  const cashLedgerDisplayRows = useMemo<StatementDisplayRow[]>(() => {
     const sortedRows = [...filteredCashLedger].sort(
       (a, b) =>
         a.date.localeCompare(b.date) ||
@@ -1256,28 +1256,132 @@ export default function OperationsReportWorkspace({
     )
 
     let runningBalance = cashLedgerOpeningBalance
+    const rows: StatementDisplayRow[] = []
+    let pendingGroup:
+      | {
+          key: string
+          date: string
+          companyName: string
+          mode: string
+          debit: number
+          references: string[]
+          parties: string[]
+          count: number
+          balance: string
+        }
+      | null = null
 
-    return sortedRows.map((row) => {
-      runningBalance = roundAmount(runningBalance + Number(row.amountIn || 0) - Number(row.amountOut || 0))
-      return {
-        type: row.direction === 'IN' ? 'Receipt' : row.direction === 'OUT' ? 'Payment' : 'Transfer',
-        date: formatDateLabel(row.date),
-        voucherNo: row.refNo || row.billNo || '-',
-        particular: [
-          showCompanyColumn ? row.companyName : '',
-          row.partyName,
-          row.bankName ? `Counter: ${row.bankName}` : '',
-          row.mode,
-          row.txnRef || row.note
+    const flushPendingGroup = () => {
+      if (!pendingGroup) return
+
+      rows.push({
+        id: `cash-ledger-farmer-group:${pendingGroup.key}`,
+        date: formatDateLabel(pendingGroup.date),
+        badge: 'Cash Out',
+        badgeTone: 'rose',
+        icon: ArrowUpRight,
+        title: `Farmer Payment (${pendingGroup.count} entr${pendingGroup.count === 1 ? 'y' : 'ies'})`,
+        subtitle: pendingGroup.parties.slice(0, 3).join(', ') + (pendingGroup.parties.length > 3 ? ` +${pendingGroup.parties.length - 3} more` : ''),
+        flow: 'Cash consolidated payout',
+        reference: pendingGroup.references[0] || 'Consolidated',
+        debit: pendingGroup.debit,
+        credit: 0,
+        balance: pendingGroup.balance,
+        details: [
+          { label: 'Company', value: pendingGroup.companyName || '-' },
+          { label: 'Mode', value: pendingGroup.mode || '-' },
+          { label: 'Farmer Count', value: String(pendingGroup.parties.length) },
+          { label: 'Farmers', value: pendingGroup.parties.join(', ') || '-' },
+          { label: 'References', value: pendingGroup.references.join(', ') || '-' },
+          { label: 'Note', value: 'Consolidated farmer cash payment entries for faster ledger reading.' }
         ]
-          .filter(Boolean)
-          .join(' | '),
-        debit: row.amountOut > 0 ? numberText(row.amountOut) : '',
-        credit: row.amountIn > 0 ? numberText(row.amountIn) : '',
-        balance: formatLedgerBalance(runningBalance)
+      })
+
+      pendingGroup = null
+    }
+
+    for (const row of sortedRows) {
+      runningBalance = roundAmount(runningBalance + Number(row.amountIn || 0) - Number(row.amountOut || 0))
+      const normalizedBillType = String(row.billType || '').trim().toLowerCase()
+      const isFarmerCashPayment =
+        normalizedBillType === 'purchase payment' &&
+        row.direction === 'OUT' &&
+        Number(row.amountOut || 0) > 0 &&
+        Boolean(String(row.partyName || '').trim())
+
+      if (!isFarmerCashPayment) {
+        flushPendingGroup()
+        rows.push({
+          id: `${row.id}`,
+          date: formatDateLabel(row.date),
+          badge: row.direction === 'IN' ? 'Cash In' : row.direction === 'OUT' ? 'Cash Out' : 'Transfer',
+          badgeTone: row.direction === 'IN' ? 'emerald' : row.direction === 'OUT' ? 'rose' : 'amber',
+          icon: row.direction === 'IN' ? ArrowDownLeft : row.direction === 'OUT' ? ArrowUpRight : Wallet,
+          title: row.partyName || row.billType || 'Cash movement',
+          subtitle: row.bankName || 'Cash ledger',
+          flow: row.bankName ? `Cash → ${row.bankName}` : row.mode || 'Cash flow',
+          reference: row.refNo || row.billNo || '-',
+          debit: row.amountOut,
+          credit: row.amountIn,
+          balance: formatLedgerBalance(runningBalance),
+          details: [
+            { label: 'Company', value: row.companyName || '-' },
+            { label: 'Mode', value: row.mode || '-' },
+            { label: 'Transaction Ref', value: row.txnRef || '-' },
+            { label: 'Note', value: row.note || '-' }
+          ]
+        })
+        continue
       }
-    })
+
+      const groupKey = [
+        row.date,
+        showCompanyColumn ? row.companyName : '',
+        row.mode,
+        row.direction
+      ].join('|')
+
+      if (!pendingGroup || pendingGroup.key !== groupKey) {
+        flushPendingGroup()
+        pendingGroup = {
+          key: groupKey,
+          date: row.date,
+          companyName: row.companyName,
+          mode: row.mode,
+          debit: 0,
+          references: [],
+          parties: [],
+          count: 0,
+          balance: formatLedgerBalance(runningBalance)
+        }
+      }
+
+      pendingGroup.debit = roundAmount(pendingGroup.debit + Number(row.amountOut || 0))
+      pendingGroup.count += 1
+      pendingGroup.balance = formatLedgerBalance(runningBalance)
+      if (row.refNo || row.billNo) {
+        pendingGroup.references.push(row.refNo || row.billNo)
+      }
+      if (row.partyName) {
+        pendingGroup.parties.push(row.partyName)
+      }
+    }
+
+    flushPendingGroup()
+    return rows
   }, [cashLedgerOpeningBalance, filteredCashLedger, showCompanyColumn])
+
+  const cashLedgerStatementRows = useMemo(() => {
+    return cashLedgerDisplayRows.map((row) => ({
+      type: row.badge,
+      date: row.date,
+      voucherNo: row.reference || '-',
+      particular: [row.title, row.subtitle, row.flow].filter(Boolean).join(' | '),
+      debit: row.debit > 0 ? numberText(row.debit) : '',
+      credit: row.credit > 0 ? numberText(row.credit) : '',
+      balance: row.balance
+    }))
+  }, [cashLedgerDisplayRows])
 
   const selectedBankLabel = bankFilter === 'all' ? 'All Banks' : bankFilter
   const companyNameById = useMemo(
@@ -1478,7 +1582,7 @@ export default function OperationsReportWorkspace({
         {
           key: 'count',
           label: 'Count',
-          value: String(filteredCashLedger.length),
+          value: String(cashLedgerDisplayRows.length),
           hint: 'Cash entries in view',
           tone: 'amber',
           icon: Activity,
@@ -1580,6 +1684,7 @@ export default function OperationsReportWorkspace({
     bankLedgerTotalCredit,
     bankLedgerTotalDebit,
     cashLedgerClosingBalance,
+    cashLedgerDisplayRows.length,
     cashLedgerOpeningBalance,
     cashLedgerTotalCredit,
     cashLedgerTotalDebit,
@@ -1643,33 +1748,12 @@ export default function OperationsReportWorkspace({
         { label: 'Note', value: row.note || '-' }
       ]
     })),
-    'cash-ledger': filteredCashLedger.map((row, index) => ({
-      id: `${row.id}-${index}`,
-      date: formatDateLabel(row.date),
-      badge: row.direction === 'IN' ? 'Cash In' : row.direction === 'OUT' ? 'Cash Out' : 'Transfer',
-      badgeTone: row.direction === 'IN' ? 'emerald' : row.direction === 'OUT' ? 'rose' : 'amber',
-      icon: row.direction === 'IN' ? ArrowDownLeft : row.direction === 'OUT' ? ArrowUpRight : Wallet,
-      title: row.partyName || row.billType || 'Cash movement',
-      subtitle: row.bankName || 'Cash ledger',
-      flow: row.bankName ? `Cash → ${row.bankName}` : row.mode || 'Cash flow',
-      reference: row.refNo || row.billNo || '-',
-      debit: row.amountOut,
-      credit: row.amountIn,
-      balance: cashLedgerStatementRows[index]?.balance || formatLedgerBalance(cashLedgerOpeningBalance),
-      details: [
-        { label: 'Company', value: row.companyName || '-' },
-        { label: 'Mode', value: row.mode || '-' },
-        { label: 'Transaction Ref', value: row.txnRef || '-' },
-        { label: 'Note', value: row.note || '-' }
-      ]
-    })),
+    'cash-ledger': cashLedgerDisplayRows,
   }), [
     bankLedgerOpeningBalance,
     bankLedgerStatementRows,
-    cashLedgerOpeningBalance,
-    cashLedgerStatementRows,
+    cashLedgerDisplayRows,
     filteredBankLedger,
-    filteredCashLedger,
     filteredLedgerRows,
   ])
 
@@ -2220,7 +2304,7 @@ export default function OperationsReportWorkspace({
         </div>
 	      </section>
 
-      <section className="sticky top-4 z-20">
+      <section className="sticky top-0 z-20">
         <div className="rounded-[1.8rem] border border-slate-200/80 bg-white/90 p-5 shadow-[0_32px_70px_-46px_rgba(15,23,42,0.35)] backdrop-blur-xl md:p-6">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -3149,7 +3233,7 @@ export default function OperationsReportWorkspace({
           creditLabel="Credit"
           creditValue={currencyText(cashLedgerTotalCredit)}
           countLabel="Count"
-          countValue={String(filteredCashLedger.length)}
+          countValue={String(cashLedgerDisplayRows.length)}
           emptyMessage="No cash ledger rows found for this range."
           expandedRows={expandedStatementRows}
           onToggleRow={toggleStatementRow}

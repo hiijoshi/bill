@@ -36,12 +36,6 @@ const menuItems: MenuItem[] = [
     children: [],
   },
   {
-    title: 'Subscription',
-    href: '/main/subscription',
-    icon: Lock,
-    children: [],
-  },
-  {
     title: 'Master',
     icon: Settings,
     children: [
@@ -91,7 +85,7 @@ const menuItems: MenuItem[] = [
       { title: 'Record Sales Receipt', href: '/payment/sales/entry', permissionModule: 'PAYMENTS' },
       { title: 'Record Cash / Bank Payment', href: '/payment/cash-bank/entry', permissionModule: 'PAYMENTS' },
       { title: 'Journal Voucher Entry', href: '/payment/journal-voucher/entry', permissionModule: 'PAYMENTS' },
-      { title: 'Record Self Transfer', href: '/payment/self-transfer/entry', permissionModule: 'PAYMENTS' },
+      { title: 'Record Self Transfer', href: '/payment/cash-bank/entry?entry=self-transfer', permissionModule: 'PAYMENTS' },
       { title: 'Upload Bank Statement', href: '/payment/bank-statement/upload', permissionModule: 'PAYMENTS' },
       { title: 'Payment History', href: '/payment/dashboard', permissionModule: 'PAYMENTS' },
     ],
@@ -111,6 +105,12 @@ const menuItems: MenuItem[] = [
       { title: 'Cash Ledger', href: '/reports/main?reportType=operations&view=cash-ledger', permissionModule: 'REPORTS' },
       { title: 'Bank Ledger', href: '/reports/main?reportType=operations&view=bank-ledger', permissionModule: 'REPORTS' },
     ],
+  },
+  {
+    title: 'Subscription',
+    href: '/main/subscription',
+    icon: Lock,
+    children: [],
   },
 ]
 

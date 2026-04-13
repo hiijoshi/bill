@@ -385,6 +385,23 @@ function PurchaseEditPageContent() {
     }
   }
 
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
+      event.preventDefault()
+      if (loading) return
+
+      const form = document.querySelector('form')
+      if (!form) return
+      form.requestSubmit()
+    }
+
+    window.addEventListener('keydown', handleShortcut)
+    return () => {
+      window.removeEventListener('keydown', handleShortcut)
+    }
+  }, [loading])
+
   if (loading) {
     return (
       <AppLoaderShell
@@ -482,13 +499,13 @@ function PurchaseEditPageContent() {
 
                   {/* Marka Number */}
                   <div>
-                    <Label htmlFor="markaNumber">Marka No.</Label>
+                    <Label htmlFor="markaNumber">मार्का नं.</Label>
                     <Input
                       id="markaNumber"
                       list="purchaseEditMarkaOptions"
                       value={markaNumber}
                       onChange={(e) => setMarkaNumber(e.target.value.toUpperCase())}
-                      placeholder="Enter Marka Number"
+                      placeholder="मार्का नंबर दर्ज करें"
                     />
                     {markas.length > 0 ? (
                       <datalist id="purchaseEditMarkaOptions">
@@ -672,6 +689,9 @@ function PurchaseEditPageContent() {
 
                 {/* Submit Button */}
                 <div className="flex justify-end space-x-4">
+                  <p className="mr-auto flex items-center text-xs text-slate-500">
+                    Shortcut: <span className="ml-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium text-slate-700">Ctrl / Cmd + S</span>
+                  </p>
                   <Button type="button" variant="outline" onClick={() => router.back()}>
                     Cancel
                   </Button>

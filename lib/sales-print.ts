@@ -33,6 +33,11 @@ export interface SalesBillPrintData {
   companyName: string
   companyAddress: string
   companyPhone: string
+  companyBankName: string
+  companyBankBranch: string
+  companyBankIfsc: string
+  companyBankAccountNumber: string
+  companyBankDisplay: string
   partyName: string
   partyAddress: string
   partyContact: string
@@ -110,6 +115,13 @@ type SalesPrintCompanySource = {
   name?: unknown
   address?: unknown
   phone?: unknown
+  mandiAccountNumber?: unknown
+  banks?: Array<{
+    name?: unknown
+    branch?: unknown
+    ifscCode?: unknown
+    accountNumber?: unknown
+  }> | null
 }
 
 type SalesBillPrintSource = {
@@ -164,6 +176,32 @@ function toDateValue(value: unknown): string | Date | null {
     return String(value)
   }
   return null
+}
+
+function resolveCompanyBankDetails(company: SalesPrintCompanySource | null | undefined) {
+  const firstBank = Array.isArray(company?.banks) ? company?.banks[0] : null
+  const companyBankName = toStringValue(firstBank?.name).trim()
+  const companyBankBranch = toStringValue(firstBank?.branch).trim()
+  const companyBankIfsc = toStringValue(firstBank?.ifscCode).trim().toUpperCase()
+  const companyBankAccountNumber =
+    toStringValue(firstBank?.accountNumber).trim() || toStringValue(company?.mandiAccountNumber).trim()
+
+  const companyBankDisplay = [
+    companyBankName,
+    companyBankBranch ? `Branch: ${companyBankBranch}` : '',
+    companyBankAccountNumber ? `A/c: ${companyBankAccountNumber}` : '',
+    companyBankIfsc ? `IFSC: ${companyBankIfsc}` : ''
+  ]
+    .filter(Boolean)
+    .join(' | ')
+
+  return {
+    companyBankName,
+    companyBankBranch,
+    companyBankIfsc,
+    companyBankAccountNumber,
+    companyBankDisplay
+  }
 }
 
 export function formatDisplayDate(value: string | Date | null | undefined): string {
@@ -236,6 +274,7 @@ export function mapSalesBillToPrintData(bill: SalesBillPrintSource | null | unde
   const additionalChargeSummary = summarizeSalesAdditionalCharges(additionalCharges)
   const totalBags = items.reduce((sum, item) => sum + item.bags, 0)
   const totalWeightQt = items.reduce((sum, item) => sum + item.totalWeightQt, 0)
+  const companyBankDetails = resolveCompanyBankDetails(bill?.company)
 
   return {
     id: String(bill?.id || ''),
@@ -252,6 +291,11 @@ export function mapSalesBillToPrintData(bill: SalesBillPrintSource | null | unde
     companyName: toStringValue(bill?.company?.name),
     companyAddress: sanitizePrintCompanyAddress(bill?.company?.address),
     companyPhone: toStringValue(bill?.company?.phone),
+    companyBankName: companyBankDetails.companyBankName,
+    companyBankBranch: companyBankDetails.companyBankBranch,
+    companyBankIfsc: companyBankDetails.companyBankIfsc,
+    companyBankAccountNumber: companyBankDetails.companyBankAccountNumber,
+    companyBankDisplay: companyBankDetails.companyBankDisplay,
     partyName: toStringValue(bill?.party?.name),
     partyAddress: toStringValue(bill?.party?.address),
     partyContact: toStringValue(bill?.party?.phone1),

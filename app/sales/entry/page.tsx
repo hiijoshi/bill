@@ -1211,18 +1211,6 @@ export default function SalesEntryPage() {
     await saveSalesBill(requestData)
   }
 
-  if (loading) {
-    return (
-      <AppLoaderShell
-        kind="sales"
-        companyId={companyId}
-        fullscreen
-        title="Preparing sales entry"
-        message="Loading parties, sales items, transport choices, and invoice totals."
-      />
-    )
-  }
-
   const itemTotals = calculateItemTotals()
   const displayedRate =
     currentItem.pricingMode === 'amount'
@@ -1257,6 +1245,35 @@ export default function SalesEntryPage() {
     loadedSplitSummary && String(loadedSplitSummary.invoiceKind || 'regular') !== 'regular'
   )
 
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
+      event.preventDefault()
+      if (loading || submitting || isSplitManagedBill) return
+
+      const form = document.querySelector('form')
+      if (!form) return
+      form.requestSubmit()
+    }
+
+    window.addEventListener('keydown', handleShortcut)
+    return () => {
+      window.removeEventListener('keydown', handleShortcut)
+    }
+  }, [isSplitManagedBill, loading, submitting])
+
+  if (loading) {
+    return (
+      <AppLoaderShell
+        kind="sales"
+        companyId={companyId}
+        fullscreen
+        title="Preparing sales entry"
+        message="Loading parties, sales items, transport choices, and invoice totals."
+      />
+    )
+  }
+
   const handleRiskContinue = async () => {
     if (!pendingRequestData) {
       setRiskDialogOpen(false)
@@ -1289,6 +1306,9 @@ export default function SalesEntryPage() {
                 </span>
                 <span className="inline-flex rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-semibold text-slate-600">
                   Risk: {hasRisk ? 'Review required' : 'Within limits'}
+                </span>
+                <span className="inline-flex rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-semibold text-slate-600">
+                  Shortcut: Ctrl / Cmd + S
                 </span>
               </>
             }

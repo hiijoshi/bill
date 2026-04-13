@@ -65,6 +65,8 @@ export default async function PaymentDashboardPage({ searchParams }: PageProps) 
         status: String(payment.status || 'paid') as 'pending' | 'paid',
         txnRef: typeof payment.txnRef === 'string' ? payment.txnRef : undefined,
         note: typeof payment.note === 'string' ? payment.note : undefined,
+        bankNameSnapshot: typeof payment.bankNameSnapshot === 'string' ? payment.bankNameSnapshot : undefined,
+        bankBranchSnapshot: typeof payment.bankBranchSnapshot === 'string' ? payment.bankBranchSnapshot : undefined,
         createdAt:
           payment.createdAt instanceof Date ? payment.createdAt.toISOString() : String(payment.createdAt || '')
       }))
