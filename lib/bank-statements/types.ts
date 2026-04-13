@@ -91,6 +91,11 @@ export type NormalizedStatementTransaction = {
   postedPaymentId: string | null
   postedLedgerEntryId: string | null
   postedAt: string | null
+  suggestedAccountingHeadId: string | null
+  suggestedPartyId: string | null
+  suggestedSupplierId: string | null
+  suggestedVoucherType: BankStatementVoucherType | null
+  suggestedReason: string | null
   reviewStatus: BankStatementReviewStatus
   reviewedByUserId: string | null
   reviewedAt: string | null
