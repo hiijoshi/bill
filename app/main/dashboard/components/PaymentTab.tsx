@@ -309,7 +309,7 @@ export default function PaymentTab({
             <Upload className="w-4 h-4 mr-2" />
             Upload Bank Statement
           </Button>
-          <Button onClick={() => router.push('/payment/self-transfer/entry')}>
+          <Button onClick={() => router.push('/payment/cash-bank/entry?entry=self-transfer')}>
             <Plus className="w-4 h-4 mr-2" />
             Self Transfer
           </Button>

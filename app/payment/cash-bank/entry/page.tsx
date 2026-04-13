@@ -1,8 +1,8 @@
 'use client'
 
 import { Suspense, useEffect, useMemo, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { ArrowLeft, Building2, Landmark, Wallet } from 'lucide-react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { ArrowLeft, Building2, Landmark, Repeat, Wallet } from 'lucide-react'
 
 import DashboardLayout from '@/app/components/DashboardLayout'
 import { AppLoaderShell } from '@/components/loaders/app-loader-shell'
@@ -13,7 +13,9 @@ import { Label } from '@/components/ui/label'
 import { SearchableSelect, type SearchableSelectOption } from '@/components/ui/searchable-select'
 import {
   buildCashBankPaymentReference,
-  CASH_BANK_PAYMENT_TYPE
+  buildSelfTransferReference,
+  CASH_BANK_PAYMENT_TYPE,
+  SELF_TRANSFER_PAYMENT_TYPE
 } from '@/lib/payment-entry-types'
 import {
   DEFAULT_PAYMENT_MODES,
@@ -69,6 +71,7 @@ type BankRecord = {
 
 type PaymentModeRecord = PaymentModeOption
 type ReferenceType = 'accounting-head' | 'party' | 'supplier'
+type EntryMode = 'cash-bank' | 'self-transfer'
 type SelectedReference =
   | { referenceType: 'accounting-head'; id: string }
   | { referenceType: 'party'; id: string }
@@ -128,10 +131,14 @@ export default function CashBankPaymentEntryPage() {
 
 function CashBankPaymentEntryPageContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [companyId, setCompanyId] = useState('')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const { financialYear } = useClientFinancialYear()
+  const [entryMode, setEntryMode] = useState<EntryMode>(
+    searchParams.get('entry') === 'self-transfer' ? 'self-transfer' : 'cash-bank'
+  )
 
   const [paymentDate, setPaymentDate] = useState('')
   const [mode, setMode] = useState('cash')
@@ -139,6 +146,11 @@ function CashBankPaymentEntryPageContent() {
   const [selectedBankId, setSelectedBankId] = useState('')
   const [amount, setAmount] = useState('')
   const [remark, setRemark] = useState('')
+  const [transferDate, setTransferDate] = useState('')
+  const [fromAccount, setFromAccount] = useState('cash')
+  const [toAccount, setToAccount] = useState('')
+  const [transferAmount, setTransferAmount] = useState('')
+  const [transferRemark, setTransferRemark] = useState('')
 
   const [bankNameSnapshot, setBankNameSnapshot] = useState('')
   const [bankBranchSnapshot, setBankBranchSnapshot] = useState('')
@@ -153,7 +165,12 @@ function CashBankPaymentEntryPageContent() {
 
   useEffect(() => {
     setPaymentDate(getDefaultTransactionDateInput(financialYear))
+    setTransferDate(getDefaultTransactionDateInput(financialYear))
   }, [financialYear?.id])
+
+  useEffect(() => {
+    setEntryMode(searchParams.get('entry') === 'self-transfer' ? 'self-transfer' : 'cash-bank')
+  }, [searchParams])
 
   useEffect(() => {
     let cancelled = false
@@ -269,6 +286,7 @@ function CashBankPaymentEntryPageContent() {
         setSupplierOptions(payload.suppliers)
         setBankOptions(payload.banks)
         setPaymentModes(payload.paymentModes)
+        setToAccount((current) => current || payload.banks[0]?.id || '')
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -359,6 +377,30 @@ function CashBankPaymentEntryPageContent() {
         keywords: [bank.name, bank.branch, bank.ifscCode, bank.accountNumber]
       })),
     [bankOptions]
+  )
+
+  const transferOptions = useMemo<SearchableSelectOption[]>(
+    () => [
+      { value: 'cash', label: 'Cash', keywords: ['cash', 'nakad'] },
+      ...bankOptions.map((bank) => ({
+        value: bank.id,
+        label: bank.branch ? `${bank.name} (${bank.branch})` : bank.name,
+        description: [bank.branch, bank.ifscCode].filter(Boolean).join(' | ') || 'Bank',
+        keywords: [bank.name, bank.branch, bank.ifscCode, bank.accountNumber]
+      }))
+    ],
+    [bankOptions]
+  )
+
+  const transferLabelMap = useMemo(
+    () =>
+      new Map(
+        transferOptions.map((option) => [
+          option.value,
+          option.label
+        ])
+      ),
+    [transferOptions]
   )
 
   const selectedReference = useMemo(() => parseReferenceValue(selectedReferenceValue), [selectedReferenceValue])
@@ -490,13 +532,115 @@ function CashBankPaymentEntryPageContent() {
     }
   }
 
+  const updateEntryMode = (nextMode: EntryMode) => {
+    setEntryMode(nextMode)
+    const currentUrl = new URL(window.location.href)
+    if (nextMode === 'self-transfer') {
+      currentUrl.searchParams.set('entry', 'self-transfer')
+    } else {
+      currentUrl.searchParams.delete('entry')
+    }
+    window.history.replaceState({}, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`)
+  }
+
+  const handleTransferSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+
+    if (!companyId) {
+      alert('Company not selected.')
+      return
+    }
+
+    if (!fromAccount || !toAccount) {
+      alert('Select both From and To accounts.')
+      return
+    }
+
+    if (fromAccount === toAccount) {
+      alert('From and To cannot be the same.')
+      return
+    }
+
+    const normalizedAmount = Number(transferAmount)
+    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+      alert('Enter a valid amount.')
+      return
+    }
+
+    if (!transferDate) {
+      alert('Date is required.')
+      return
+    }
+
+    setSubmitting(true)
+
+    try {
+      const fromLabel = transferLabelMap.get(fromAccount) || 'From'
+      const toLabel = transferLabelMap.get(toAccount) || 'To'
+
+      const response = await fetch('/api/payments', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          companyId,
+          billType: SELF_TRANSFER_PAYMENT_TYPE,
+          billId: buildSelfTransferReference(fromAccount, toAccount),
+          payDate: transferDate,
+          amount: normalizedAmount,
+          mode: 'transfer',
+          bankNameSnapshot: fromLabel,
+          bankBranchSnapshot: toLabel,
+          note: transferRemark.trim() || null,
+          status: 'paid'
+        })
+      })
+
+      const payload = await response.json().catch(() => ({} as { error?: string }))
+      if (!response.ok) {
+        throw new Error(payload.error || 'Failed to record self transfer')
+      }
+
+      invalidateAppDataCaches(companyId, ['payments'])
+      notifyAppDataChanged({ companyId, scopes: ['payments'] })
+      alert('Self transfer recorded successfully.')
+      router.push('/payment/dashboard')
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Failed to record self transfer')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
+      event.preventDefault()
+      if (loading || submitting) return
+
+      const selector =
+        entryMode === 'self-transfer'
+          ? 'form[data-entry-mode="self-transfer"]'
+          : 'form[data-entry-mode="cash-bank"]'
+      const form = document.querySelector<HTMLFormElement>(selector)
+      if (!form) return
+      form.requestSubmit()
+    }
+
+    window.addEventListener('keydown', handleShortcut)
+    return () => {
+      window.removeEventListener('keydown', handleShortcut)
+    }
+  }, [entryMode, loading, submitting])
+
   if (loading) {
     return (
       <AppLoaderShell
         kind="bank"
         companyId={companyId}
-        title="Preparing cash and bank payment"
-        message="Loading payment modes, bank master details, and account references."
+        title="Preparing payment entry workspace"
+        message="Loading payment modes, bank master details, and transfer references."
       />
     )
   }
@@ -507,9 +651,9 @@ function CashBankPaymentEntryPageContent() {
         <div className="mx-auto max-w-4xl">
           <div className="mb-6 flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold">Record Cash / Bank Payment</h1>
+              <h1 className="text-3xl font-bold">Cash, Bank, and Transfer Entry</h1>
               <p className="mt-1 text-sm text-slate-600">
-                Store direct outgoing payments to accounting heads, parties, or suppliers with one combined reference picker.
+                Use one shared payment workspace for direct cash or bank payments and internal self transfers.
               </p>
             </div>
             <Button variant="outline" onClick={() => router.push('/payment/dashboard')}>
@@ -518,15 +662,37 @@ function CashBankPaymentEntryPageContent() {
             </Button>
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Wallet className="h-5 w-5" />
-                Payment Details
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleSubmit} className="grid gap-5">
+          <div className="mb-6 inline-flex rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
+            <Button
+              type="button"
+              variant={entryMode === 'cash-bank' ? 'default' : 'ghost'}
+              className="rounded-xl"
+              onClick={() => updateEntryMode('cash-bank')}
+            >
+              <Wallet className="mr-2 h-4 w-4" />
+              Cash / Bank Payment
+            </Button>
+            <Button
+              type="button"
+              variant={entryMode === 'self-transfer' ? 'default' : 'ghost'}
+              className="rounded-xl"
+              onClick={() => updateEntryMode('self-transfer')}
+            >
+              <Repeat className="mr-2 h-4 w-4" />
+              Self Transfer
+            </Button>
+          </div>
+
+          {entryMode === 'cash-bank' ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Wallet className="h-5 w-5" />
+                  Payment Details
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <form data-entry-mode="cash-bank" onSubmit={handleSubmit} className="grid gap-5">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="grid gap-2">
                     <Label htmlFor="paymentDate">Date</Label>
@@ -694,35 +860,128 @@ function CashBankPaymentEntryPageContent() {
                   </div>
                 </div>
 
-                <div className="flex justify-end gap-2 pt-2">
-                  {!selectedReference || selectedReference.referenceType === 'accounting-head' ? (
-                    accountingHeadOptions.length === 0 ? (
-                      <Button type="button" variant="outline" onClick={() => router.push('/master/accounting-head')}>
-                        <Building2 className="mr-2 h-4 w-4" />
-                        Add Accounting Head
+                  <div className="flex justify-end gap-2 pt-2">
+                    <p className="mr-auto flex items-center text-xs text-slate-500">
+                      Shortcut: <span className="ml-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium text-slate-700">Ctrl / Cmd + S</span>
+                    </p>
+                    {!selectedReference || selectedReference.referenceType === 'accounting-head' ? (
+                      accountingHeadOptions.length === 0 ? (
+                        <Button type="button" variant="outline" onClick={() => router.push('/master/accounting-head')}>
+                          <Building2 className="mr-2 h-4 w-4" />
+                          Add Accounting Head
+                        </Button>
+                      ) : null
+                    ) : null}
+                    {selectedReference?.referenceType === 'party' && partyOptions.length === 0 ? (
+                      <Button type="button" variant="outline" onClick={() => router.push('/master/party')}>
+                        Add Party
                       </Button>
-                    ) : null
-                  ) : null}
-                  {selectedReference?.referenceType === 'party' && partyOptions.length === 0 ? (
-                    <Button type="button" variant="outline" onClick={() => router.push('/master/party')}>
-                      Add Party
+                    ) : null}
+                    {selectedReference?.referenceType === 'supplier' && supplierOptions.length === 0 ? (
+                      <Button type="button" variant="outline" onClick={() => router.push('/master/supplier')}>
+                        Add Supplier
+                      </Button>
+                    ) : null}
+                    <Button type="button" variant="outline" onClick={() => router.push('/payment/dashboard')}>
+                      Cancel
                     </Button>
-                  ) : null}
-                  {selectedReference?.referenceType === 'supplier' && supplierOptions.length === 0 ? (
-                    <Button type="button" variant="outline" onClick={() => router.push('/master/supplier')}>
-                      Add Supplier
+                    <Button type="submit" disabled={submitting}>
+                      {submitting ? 'Saving...' : 'Save Payment'}
                     </Button>
-                  ) : null}
-                  <Button type="button" variant="outline" onClick={() => router.push('/payment/dashboard')}>
-                    Cancel
-                  </Button>
-                  <Button type="submit" disabled={submitting}>
-                    {submitting ? 'Saving...' : 'Save Payment'}
-                  </Button>
-                </div>
-              </form>
-            </CardContent>
-          </Card>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Repeat className="h-5 w-5" />
+                  Transfer Details
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <form data-entry-mode="self-transfer" onSubmit={handleTransferSubmit} className="grid gap-5">
+                  <div className="grid gap-2">
+                    <Label htmlFor="transferDate">Date</Label>
+                    <Input
+                      id="transferDate"
+                      type="date"
+                      value={transferDate}
+                      onChange={(event) => setTransferDate(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="grid gap-2">
+                      <Label htmlFor="fromAccount">From</Label>
+                      <SearchableSelect
+                        id="fromAccount"
+                        value={fromAccount}
+                        onValueChange={setFromAccount}
+                        options={transferOptions}
+                        placeholder="Select source"
+                        searchPlaceholder="Search source..."
+                        emptyText="No accounts found."
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="toAccount">To</Label>
+                      <SearchableSelect
+                        id="toAccount"
+                        value={toAccount}
+                        onValueChange={setToAccount}
+                        options={transferOptions}
+                        placeholder="Select destination"
+                        searchPlaceholder="Search destination..."
+                        emptyText="No accounts found."
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="grid gap-2">
+                      <Label htmlFor="transferAmount">Amount</Label>
+                      <Input
+                        id="transferAmount"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={transferAmount}
+                        onChange={(event) => setTransferAmount(toNonNegativeAmount(event.target.value))}
+                        placeholder="Enter amount"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="transferRemark">Remark</Label>
+                      <Input
+                        id="transferRemark"
+                        value={transferRemark}
+                        onChange={(event) => setTransferRemark(event.target.value)}
+                        placeholder="Enter remark"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                    Internal transfer entries move funds between cash and bank accounts without duplicating external payment history.
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <p className="mr-auto flex items-center text-xs text-slate-500">
+                      Shortcut: <span className="ml-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium text-slate-700">Ctrl / Cmd + S</span>
+                    </p>
+                    <Button type="button" variant="outline" onClick={() => router.push('/payment/dashboard')}>
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={submitting}>
+                      {submitting ? 'Saving...' : 'Save Transfer'}
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     </DashboardLayout>
