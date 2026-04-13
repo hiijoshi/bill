@@ -80,6 +80,7 @@ const OCR_WORKER_IDLE_TIMEOUT_MS = 2 * 60_000
 const OCR_MAX_IMAGE_EDGE_PX = 1800
 const OCR_MAX_IMAGE_PIXELS = 2_400_000
 const PDFJS_WORKER_MODULE_SPECIFIER = 'pdfjs-dist/legacy/build/pdf.worker.mjs'
+const TESSERACT_NODE_WORKER_SPECIFIER = 'tesseract.js/src/worker-script/node/index.js'
 
 type StructuredStatementCsvRow = {
   row: CsvImportRow
@@ -563,9 +564,18 @@ async function getSharedOcrWorker(): Promise<TesseractWorker> {
   if (!ocrWorkerReady) {
     ocrWorkerReady = (async () => {
       const tesseractModule = await import('tesseract.js')
-      const worker = await tesseractModule.createWorker('eng', tesseractModule.OEM.LSTM_ONLY, {
+      const requireFromApp = createRequire(import.meta.url)
+      const workerOptions: Record<string, unknown> = {
         logger: () => undefined
-      })
+      }
+
+      try {
+        workerOptions.workerPath = requireFromApp.resolve(TESSERACT_NODE_WORKER_SPECIFIER)
+      } catch {
+        // Fall back to tesseract.js default worker resolution if explicit resolution is unavailable.
+      }
+
+      const worker = await tesseractModule.createWorker('eng', tesseractModule.OEM.LSTM_ONLY, workerOptions)
 
       await worker.setParameters({
         preserve_interword_spaces: '1',
