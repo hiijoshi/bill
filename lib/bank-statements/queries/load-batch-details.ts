@@ -11,6 +11,21 @@ function parseJson<T>(value: string | null | undefined): T | null {
   }
 }
 
+function normalizeText(value: string | null | undefined) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function scoreContains(haystack: string, needle: string) {
+  if (!haystack || !needle) return 0
+  if (haystack.includes(needle)) return Math.min(needle.length * 2, 24)
+  const parts = needle.split(' ').filter((part) => part.length > 2)
+  return parts.reduce((sum, part) => sum + (haystack.includes(part) ? 3 : 0), 0)
+}
+
 export async function loadBankStatementBatchDetails(companyId: string, batchId: string) {
   const batch = await prisma.bankStatementBatch.findFirst({
     where: {
@@ -69,7 +84,65 @@ export async function loadBankStatementBatchDetails(companyId: string, batchId: 
     }
   })
 
+  const [heads, parties, suppliers] = await Promise.all([
+    prisma.accountingHead.findMany({
+      where: { companyId },
+      select: { id: true, name: true, category: true }
+    }),
+    prisma.party.findMany({
+      where: { companyId },
+      select: { id: true, name: true, type: true }
+    }),
+    prisma.supplier.findMany({
+      where: { companyId },
+      select: { id: true, name: true }
+    })
+  ])
+
   const normalizedRows: Array<NormalizedStatementTransaction & { matchCandidates: BankStatementMatchCandidate[] }> = rows.map((row) => ({
+    ...(() => {
+      const descriptionText = normalizeText(row.description)
+      const bestHead = heads
+        .map((head) => ({
+          id: head.id,
+          score: scoreContains(descriptionText, normalizeText(head.name)) + scoreContains(descriptionText, normalizeText(head.category))
+        }))
+        .sort((left, right) => right.score - left.score)[0]
+      const bestParty = parties
+        .map((party) => ({
+          id: party.id,
+          score: scoreContains(descriptionText, normalizeText(party.name))
+        }))
+        .sort((left, right) => right.score - left.score)[0]
+      const bestSupplier = suppliers
+        .map((supplier) => ({
+          id: supplier.id,
+          score: scoreContains(descriptionText, normalizeText(supplier.name))
+        }))
+        .sort((left, right) => right.score - left.score)[0]
+
+      const suggestedAccountingHeadId = row.draftAccountingHeadId || (bestHead && bestHead.score >= 8 ? bestHead.id : null)
+      const suggestedPartyId = row.draftPartyId || (bestParty && bestParty.score >= 8 ? bestParty.id : null)
+      const suggestedSupplierId = row.draftSupplierId || (!suggestedPartyId && bestSupplier && bestSupplier.score >= 8 ? bestSupplier.id : null)
+      const suggestedVoucherType = (
+        row.draftVoucherType ||
+        (row.direction === 'credit' ? 'cash_bank_receipt' : 'cash_bank_payment')
+      ) as NormalizedStatementTransaction['suggestedVoucherType']
+
+      const suggestedReasonParts = [
+        suggestedAccountingHeadId ? 'accounting head by narration' : null,
+        suggestedPartyId ? 'party by narration' : null,
+        suggestedSupplierId ? 'supplier by narration' : null
+      ].filter(Boolean)
+
+      return {
+        suggestedAccountingHeadId,
+        suggestedPartyId,
+        suggestedSupplierId,
+        suggestedVoucherType,
+        suggestedReason: suggestedReasonParts.length > 0 ? suggestedReasonParts.join(', ') : null
+      }
+    })(),
     id: row.id,
     companyId: row.companyId,
     uploadBatchId: row.uploadBatchId,
