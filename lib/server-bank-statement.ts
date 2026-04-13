@@ -1,7 +1,10 @@
 import 'server-only'
 
 import { createHash } from 'crypto'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { getCsvValue, normalizeCsvHeader, parseCsvObjects, parseCsvRows, type CsvImportRow } from '@/lib/master-csv'
@@ -595,41 +598,69 @@ async function getSharedOcrWorker(): Promise<TesseractWorker> {
 }
 
 async function optimizeImageBufferForOcr(buffer: Buffer): Promise<Buffer> {
-  const canvasModule = await import('@napi-rs/canvas')
-  const image = await canvasModule.loadImage(buffer)
+  try {
+    const canvasModule = await import('@napi-rs/canvas')
+    const image = await canvasModule.loadImage(buffer)
 
-  const sourceWidth = Math.max(1, Math.round(Number(image.width || 0)))
-  const sourceHeight = Math.max(1, Math.round(Number(image.height || 0)))
-  if (!sourceWidth || !sourceHeight) return buffer
+    const sourceWidth = Math.max(1, Math.round(Number(image.width || 0)))
+    const sourceHeight = Math.max(1, Math.round(Number(image.height || 0)))
+    if (!sourceWidth || !sourceHeight) return buffer
 
-  const longestEdge = Math.max(sourceWidth, sourceHeight)
-  const totalPixels = sourceWidth * sourceHeight
-  const edgeScale = OCR_MAX_IMAGE_EDGE_PX / longestEdge
-  const areaScale = Math.sqrt(OCR_MAX_IMAGE_PIXELS / totalPixels)
-  const scale = Math.min(1, edgeScale, areaScale)
+    const longestEdge = Math.max(sourceWidth, sourceHeight)
+    const totalPixels = sourceWidth * sourceHeight
+    const edgeScale = OCR_MAX_IMAGE_EDGE_PX / longestEdge
+    const areaScale = Math.sqrt(OCR_MAX_IMAGE_PIXELS / totalPixels)
+    const scale = Math.min(1, edgeScale, areaScale)
 
-  if (scale >= 0.995) {
+    if (scale >= 0.995) {
+      return buffer
+    }
+
+    const targetWidth = Math.max(1, Math.round(sourceWidth * scale))
+    const targetHeight = Math.max(1, Math.round(sourceHeight * scale))
+    const canvas = canvasModule.createCanvas(targetWidth, targetHeight)
+    const context = canvas.getContext('2d')
+
+    context.imageSmoothingEnabled = true
+    context.imageSmoothingQuality = 'high'
+    context.filter = 'grayscale(1) contrast(1.08)'
+    context.drawImage(image, 0, 0, targetWidth, targetHeight)
+
+    return canvas.toBuffer('image/jpeg', 0.82)
+  } catch (error) {
+    console.warn('[bank-statements] image optimization skipped', {
+      message: error instanceof Error ? error.message : String(error)
+    })
     return buffer
   }
+}
 
-  const targetWidth = Math.max(1, Math.round(sourceWidth * scale))
-  const targetHeight = Math.max(1, Math.round(sourceHeight * scale))
-  const canvas = canvasModule.createCanvas(targetWidth, targetHeight)
-  const context = canvas.getContext('2d')
+async function writeOcrTempImage(buffer: Buffer) {
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), 'mbill-ocr-'))
+  const fingerprint = createHash('sha1').update(buffer).digest('hex').slice(0, 16)
+  const filePath = path.join(tempDirectory, `${fingerprint}.jpg`)
 
-  context.imageSmoothingEnabled = true
-  context.imageSmoothingQuality = 'high'
-  context.filter = 'grayscale(1) contrast(1.08)'
-  context.drawImage(image, 0, 0, targetWidth, targetHeight)
+  await writeFile(filePath, buffer)
 
-  return canvas.toBuffer('image/jpeg', 0.82)
+  return {
+    filePath,
+    cleanup: async () => {
+      await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined)
+    }
+  }
 }
 
 async function recognizeTextWithSharedOcrWorker(buffer: Buffer): Promise<string> {
   const task = ocrWorkerQueue.then(async () => {
     const worker = await getSharedOcrWorker()
-    const result = await worker.recognize(buffer)
-    return normalizeText(result.data?.text || '')
+    const tempImage = await writeOcrTempImage(buffer)
+
+    try {
+      const result = await worker.recognize(tempImage.filePath)
+      return normalizeText(result.data?.text || '')
+    } finally {
+      await tempImage.cleanup()
+    }
   })
 
   ocrWorkerQueue = task.then(() => undefined, () => undefined)
