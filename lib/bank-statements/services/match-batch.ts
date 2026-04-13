@@ -60,6 +60,7 @@ export async function matchBankStatementBatch(input: {
   })
 
   const reservedPaymentIds = new Set<string>()
+  const reservedLedgerIds = new Set<string>()
 
   await prisma.$transaction(async (tx) => {
     await tx.bankStatementMatchCandidate.deleteMany({
@@ -99,6 +100,7 @@ export async function matchBankStatementBatch(input: {
           data: scored.slice(0, 5).map((candidate, index) => ({
             statementRowId: row.id,
             paymentId: candidate.paymentId,
+            ledgerEntryId: candidate.ledgerEntryId,
             candidateRank: index + 1,
             totalScore: candidate.totalScore,
             amountScore: candidate.amountScore,
@@ -117,13 +119,26 @@ export async function matchBankStatementBatch(input: {
 
       const decision = resolveMatchDecision(scored)
 
-      if (decision.status === 'settled' && !reservedPaymentIds.has(decision.candidate.paymentId)) {
-        reservedPaymentIds.add(decision.candidate.paymentId)
+      const paymentConflict = decision.status === 'settled' && decision.candidate.paymentId
+        ? reservedPaymentIds.has(decision.candidate.paymentId)
+        : false
+      const ledgerConflict = decision.status === 'settled' && decision.candidate.ledgerEntryId
+        ? reservedLedgerIds.has(decision.candidate.ledgerEntryId)
+        : false
+
+      if (decision.status === 'settled' && !paymentConflict && !ledgerConflict) {
+        if (decision.candidate.paymentId) {
+          reservedPaymentIds.add(decision.candidate.paymentId)
+        }
+        if (decision.candidate.ledgerEntryId) {
+          reservedLedgerIds.add(decision.candidate.ledgerEntryId)
+        }
         await tx.bankStatementRow.update({
           where: { id: row.id },
           data: {
             matchStatus: 'settled',
             matchedPaymentId: decision.candidate.paymentId,
+            matchedLedgerId: decision.candidate.ledgerEntryId,
             matchConfidence: decision.candidate.totalScore,
             matchReason: decision.reason,
             reviewStatus: 'accepted'
@@ -132,19 +147,21 @@ export async function matchBankStatementBatch(input: {
         await tx.bankStatementMatchCandidate.updateMany({
           where: {
             statementRowId: row.id,
-            paymentId: decision.candidate.paymentId
+            paymentId: decision.candidate.paymentId || undefined,
+            ledgerEntryId: decision.candidate.ledgerEntryId || undefined
           },
           data: {
             decision: 'selected',
             isReserved: true
           }
         })
-      } else if (decision.status === 'settled' && reservedPaymentIds.has(decision.candidate.paymentId)) {
+      } else if (decision.status === 'settled' && (paymentConflict || ledgerConflict)) {
         await tx.bankStatementRow.update({
           where: { id: row.id },
           data: {
             matchStatus: 'ambiguous',
             matchedPaymentId: null,
+            matchedLedgerId: null,
             matchConfidence: decision.candidate.totalScore,
             matchReason: 'Candidate conflicts with another statement row and requires manual review.',
             reviewStatus: 'pending'
@@ -156,6 +173,7 @@ export async function matchBankStatementBatch(input: {
           data: {
             matchStatus: 'ambiguous',
             matchedPaymentId: null,
+            matchedLedgerId: null,
             matchConfidence: decision.candidates[0]?.totalScore ?? null,
             matchReason: decision.reason,
             reviewStatus: 'pending'
@@ -167,6 +185,7 @@ export async function matchBankStatementBatch(input: {
           data: {
             matchStatus: 'unsettled',
             matchedPaymentId: null,
+            matchedLedgerId: null,
             matchConfidence: null,
             matchReason: decision.reason,
             reviewStatus: 'pending'

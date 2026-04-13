@@ -36,6 +36,8 @@ export function scoreBankStatementAgainstCandidates(input: {
 
     scored.push({
       paymentId: candidate.paymentId,
+      ledgerEntryId: candidate.ledgerEntryId,
+      targetType: candidate.targetType,
       totalScore: amountScore + directionScore + dateScore + referenceScore + narrationScore + balanceScore,
       amountScore,
       directionScore,

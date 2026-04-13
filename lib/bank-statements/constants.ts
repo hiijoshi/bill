@@ -2,6 +2,11 @@ export const BANK_STATEMENT_ALLOWED_EXTENSIONS = [
   'jpg',
   'jpeg',
   'png',
+  'webp',
+  'bmp',
+  'gif',
+  'tif',
+  'tiff',
   'pdf',
   'csv',
   'xls',
@@ -11,8 +16,13 @@ export const BANK_STATEMENT_ALLOWED_EXTENSIONS = [
 export const BANK_STATEMENT_ALLOWED_MIME_TYPES = [
   'image/jpeg',
   'image/png',
+  'image/webp',
+  'image/bmp',
+  'image/gif',
+  'image/tiff',
   'application/pdf',
   'text/csv',
+  'text/plain',
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 ] as const

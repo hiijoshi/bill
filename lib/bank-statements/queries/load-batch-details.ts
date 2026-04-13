@@ -33,6 +33,16 @@ export async function loadBankStatementBatchDetails(companyId: string, batchId: 
     include: {
       matchCandidates: {
         include: {
+          ledgerEntry: {
+            select: {
+              id: true,
+              accountHeadNameSnapshot: true,
+              counterpartyNameSnapshot: true,
+              amount: true,
+              entryDate: true,
+              note: true
+            }
+          },
           payment: {
             select: {
               id: true,
@@ -93,6 +103,15 @@ export async function loadBankStatementBatchDetails(companyId: string, batchId: 
     matchConfidence: row.matchConfidence ?? null,
     matchReason: row.matchReason || null,
     matchReasonJson: row.matchReasonJson || null,
+    draftAccountingHeadId: row.draftAccountingHeadId || null,
+    draftPartyId: row.draftPartyId || null,
+    draftSupplierId: row.draftSupplierId || null,
+    draftVoucherType: (row.draftVoucherType as NormalizedStatementTransaction['draftVoucherType']) || null,
+    draftPaymentMode: row.draftPaymentMode || null,
+    draftRemarks: row.draftRemarks || null,
+    postedPaymentId: row.postedPaymentId || null,
+    postedLedgerEntryId: row.postedLedgerEntryId || null,
+    postedAt: row.postedAt?.toISOString() || null,
     reviewStatus: row.reviewStatus as NormalizedStatementTransaction['reviewStatus'],
     reviewedByUserId: row.reviewedByUserId || null,
     reviewedAt: row.reviewedAt?.toISOString() || null,
@@ -110,7 +129,7 @@ export async function loadBankStatementBatchDetails(companyId: string, batchId: 
       narrationScore: candidate.narrationScore,
       balanceScore: candidate.balanceScore,
       decision: candidate.decision as BankStatementMatchCandidate['decision'],
-      reason: candidate.reason || null,
+      reason: candidate.reason || candidate.ledgerEntry?.note || null,
       reasonJson: candidate.reasonJson || null,
       isReserved: candidate.isReserved
     }))

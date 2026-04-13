@@ -23,6 +23,53 @@ function maskAccountNumber(value: string | null | undefined) {
   return `${'*'.repeat(Math.max(0, raw.length - 4))}${raw.slice(-4)}`
 }
 
+function normalizeParseFailure(error: unknown) {
+  if (error instanceof BankStatementError) {
+    return error
+  }
+
+  const rawMessage = error instanceof Error ? error.message.trim() : 'Failed to parse bank statement.'
+
+  const knownUserCorrectableIssues = [
+    {
+      pattern: /could not detect any transaction rows/i,
+      message: 'No transaction rows were detected in the uploaded statement. Upload an actual bank statement export with transaction rows.'
+    },
+    {
+      pattern: /uploaded (csv|excel|statement text) statement is empty/i,
+      message: 'The uploaded statement file is empty. Upload a file that contains transaction rows.'
+    },
+    {
+      pattern: /excel statement does not contain any worksheet/i,
+      message: 'The uploaded Excel file does not contain any worksheet data.'
+    },
+    {
+      pattern: /could not recognize text from statement image/i,
+      message: 'The uploaded statement image could not be read clearly. Upload a clearer image or use CSV / Excel for the fastest import.'
+    },
+    {
+      pattern: /could not be recognized into readable statement rows/i,
+      message: 'The uploaded PDF could not be read into transaction rows. Upload a clearer PDF or use CSV / Excel for the fastest import.'
+    }
+  ]
+
+  const matchedIssue = knownUserCorrectableIssues.find((issue) => issue.pattern.test(rawMessage))
+  if (matchedIssue) {
+    return new BankStatementError('VALIDATION_FAILED', matchedIssue.message, {
+      status: 422,
+      details: {
+        parseFailure: rawMessage
+      },
+      cause: error
+    })
+  }
+
+  return new BankStatementError('INTERNAL_ERROR', rawMessage || 'Failed to parse bank statement.', {
+    status: 500,
+    cause: error
+  })
+}
+
 export async function parseBankStatementBatch(input: {
   auth: RequestAuthContext
   batchId: string
@@ -66,7 +113,10 @@ export async function parseBankStatementBatch(input: {
   })
 
   try {
-    const { bytes } = await loadBankStatementFile(batch.storageKey)
+    const { bytes } = await loadBankStatementFile({
+      batchId: batch.id,
+      storageKey: batch.storageKey
+    })
     const parser = resolveStatementParser(detectKind(batch.documentKind))
     const file = new File([bytes], batch.fileName, {
       type: batch.fileMimeType
@@ -184,13 +234,15 @@ export async function parseBankStatementBatch(input: {
       batch: serializeBankStatementBatch(updated)
     }
   } catch (error) {
+    const normalizedError = normalizeParseFailure(error)
+
     await prisma.bankStatementBatch.update({
       where: { id: batch.id },
       data: {
         batchStatus: 'failed',
         parseStatus: 'failed',
-        errorCode: 'PARSE_FAILED',
-        errorMessage: error instanceof Error ? error.message : 'Failed to parse bank statement.'
+        errorCode: normalizedError.code,
+        errorMessage: normalizedError.message
       }
     })
 
@@ -200,9 +252,10 @@ export async function parseBankStatementBatch(input: {
       actor: input.auth,
       eventType: 'parse_failed',
       stage: 'parse',
-      note: error instanceof Error ? error.message : 'Failed to parse bank statement.'
+      note: normalizedError.message,
+      payload: normalizedError.details
     })
 
-    throw error
+    throw normalizedError
   }
 }
