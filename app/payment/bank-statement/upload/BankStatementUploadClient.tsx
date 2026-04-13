@@ -201,7 +201,7 @@ export default function BankStatementUploadClient({
       return
     }
 
-    await runStage('Uploading statement batch', async () => {
+    await runStage('Uploading, parsing, and reconciling statement', async () => {
       const createResponse = await apiClient.postJson<BankStatementCreateBatchResponse>('/api/bank-statements/batches', {
         companyId,
         bankId: selectedBankId,
@@ -214,7 +214,11 @@ export default function BankStatementUploadClient({
       formData.set('companyId', companyId)
       formData.set('file', selectedFile)
       await apiClient.postForm(`/api/bank-statements/batches/${createResponse.data.batch.id}/file`, formData)
-      setStageProgress(75)
+      setStageProgress(60)
+      await apiClient.postJson(`/api/bank-statements/batches/${createResponse.data.batch.id}/parse`, { companyId })
+      setStageProgress(82)
+      await apiClient.postJson(`/api/bank-statements/batches/${createResponse.data.batch.id}/match`, { companyId })
+      setStageProgress(94)
       await loadBatchDetail(createResponse.data.batch.id)
       await refreshWorkspace()
       setSelectedFile(null)
