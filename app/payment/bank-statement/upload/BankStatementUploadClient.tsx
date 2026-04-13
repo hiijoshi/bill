@@ -52,6 +52,8 @@ type DraftState = {
   accountingHeadId: string
   partyId: string
   supplierId: string
+  voucherType: string
+  paymentMode: string
   remarks: string
 }
 
@@ -77,6 +79,8 @@ function buildDraft(row: BatchDetailRow): DraftState {
     accountingHeadId: row.draftAccountingHeadId || '',
     partyId: row.draftPartyId || '',
     supplierId: row.draftSupplierId || '',
+    voucherType: row.draftVoucherType || '',
+    paymentMode: row.draftPaymentMode || '',
     remarks: row.draftRemarks || ''
   }
 }
@@ -157,6 +161,8 @@ export default function BankStatementUploadClient({
         accountingHeadId: draft.accountingHeadId || null,
         partyId: draft.partyId || null,
         supplierId: draft.supplierId || null,
+        voucherType: draft.voucherType || null,
+        paymentMode: draft.paymentMode || null,
         remarks: draft.remarks || null
       })
       await loadBatchDetail(activeBatchId)
@@ -199,6 +205,14 @@ export default function BankStatementUploadClient({
   const supplierOptions = useMemo<SearchableSelectOption[]>(
     () => (lookups?.suppliers || []).map((item) => ({ value: item.id, label: item.label, description: item.meta || undefined })),
     [lookups?.suppliers]
+  )
+  const paymentModeOptions = useMemo<SearchableSelectOption[]>(
+    () => (lookups?.paymentModes || []).map((item) => ({ value: item.id, label: item.label, description: item.meta || undefined })),
+    [lookups?.paymentModes]
+  )
+  const voucherTypeOptions = useMemo<SearchableSelectOption[]>(
+    () => (lookups?.voucherTypes || []).map((item) => ({ value: item.value, label: item.label })),
+    [lookups?.voucherTypes]
   )
 
   const filteredRows = useMemo(() => {
@@ -359,6 +373,7 @@ export default function BankStatementUploadClient({
                       <TableHead>Status</TableHead>
                       <TableHead>ERP Account / Supplier</TableHead>
                       <TableHead>Remarks</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -415,6 +430,28 @@ export default function BankStatementUploadClient({
                                 placeholder="Supplier"
                                 searchPlaceholder="Search suppliers"
                               />
+                              <SearchableSelect
+                                id={`voucherType-${row.id}`}
+                                value={draft.voucherType}
+                                onValueChange={(value) => setDrafts((current) => ({
+                                  ...current,
+                                  [row.id]: { ...draft, voucherType: value }
+                                }))}
+                                options={voucherTypeOptions}
+                                placeholder="Voucher Type"
+                                searchPlaceholder="Search voucher type"
+                              />
+                              <SearchableSelect
+                                id={`paymentMode-${row.id}`}
+                                value={draft.paymentMode}
+                                onValueChange={(value) => setDrafts((current) => ({
+                                  ...current,
+                                  [row.id]: { ...draft, paymentMode: value }
+                                }))}
+                                options={paymentModeOptions}
+                                placeholder="Payment Mode"
+                                searchPlaceholder="Search payment modes"
+                              />
                             </TableCell>
                             <TableCell>
                               <Input
@@ -426,6 +463,19 @@ export default function BankStatementUploadClient({
                                 placeholder="Remarks"
                                 className="w-full"
                               />
+                              {row.matchConfidence !== null && (
+                                <div className="mt-2 text-xs text-slate-500">
+                                  Auto-match confidence: {Math.round(row.matchConfidence)}%
+                                </div>
+                              )}
+                              {row.matchReason && (
+                                <div className="mt-1 text-xs text-slate-500">{row.matchReason}</div>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Button variant="outline" size="sm" onClick={() => setDetailRowId(row.id)}>
+                                View
+                              </Button>
                             </TableCell>
                           </TableRow>
                         )
@@ -438,13 +488,13 @@ export default function BankStatementUploadClient({
               <div className="flex justify-end gap-2 p-4 border-t">
                 <Button
                   variant="outline"
-                  onClick={() => unsettledRows.forEach(row => saveDraft(row.id))}
+                  onClick={() => void Promise.all(unsettledRows.map((row) => saveDraft(row.id)))}
                   disabled={running || unsettledRows.length === 0}
                 >
                   Save Reconciliation
                 </Button>
                 <Button
-                  onClick={() => postRows(unsettledRows.map(row => row.id))}
+                  onClick={() => postRows(unsettledRows.map((row) => row.id))}
                   disabled={running || unsettledRows.length === 0}
                 >
                   Post to Ledger
@@ -478,6 +528,37 @@ export default function BankStatementUploadClient({
                 <div>
                   <strong>Status:</strong> {selectedDetailRow.matchStatus}
                 </div>
+                <div>
+                  <strong>Voucher Type:</strong> {labelForOption(voucherTypeOptions, selectedDetailRow.draftVoucherType) || '-'}
+                </div>
+                <div>
+                  <strong>Payment Mode:</strong> {labelForOption(paymentModeOptions, selectedDetailRow.draftPaymentMode) || '-'}
+                </div>
+                <div>
+                  <strong>Auto-match confidence:</strong> {selectedDetailRow.matchConfidence !== null ? `${Math.round(selectedDetailRow.matchConfidence)}%` : '-'}
+                </div>
+                {selectedDetailRow.matchReason && (
+                  <div>
+                    <strong>Match Reason:</strong> {selectedDetailRow.matchReason}
+                  </div>
+                )}
+                {selectedDetailRow.matchCandidates.length > 0 && (
+                  <div className="rounded-lg border border-slate-200 p-4">
+                    <div className="mb-3 text-sm font-semibold">Top Match Candidates</div>
+                    <div className="space-y-2 text-sm">
+                      {selectedDetailRow.matchCandidates.map((candidate) => (
+                        <div key={candidate.id} className="rounded-lg bg-slate-50 p-3">
+                          <div className="flex items-center justify-between gap-4">
+                            <div className="font-medium">Candidate #{candidate.candidateRank}</div>
+                            <div className="text-slate-500">Score: {Math.round(candidate.totalScore)}</div>
+                          </div>
+                          <div>{candidate.reason || 'No reason provided.'}</div>
+                          <div className="text-xs text-slate-500">Decision: {candidate.decision}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </DialogContent>
           </Dialog>

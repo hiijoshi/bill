@@ -47,20 +47,20 @@ function applySubscriptionOverlay(rows: PermissionAccessRow[], companyId: string
     })
 
     return rows.map((row) => {
-      const module = row.module as PermissionModule | undefined
-      if (!module) return row
+      const permissionModule = row.module as PermissionModule | undefined
+      if (!permissionModule) return row
 
       const canRead =
         Boolean(row.canRead) &&
-        isModuleEnabledForEntitlement(subscriptionAccess.entitlement, module, 'read') &&
+        isModuleEnabledForEntitlement(subscriptionAccess.entitlement, permissionModule, 'read') &&
         (dataLifecycle ? dataLifecycle.allowReadOperations : true)
       const canWrite =
         Boolean(row.canWrite) &&
-        isModuleEnabledForEntitlement(subscriptionAccess.entitlement, module, 'write') &&
+        isModuleEnabledForEntitlement(subscriptionAccess.entitlement, permissionModule, 'write') &&
         (dataLifecycle ? dataLifecycle.allowWriteOperations : true)
 
       return {
-        module,
+        module: permissionModule,
         canRead,
         canWrite
       }

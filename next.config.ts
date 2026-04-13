@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
-import { isProduction } from './lib/config'
 
+const isProduction = process.env.NODE_ENV === 'production'
 const ALLOWED_ORIGINS_LIST = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000')
   .split(',')
   .map((o) => o.trim())
@@ -109,9 +109,11 @@ const nextConfig: NextConfig = {
   }
 };
 
+import bundleAnalyzer from '@next/bundle-analyzer'
+
 const withBundleAnalyzer =
   process.env.ANALYZE === 'true'
-    ? require('@next/bundle-analyzer')({
+    ? bundleAnalyzer({
         enabled: true
       })
     : (config: NextConfig) => config
