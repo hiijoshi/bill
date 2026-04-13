@@ -19,9 +19,67 @@ export async function POST(
 
   try {
     const { batchId } = await context.params
-    const formData = await request.formData()
-    const companyId = String(formData.get('companyId') || '').trim()
-    const file = formData.get('file')
+    const contentType = String(request.headers.get('content-type') || '').toLowerCase()
+    let companyId = ''
+    let fileName = ''
+    let fileMimeType = ''
+    let fileSizeBytes = 0
+    let bytes = new Uint8Array()
+
+    if (contentType.includes('application/json')) {
+      const body = await request.json().catch(() => null) as
+        | {
+            companyId?: unknown
+            fileName?: unknown
+            fileMimeType?: unknown
+            fileSizeBytes?: unknown
+            fileBase64?: unknown
+          }
+        | null
+
+      companyId = String(body?.companyId || '').trim()
+      fileName = String(body?.fileName || '').trim()
+      fileMimeType = String(body?.fileMimeType || '').trim()
+      fileSizeBytes = Number(body?.fileSizeBytes || 0)
+      const fileBase64 = String(body?.fileBase64 || '').trim()
+
+      if (!fileBase64) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: {
+              code: 'FILE_INVALID',
+              message: 'Bank statement file bytes are required.'
+            }
+          },
+          { status: 400 }
+        )
+      }
+
+      bytes = Uint8Array.from(Buffer.from(fileBase64, 'base64'))
+    } else {
+      const formData = await request.formData()
+      companyId = String(formData.get('companyId') || '').trim()
+      const file = formData.get('file')
+
+      if (!(file instanceof File)) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: {
+              code: 'FILE_INVALID',
+              message: 'Bank statement file is required.'
+            }
+          },
+          { status: 400 }
+        )
+      }
+
+      fileName = String(file.name || '').trim()
+      fileMimeType = String(file.type || 'application/octet-stream').trim()
+      fileSizeBytes = Number(file.size || 0)
+      bytes = new Uint8Array(await file.arrayBuffer())
+    }
 
     if (!companyId) {
       return NextResponse.json(
@@ -36,26 +94,24 @@ export async function POST(
       )
     }
 
-    if (!(file instanceof File)) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: {
-            code: 'FILE_INVALID',
-            message: 'Bank statement file is required.'
-          }
-        },
-        { status: 400 }
-      )
-    }
-
     await assertCompanyScope(request, companyId, 'write')
     await assertBatchBelongsToCompany(companyId, batchId)
+
+    console.info('[bank-statements] POST /api/bank-statements/batches/[batchId]/file', {
+      batchId,
+      companyId,
+      fileName,
+      fileMimeType,
+      fileSizeBytes
+    })
 
     const result = await uploadBankStatementBatchFile({
       auth: authResult.auth,
       batchId,
-      file
+      fileName,
+      fileMimeType,
+      fileSizeBytes,
+      bytes
     })
 
     return NextResponse.json({

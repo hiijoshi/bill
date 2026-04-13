@@ -9,7 +9,10 @@ import { validateBankStatementFileInfo } from './validate-upload-file'
 export async function uploadBankStatementBatchFile(input: {
   auth: RequestAuthContext
   batchId: string
-  file: File
+  fileName: string
+  fileMimeType: string
+  fileSizeBytes: number
+  bytes: Uint8Array
 }) {
   const batch = await prisma.bankStatementBatch.findUnique({
     where: {
@@ -24,18 +27,17 @@ export async function uploadBankStatementBatchFile(input: {
   }
 
   const fileInfo = validateBankStatementFileInfo({
-    fileName: input.file.name || batch.fileName,
-    fileMimeType: input.file.type || batch.fileMimeType,
-    fileSizeBytes: input.file.size
+    fileName: input.fileName || batch.fileName,
+    fileMimeType: input.fileMimeType || batch.fileMimeType,
+    fileSizeBytes: input.fileSizeBytes
   })
 
-  const bytes = new Uint8Array(await input.file.arrayBuffer())
   const saved = await saveBankStatementFile({
     companyId: batch.companyId,
     batchId: batch.id,
     fileName: fileInfo.fileName,
     fileMimeType: fileInfo.fileMimeType,
-    bytes
+    bytes: input.bytes
   })
 
   const duplicateByContent = await prisma.bankStatementBatch.findFirst({
