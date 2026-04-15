@@ -21,6 +21,12 @@ export async function matchBankStatementBatch(input: {
     })
   }
 
+  if (batch.parseStatus !== 'completed') {
+    throw new BankStatementError('VALIDATION_FAILED', 'Parse the uploaded statement successfully before running auto-match.', {
+      status: 409
+    })
+  }
+
   const rows = await prisma.bankStatementRow.findMany({
     where: {
       uploadBatchId: batch.id,
@@ -92,7 +98,7 @@ export async function matchBankStatementBatch(input: {
           referenceNumber: row.referenceNumber,
           description: row.description
         },
-        candidates: candidates.filter((candidate) => Math.abs(candidate.amount - row.amount) <= 0.009)
+        candidates
       })
 
       if (scored.length > 0) {

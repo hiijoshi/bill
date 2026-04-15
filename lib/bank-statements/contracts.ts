@@ -69,6 +69,23 @@ export type BankStatementPostRowsRequest = {
   rowIds: string[]
 }
 
+export type BankStatementQuickCreateTargetRequest = {
+  companyId: string
+  targetType?: 'auto' | 'accounting_head' | 'party' | 'supplier'
+  preferredName?: string | null
+}
+
+export type BankStatementQuickCreateTargetResponse = {
+  ok: true
+  data: {
+    rowId: string
+    targetType: 'accounting_head' | 'party' | 'supplier'
+    targetId: string
+    targetName: string
+    created: boolean
+  }
+}
+
 export type CsrfBootstrapResponse = {
   ok: true
   data: {

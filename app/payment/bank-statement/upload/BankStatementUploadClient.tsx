@@ -2,9 +2,6 @@
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import {
-  CheckCircle2,
-  Download,
-  FileUp,
   Loader2,
   RefreshCw,
   Search,
@@ -25,6 +22,7 @@ import type { DashboardLayoutInitialData } from '@/lib/app-shell-types'
 import type {
   BankStatementCreateBatchResponse,
   BankStatementLookupResponse,
+  BankStatementQuickCreateTargetResponse,
   BankStatementWorkspaceResponse
 } from '@/lib/bank-statements/contracts'
 import type {
@@ -70,6 +68,8 @@ type DraftState = {
   remarks: string
 }
 
+type QuickCreateType = 'auto' | 'accounting_head' | 'party' | 'supplier'
+
 function currency(value: number | null | undefined) {
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
@@ -104,9 +104,8 @@ function buildDraft(row: BatchDetailRow): DraftState {
   }
 }
 
-function labelForOption(options: SearchableSelectOption[], value: string | null | undefined) {
-  if (!value) return '-'
-  return options.find((option) => option.value === value)?.label || value
+function hasMappedTarget(draft: DraftState) {
+  return Boolean(draft.accountingHeadId || draft.partyId || draft.supplierId)
 }
 
 export default function BankStatementUploadClient({
@@ -122,6 +121,7 @@ export default function BankStatementUploadClient({
   const [activeBatchId, setActiveBatchId] = useState(initialWorkspace?.recentBatches[0]?.id || '')
   const [batchDetail, setBatchDetail] = useState<BatchDetailResponse['data'] | null>(null)
   const [drafts, setDrafts] = useState<Record<string, DraftState>>({})
+  const [quickCreateTypes, setQuickCreateTypes] = useState<Record<string, QuickCreateType>>({})
   const [selectedRows, setSelectedRows] = useState<Record<string, boolean>>({})
   const [loadingWorkspace, setLoadingWorkspace] = useState(false)
   const [running, setRunning] = useState(false)
@@ -160,6 +160,12 @@ export default function BankStatementUploadClient({
     setDrafts(
       response.data.rows.reduce<Record<string, DraftState>>((acc, row) => {
         acc[row.id] = buildDraft(row)
+        return acc
+      }, {})
+    )
+    setQuickCreateTypes(
+      response.data.rows.reduce<Record<string, QuickCreateType>>((acc, row) => {
+        acc[row.id] = 'auto'
         return acc
       }, {})
     )
@@ -299,6 +305,18 @@ export default function BankStatementUploadClient({
         remarks: draft.remarks || null
       })
       await loadBatchDetail(activeBatchId)
+    })
+  }
+
+  const quickCreateTarget = async (rowId: string) => {
+    const selectedType = quickCreateTypes[rowId] || 'auto'
+    await runStage('Auto creating missing target for unsettled row', async () => {
+      await apiClient.postJson<BankStatementQuickCreateTargetResponse>(`/api/bank-statements/rows/${rowId}/quick-create`, {
+        companyId,
+        targetType: selectedType
+      })
+      await loadBatchDetail(activeBatchId)
+      await refreshWorkspace()
     })
   }
 
@@ -681,6 +699,30 @@ export default function BankStatementUploadClient({
                           <TableCell>
                             <div className="flex flex-col gap-2">
                               <Button variant="outline" size="sm" onClick={() => void saveDraft(row.id)}>Save</Button>
+                              {!hasMappedTarget(draft) ? (
+                                <>
+                                  <Select
+                                    value={quickCreateTypes[row.id] || 'auto'}
+                                    onValueChange={(value) => setQuickCreateTypes((current) => ({
+                                      ...current,
+                                      [row.id]: value as QuickCreateType
+                                    }))}
+                                  >
+                                    <SelectTrigger className="h-8 text-xs">
+                                      <SelectValue placeholder="Create as" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="auto">Auto</SelectItem>
+                                      <SelectItem value="accounting_head">Accounting Head</SelectItem>
+                                      <SelectItem value="party">Party</SelectItem>
+                                      <SelectItem value="supplier">Supplier</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                  <Button variant="outline" size="sm" onClick={() => void quickCreateTarget(row.id)} disabled={running}>
+                                    Create Target
+                                  </Button>
+                                </>
+                              ) : null}
                               <Button size="sm" onClick={() => void postRows([row.id])}>Post</Button>
                             </div>
                           </TableCell>

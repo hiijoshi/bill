@@ -81,6 +81,12 @@ export const postBankStatementRowsSchema = z.object({
   rowIds: z.array(z.string().trim().min(1)).min(1).max(500)
 })
 
+export const quickCreateBankStatementTargetSchema = z.object({
+  companyId: z.string().trim().min(1),
+  targetType: z.enum(['auto', 'accounting_head', 'party', 'supplier']).optional(),
+  preferredName: z.string().trim().min(2).max(120).optional().nullable()
+})
+
 export const finalizeBankStatementBatchSchema = z.object({
   confirm: z.literal(true)
 })

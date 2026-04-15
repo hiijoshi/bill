@@ -1,11 +1,10 @@
 import 'server-only'
 
 import { createHash } from 'crypto'
+import { existsSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 import { getCsvValue, normalizeCsvHeader, parseCsvObjects, parseCsvRows, type CsvImportRow } from '@/lib/master-csv'
 import type { StatementDirection, StatementDocumentKind, StatementDocumentMeta } from '@/lib/bank-statement-types'
@@ -82,8 +81,16 @@ let ocrWorkerIdleTimer: ReturnType<typeof setTimeout> | null = null
 const OCR_WORKER_IDLE_TIMEOUT_MS = 2 * 60_000
 const OCR_MAX_IMAGE_EDGE_PX = 1800
 const OCR_MAX_IMAGE_PIXELS = 2_400_000
-const PDFJS_WORKER_MODULE_SPECIFIER = 'pdfjs-dist/legacy/build/pdf.worker.mjs'
-const TESSERACT_NODE_WORKER_SPECIFIER = 'tesseract.js/src/worker-script/node/index.js'
+const TESSERACT_NODE_WORKER_PATH = path.join(
+  process.cwd(),
+  'node_modules',
+  'tesseract.js',
+  'src',
+  'worker-script',
+  'node',
+  'index.js'
+)
+const OCR_RECOGNITION_TIMEOUT_MS = 120_000
 
 type StructuredStatementCsvRow = {
   row: CsvImportRow
@@ -400,7 +407,7 @@ function isPlaceholderDateValue(value: string): boolean {
 }
 
 function extractAmountMatchesFromLine(line: string): NumericLineMatch[] {
-  const ignoredRanges = Array.from(line.matchAll(DATE_PATTERN)).map((match) => {
+  const ignoredRanges = Array.from(line.matchAll(new RegExp(DATE_PATTERN.source, 'g'))).map((match) => {
     const start = match.index ?? -1
     return [start, start + match[0].length] as const
   })
@@ -562,19 +569,7 @@ async function getPdfParseModule(): Promise<PdfParseModule> {
   }
 
   pdfParseModuleReady = (async () => {
-    // Preload the pdf.js worker so fake-worker mode does not rely on a fragile bundled relative path.
-    const workerModuleSpecifier = PDFJS_WORKER_MODULE_SPECIFIER
-    await import(workerModuleSpecifier)
-
     const pdfParseModule = await import('pdf-parse')
-
-    try {
-      const requireFromApp = createRequire(`${process.cwd()}/package.json`)
-      const workerPath = requireFromApp.resolve(PDFJS_WORKER_MODULE_SPECIFIER)
-      pdfParseModule.PDFParse.setWorker(pathToFileURL(workerPath).href)
-    } catch {
-      // If path resolution fails in an environment, the preloaded worker above is still available.
-    }
 
     return pdfParseModule
   })()
@@ -616,15 +611,12 @@ async function getSharedOcrWorker(): Promise<TesseractWorker> {
   if (!ocrWorkerReady) {
     ocrWorkerReady = (async () => {
       const tesseractModule = await import('tesseract.js')
-      const requireFromApp = createRequire(import.meta.url)
       const workerOptions: Record<string, unknown> = {
         logger: () => undefined
       }
 
-      try {
-        workerOptions.workerPath = requireFromApp.resolve(TESSERACT_NODE_WORKER_SPECIFIER)
-      } catch {
-        // Fall back to tesseract.js default worker resolution if explicit resolution is unavailable.
+      if (existsSync(TESSERACT_NODE_WORKER_PATH)) {
+        workerOptions.workerPath = TESSERACT_NODE_WORKER_PATH
       }
 
       const worker = await tesseractModule.createWorker('eng', tesseractModule.OEM.LSTM_ONLY, workerOptions)
@@ -705,7 +697,11 @@ async function recognizeTextWithSharedOcrWorker(buffer: Buffer): Promise<string>
     const tempImage = await writeOcrTempImage(buffer)
 
     try {
-      const result = await worker.recognize(tempImage.filePath)
+      const recognitionPromise = worker.recognize(tempImage.filePath)
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('OCR timed out while reading statement image.')), OCR_RECOGNITION_TIMEOUT_MS)
+      )
+      const result = await Promise.race([recognitionPromise, timeoutPromise])
       return normalizeText(result.data?.text || '')
     } finally {
       await tempImage.cleanup()
@@ -988,6 +984,78 @@ function groupStatementTextBlocks(text: string): string[] {
   return blocks.filter((block) => !shouldSkipStatementTextBlock(block))
 }
 
+function parseMonthFromText(text: string): { month: number; year: number } | null {
+  const match = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*[\s/_-]*(20\d{2})\b/i.exec(text)
+  if (!match) return null
+
+  const monthLabel = match[1].toLowerCase()
+  const year = Number(match[2])
+  const monthMap: Record<string, number> = {
+    jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12
+  }
+  const month = monthMap[monthLabel] || 0
+  if (!month || !Number.isFinite(year)) return null
+  return { month, year }
+}
+
+function parseOcrTableFallback(text: string, bankId: string): ParsedStatementResult[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => normalizeText(line).replace(/\s+/g, ' '))
+    .filter(Boolean)
+
+  if (lines.length === 0) return []
+
+  const statementMonth = parseMonthFromText(text)
+  const fallbackDate = statementMonth
+    ? `${statementMonth.year}-${String(statementMonth.month).padStart(2, '0')}-01`
+    : new Date().toISOString().slice(0, 10)
+
+  const rows: ParsedStatementResult[] = []
+  for (const line of lines) {
+    if (shouldIgnoreStatementLine(line)) continue
+
+    const amountMatches = extractAmountMatchesFromLine(line)
+    if (amountMatches.length < 2) continue
+
+    const numeric = amountMatches.map((entry) => entry.value).filter((value) => Number.isFinite(value) && value >= 0)
+    if (numeric.length < 2) continue
+
+    const maybeDebit = Number(numeric[0] || 0)
+    const maybeCredit = Number(numeric[1] || 0)
+    if (maybeDebit <= 0 && maybeCredit <= 0) continue
+
+    const direction: StatementDirection = maybeCredit > 0 && maybeCredit >= maybeDebit ? 'in' : 'out'
+    const amount = direction === 'in' ? maybeCredit : maybeDebit
+
+    const description = cleanStatementDescription(
+      line
+        .replace(AMOUNT_PATTERN, ' ')
+        .replace(/\b(?:settled|unsettled|matched|review|auto-matched|add notes?)\b/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
+
+    if (!description || description.length < 3) continue
+
+    const entryBase = {
+      rowNo: rows.length + 1,
+      postedAt: fallbackDate,
+      amount,
+      direction,
+      description,
+      reference: extractReferenceFromLine(line)
+    }
+
+    rows.push({
+      ...entryBase,
+      externalId: buildExternalId(bankId, entryBase)
+    })
+  }
+
+  return rows
+}
+
 function parseStatementTextBlock(block: string, rowNo: number, bankId: string): ParsedStatementResult {
   const dateMatch = DATE_PATTERN.exec(block)
   const rawDate = normalizeText(dateMatch?.[0] || '')
@@ -1150,7 +1218,11 @@ async function parseTextStatement(text: string, bankId: string): Promise<ParsedS
 
   const blocks = groupStatementTextBlocks(text)
   if (blocks.length === 0) {
-    throw new Error('Could not detect any transaction rows in the uploaded statement')
+    const fallbackRows = parseOcrTableFallback(text, bankId)
+    if (fallbackRows.length === 0) {
+      throw new Error('Could not detect any transaction rows in the uploaded statement')
+    }
+    return fallbackRows
   }
 
   return blocks.map((block, index) => parseStatementTextBlock(block, index + 1, bankId))
