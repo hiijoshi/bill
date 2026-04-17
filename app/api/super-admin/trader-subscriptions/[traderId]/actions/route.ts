@@ -32,6 +32,7 @@ import {
   suspendTraderSubscription
 } from '@/lib/subscription-mutations'
 import {
+  clearTraderClosureRequest,
   confirmTraderFinalDeletion,
   createTraderDataBackup,
   markTraderDeletionPending,
@@ -72,6 +73,7 @@ const actionSchema = z
       'mark_read_only',
       'restore_access',
       'request_closure',
+      'clear_closure_request',
       'update_retention',
       'mark_deletion_pending',
       'confirm_final_deletion'
@@ -157,24 +159,6 @@ function resolveWindow(args: {
     startDate,
     endDate
   }
-}
-
-async function findTargetSubscription(traderId: string, subscriptionId?: string | null) {
-  if (subscriptionId) {
-    return prisma.traderSubscription.findFirst({
-      where: {
-        id: subscriptionId,
-        traderId
-      }
-    })
-  }
-
-  return prisma.traderSubscription.findFirst({
-    where: {
-      traderId
-    },
-    orderBy: [{ startDate: 'desc' }, { createdAt: 'desc' }]
-  })
 }
 
 async function loadTraderActionSnapshot(traderId: string) {
@@ -300,6 +284,19 @@ export async function POST(
     } else if (input.action === 'restore_access') {
       await prisma.$transaction(async (tx) => {
         await restoreTraderActiveAccess(tx, {
+          traderId: trader.id,
+          notes: input.notes || null
+        })
+      })
+
+      result = {
+        action: input.action,
+        resourceType: 'TRADER_DATA_LIFECYCLE',
+        resourceId: trader.id
+      }
+    } else if (input.action === 'clear_closure_request') {
+      await prisma.$transaction(async (tx) => {
+        await clearTraderClosureRequest(tx, {
           traderId: trader.id,
           notes: input.notes || null
         })
