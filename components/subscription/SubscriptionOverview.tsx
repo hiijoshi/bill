@@ -465,7 +465,7 @@ export default function SubscriptionOverview({
                   <TableRow key={backup.id}>
                     <TableCell>{formatLifecycleLabel(backup.status)}</TableCell>
                     <TableCell>{backup.fileName || `${backup.format}.json`}</TableCell>
-                    <TableCell>{formatDate(backup.exportedAt)}</TableCell>
+                    <TableCell>{formatDate(backup.exportedAt || backup.failedAt || backup.createdAt)}</TableCell>
                     <TableCell>{backup.downloadCount}</TableCell>
                     <TableCell>
                       {backup.status === 'ready' ? (

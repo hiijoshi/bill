@@ -31,6 +31,7 @@ type ActionFormState = {
     | 'mark_read_only'
     | 'restore_access'
     | 'request_closure'
+    | 'clear_closure_request'
     | 'update_retention'
     | 'mark_deletion_pending'
     | 'confirm_final_deletion'
@@ -654,7 +655,7 @@ export default function SuperAdminTraderSubscriptionsClient({
                           <TableRow key={backup.id}>
                             <TableCell>{backup.fileName || `${backup.format}.json`}</TableCell>
                             <TableCell>{formatLabel(backup.status)}</TableCell>
-                            <TableCell>{formatDate(backup.exportedAt)}</TableCell>
+                            <TableCell>{formatDate(backup.exportedAt || backup.failedAt || backup.createdAt)}</TableCell>
                             <TableCell>{backup.downloadCount}</TableCell>
                             <TableCell>
                               {backup.status === 'ready' ? (
@@ -747,6 +748,7 @@ export default function SuperAdminTraderSubscriptionsClient({
                     <option value="mark_read_only">Mark Read Only</option>
                     <option value="restore_access">Restore Access</option>
                     <option value="request_closure">Request Closure Review</option>
+                    <option value="clear_closure_request">Cancel Closure Request</option>
                     <option value="update_retention">Update Retention</option>
                     <option value="mark_deletion_pending">Mark Deletion Pending</option>
                     <option value="confirm_final_deletion">Confirm Final Delete</option>
@@ -863,7 +865,7 @@ export default function SuperAdminTraderSubscriptionsClient({
                         .filter((backup) => backup.status === 'ready')
                         .map((backup) => (
                           <option key={backup.id} value={backup.id}>
-                            {backup.fileName || `${backup.format}.json`} ({formatDate(backup.exportedAt || backup.createdAt)})
+                            {backup.fileName || `${backup.format}.json`} ({formatDate(backup.exportedAt || backup.failedAt || backup.createdAt)})
                           </option>
                         ))}
                     </select>

@@ -1,6 +1,7 @@
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
 
 import { Prisma } from '@prisma/client'
 
@@ -9,14 +10,15 @@ import { getTraderSubscriptionEntitlement } from '@/lib/subscription-core'
 import {
   ensureTraderDataLifecycleRecord,
   getTraderDataLifecycleSummary,
-  normalizeTraderDataLifecycleState,
   type TraderBackupSummary,
   type TraderDataLifecycleState
 } from '@/lib/trader-retention'
 
 type DbClient = typeof prisma | Prisma.TransactionClient
 
-const BACKUP_DIRECTORY = path.join(process.cwd(), 'var', 'trader-backups')
+const PRIMARY_BACKUP_DIRECTORY = path.join(process.cwd(), 'var', 'trader-backups')
+const FALLBACK_BACKUP_DIRECTORY = path.join(tmpdir(), 'mbill', 'trader-backups')
+const MANAGED_BACKUP_DIRECTORIES = [PRIMARY_BACKUP_DIRECTORY, FALLBACK_BACKUP_DIRECTORY].map((directory) => path.resolve(directory))
 
 export class TraderRetentionError extends Error {
   status: number
@@ -61,11 +63,24 @@ async function fileExists(filePath: string) {
 
 function assertAbsoluteBackupPath(storagePath: string) {
   const normalized = path.resolve(storagePath)
-  const root = path.resolve(BACKUP_DIRECTORY)
-  if (!normalized.startsWith(`${root}${path.sep}`) && normalized !== root) {
+  const allowedRoot = MANAGED_BACKUP_DIRECTORIES.find((root) => normalized === root || normalized.startsWith(`${root}${path.sep}`))
+  if (!allowedRoot) {
     throw new TraderRetentionError('Backup file path is outside managed backup storage', 500)
   }
   return normalized
+}
+
+async function resolveWritableBackupDirectory() {
+  for (const candidate of [PRIMARY_BACKUP_DIRECTORY, FALLBACK_BACKUP_DIRECTORY]) {
+    try {
+      await mkdir(candidate, { recursive: true })
+      return candidate
+    } catch {
+      continue
+    }
+  }
+
+  throw new TraderRetentionError('Backup storage is not writable on this server', 500)
 }
 
 type TraderExportBundle = {
@@ -128,7 +143,6 @@ async function collectTraderExportBundle(db: DbClient, traderId: string, exporte
 
   const companyIds = companies.map((row) => row.id)
   const userIds = users.map((row) => row.id)
-  const subscriptionIds = subscriptions.map((row) => row.id)
   const planIds = Array.from(new Set(subscriptions.map((row) => row.planId).filter((value): value is string => Boolean(value))))
 
   const [
@@ -616,6 +630,10 @@ export async function restoreTraderActiveAccess(
     data: {
       state: 'active',
       readOnlySince: null,
+      closureRequestedAt: null,
+      closureRequestedByUserId: null,
+      closureRequestSource: null,
+      closureNotes: null,
       scheduledDeletionAt: null,
       deletionPendingAt: null,
       deletionMarkedByUserId: null,
@@ -623,6 +641,29 @@ export async function restoreTraderActiveAccess(
       deletionApprovedByUserId: null,
       deletionExecutedAt: null,
       deletionExecutedByUserId: null,
+      notes: params.notes === undefined ? undefined : params.notes || null
+    }
+  })
+}
+
+export async function clearTraderClosureRequest(
+  db: DbClient,
+  params: {
+    traderId: string
+    notes?: string | null
+  }
+) {
+  await ensureTraderDataLifecycleRecord(db, params.traderId)
+
+  return db.traderDataLifecycle.update({
+    where: {
+      traderId: params.traderId
+    },
+    data: {
+      closureRequestedAt: null,
+      closureRequestedByUserId: null,
+      closureRequestSource: null,
+      closureNotes: null,
       notes: params.notes === undefined ? undefined : params.notes || null
     }
   })
@@ -770,7 +811,8 @@ export async function createTraderDataBackup(params: {
     const stamp = exportedAt.replace(/[:.]/g, '-')
     const safeName = sanitizeSegment(traderName)
     const fileName = `${safeName}-backup-${stamp}.json`
-    const traderDir = path.join(BACKUP_DIRECTORY, trader.id)
+    const backupRoot = await resolveWritableBackupDirectory()
+    const traderDir = path.join(backupRoot, trader.id)
     const storagePath = path.join(traderDir, `${backup.id}-${fileName}`)
 
     await mkdir(traderDir, { recursive: true })
