@@ -7,7 +7,6 @@ import {
   ArrowDownLeft,
   ArrowRightLeft,
   ArrowUpRight,
-  BarChart3,
   Building2,
   CalendarRange,
   CircleDollarSign,
@@ -23,7 +22,7 @@ import {
   TrendingUp,
   Wallet
 } from 'lucide-react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { motion } from 'framer-motion'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -1757,13 +1756,6 @@ export default function OperationsReportWorkspace({
     filteredLedgerRows,
   ])
 
-  const visibleStatementRows =
-    activeView === 'ledger'
-      ? statementRows.ledger
-      : activeView === 'bank-ledger'
-        ? statementRows['bank-ledger']
-        : statementRows['cash-ledger']
-
   const closeCompanyFilter = useCallback(() => {
     if (companyFilterRef.current) {
       companyFilterRef.current.open = false
@@ -2231,45 +2223,111 @@ export default function OperationsReportWorkspace({
 
   return (
     <div className="space-y-6">
-      <section className="overflow-hidden rounded-[2rem] border border-slate-200/70 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.18),_transparent_28%),linear-gradient(135deg,#071226_0%,#111c33_45%,#f8fafc_180%)] shadow-[0_40px_100px_-48px_rgba(15,23,42,0.45)]">
-        <div className="px-6 py-6 md:px-8 md:py-7">
-          <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
-            <div className="max-w-4xl">
-              <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.22em] text-sky-100/90">
-                <Sparkles className="h-3.5 w-3.5" />
-                Ledger Intelligence
-              </div>
-              <h2 className={embedded ? 'mt-4 text-3xl font-semibold tracking-tight text-white' : 'mt-4 text-4xl font-semibold tracking-tight text-white'}>
-                Premium ledger and reporting workspace
-              </h2>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200/85">
-                Instant overview, receivable drilldown, daily movement, and cash-bank traceability in one modern reporting canvas.
-              </p>
-              <div className="mt-5 flex flex-wrap items-center gap-2 text-xs text-slate-200/75">
-                <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1">
-                  Scope: {selectedCompanySummary}
-                </span>
-                {lastGeneratedAt ? (
+      {!embedded ? (
+        <section className="overflow-hidden rounded-[2rem] border border-slate-200/70 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.18),_transparent_28%),linear-gradient(135deg,#071226_0%,#111c33_45%,#f8fafc_180%)] shadow-[0_40px_100px_-48px_rgba(15,23,42,0.45)]">
+          <div className="px-6 py-6 md:px-8 md:py-7">
+            <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+              <div className="max-w-4xl">
+                <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.22em] text-sky-100/90">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Ledger Intelligence
+                </div>
+                <h2 className="mt-4 text-4xl font-semibold tracking-tight text-white">
+                  Premium ledger and reporting workspace
+                </h2>
+                <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200/85">
+                  Instant overview, receivable drilldown, daily movement, and cash-bank traceability in one modern reporting canvas.
+                </p>
+                <div className="mt-5 flex flex-wrap items-center gap-2 text-xs text-slate-200/75">
                   <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1">
-                    Synced: {lastGeneratedAt}
+                    Scope: {selectedCompanySummary}
                   </span>
+                  {lastGeneratedAt ? (
+                    <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1">
+                      Synced: {lastGeneratedAt}
+                    </span>
+                  ) : null}
+                  <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1">
+                    Recovery progress: {recoveryProgress.toFixed(1)}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 xl:justify-end">
+                {onBackToDashboard ? (
+                  <Button variant="outline" onClick={onBackToDashboard} className="rounded-2xl border-white/15 bg-white/10 text-white hover:bg-white/15 hover:text-white">
+                    Back to Dashboard
+                  </Button>
                 ) : null}
-                <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1">
-                  Recovery progress: {recoveryProgress.toFixed(1)}%
-                </span>
+                <Button
+                  onClick={() => void generateReport()}
+                  disabled={loading || loadingCompanies}
+                  className="rounded-2xl bg-white text-slate-950 shadow-lg shadow-slate-950/15 hover:bg-slate-100"
+                >
+                  <RefreshCw className={cn('mr-2 h-4 w-4', loading ? 'animate-spin' : '')} />
+                  {loading ? 'Refreshing...' : 'Refresh'}
+                </Button>
+                {renderExportMenu()}
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2 xl:justify-end">
-              {!embedded && onBackToDashboard ? (
-                <Button variant="outline" onClick={onBackToDashboard} className="rounded-2xl border-white/15 bg-white/10 text-white hover:bg-white/15 hover:text-white">
-                  Back to Dashboard
-                </Button>
-              ) : null}
+            <div className="mt-6 flex overflow-x-auto pb-1">
+              <div className="flex min-w-max items-center gap-2 rounded-[1.4rem] border border-white/15 bg-white/10 p-1.5 backdrop-blur-md">
+                {operationsViewOptions.map((item) => {
+                  const active = activeView === item.value
+                  return (
+                    <button
+                      key={item.value}
+                      type="button"
+                      onClick={() => handleViewChange(item.value)}
+                      onMouseEnter={() => void prefetchReportView(item.value)}
+                      className={cn(
+                        'rounded-[1rem] px-4 py-2.5 text-sm font-medium transition-all duration-200',
+                        active
+                          ? 'bg-white text-slate-950 shadow-[0_14px_30px_-20px_rgba(15,23,42,0.55)]'
+                          : 'text-slate-200/85 hover:bg-white/10 hover:text-white'
+                      )}
+                    >
+                      {item.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : (
+        <section className="rounded-[1.8rem] border border-slate-200/80 bg-white/80 p-4 shadow-[0_24px_60px_-46px_rgba(15,23,42,0.18)] backdrop-blur md:p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex overflow-x-auto pb-1">
+              <div className="flex min-w-max items-center gap-2 rounded-[1.3rem] border border-slate-200 bg-slate-50/90 p-1.5">
+                {operationsViewOptions.map((item) => {
+                  const active = activeView === item.value
+                  return (
+                    <button
+                      key={item.value}
+                      type="button"
+                      onClick={() => handleViewChange(item.value)}
+                      onMouseEnter={() => void prefetchReportView(item.value)}
+                      className={cn(
+                        'rounded-[1rem] px-4 py-2.5 text-sm font-medium transition-colors',
+                        active
+                          ? 'bg-slate-950 text-white shadow-[0_14px_30px_-20px_rgba(15,23,42,0.45)]'
+                          : 'text-slate-600 hover:bg-white hover:text-slate-950'
+                      )}
+                    >
+                      {item.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
               <Button
                 onClick={() => void generateReport()}
                 disabled={loading || loadingCompanies}
-                className="rounded-2xl bg-white text-slate-950 shadow-lg shadow-slate-950/15 hover:bg-slate-100"
+                className="rounded-2xl bg-slate-950 text-white hover:bg-slate-800"
               >
                 <RefreshCw className={cn('mr-2 h-4 w-4', loading ? 'animate-spin' : '')} />
                 {loading ? 'Refreshing...' : 'Refresh'}
@@ -2277,34 +2335,10 @@ export default function OperationsReportWorkspace({
               {renderExportMenu()}
             </div>
           </div>
+        </section>
+      )}
 
-          <div className="mt-6 flex overflow-x-auto pb-1">
-            <div className="flex min-w-max items-center gap-2 rounded-[1.4rem] border border-white/15 bg-white/10 p-1.5 backdrop-blur-md">
-              {operationsViewOptions.map((item) => {
-                const active = activeView === item.value
-                return (
-                  <button
-                    key={item.value}
-                    type="button"
-                    onClick={() => handleViewChange(item.value)}
-                    onMouseEnter={() => void prefetchReportView(item.value)}
-                    className={cn(
-                      'rounded-[1rem] px-4 py-2.5 text-sm font-medium transition-all duration-200',
-                      active
-                        ? 'bg-white text-slate-950 shadow-[0_14px_30px_-20px_rgba(15,23,42,0.55)]'
-                        : 'text-slate-200/85 hover:bg-white/10 hover:text-white'
-                    )}
-                  >
-                    {item.label}
-                  </button>
-                )
-	              })}
-	            </div>
-	        </div>
-        </div>
-	      </section>
-
-      <section className="sticky top-0 z-20">
+      <section>
         <div className="rounded-[1.8rem] border border-slate-200/80 bg-white/90 p-5 shadow-[0_32px_70px_-46px_rgba(15,23,42,0.35)] backdrop-blur-xl md:p-6">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>

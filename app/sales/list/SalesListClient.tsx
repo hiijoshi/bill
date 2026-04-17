@@ -936,7 +936,7 @@ export default function SalesListClient({
                   id="invoiceNumber"
                   value={invoiceNumber}
                   onChange={(e) => setInvoiceNumber(e.target.value)}
-                  placeholder="17, 17(A), 17(B)"
+                  placeholder="Enter invoice number"
                 />
               </div>
               <div>
@@ -1135,6 +1135,7 @@ export default function SalesListClient({
                         className="h-4 w-4 rounded border-slate-300"
                       />
                     </TableHead>
+                    <TableHead>Actions</TableHead>
                     <TableHead>Invoice No</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Party Name</TableHead>
@@ -1150,7 +1151,6 @@ export default function SalesListClient({
                     <TableHead>Received</TableHead>
                     <TableHead>Balance</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1171,6 +1171,44 @@ export default function SalesListClient({
                             aria-label={`Select sales bill ${bill.invoiceNo || bill.id}`}
                             className="h-4 w-4 rounded border-slate-300"
                           />
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleView(bill.id)}
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            {bill.status !== 'cancelled' ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleEdit(bill)}
+                                title={isSplitParentBill(bill) || isSplitChildBill(bill) ? 'Manage invoice split' : 'Edit bill'}
+                              >
+                                <Edit className="w-4 h-4" />
+                              </Button>
+                            ) : null}
+                            {bill.status !== 'cancelled' && !isSplitParentBill(bill) && !isSplitChildBill(bill) ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleCancel(bill.id)}
+                                title="Mark Cancelled"
+                              >
+                                <Ban className="w-4 h-4" />
+                              </Button>
+                            ) : null}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handlePrint(bill.id)}
+                            >
+                              <Printer className="w-4 h-4" />
+                            </Button>
+                          </div>
                         </TableCell>
                         <TableCell>
                           <div className="space-y-1">
@@ -1233,44 +1271,6 @@ export default function SalesListClient({
                           }>
                             {bill.status}
                           </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex gap-1">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleView(bill.id)}
-                            >
-                              <Eye className="w-4 h-4" />
-                            </Button>
-                            {bill.status !== 'cancelled' ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleEdit(bill)}
-                                title={isSplitParentBill(bill) || isSplitChildBill(bill) ? 'Manage invoice split' : 'Edit bill'}
-                              >
-                                <Edit className="w-4 h-4" />
-                              </Button>
-                            ) : null}
-                            {bill.status !== 'cancelled' && !isSplitParentBill(bill) && !isSplitChildBill(bill) ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleCancel(bill.id)}
-                                title="Mark Cancelled"
-                              >
-                                <Ban className="w-4 h-4" />
-                              </Button>
-                            ) : null}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handlePrint(bill.id)}
-                            >
-                              <Printer className="w-4 h-4" />
-                            </Button>
-                          </div>
                         </TableCell>
                       </TableRow>
                     ))

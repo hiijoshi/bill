@@ -135,7 +135,6 @@ interface SidebarProps {
 
 export default function Sidebar({
   companyId,
-  companyName = null,
   isCollapsed = false,
   isMobileOpen = false,
   onToggleCollapse,
@@ -275,7 +274,6 @@ export default function Sidebar({
   const activeParentTitles = menuItems
     .filter((item) => item.children?.length && isParentActive(item))
     .map((item) => item.title)
-  const activeCompanyLabel = String(companyName || '').trim() || companyId || 'Not selected'
 
   return (
     <>
@@ -295,14 +293,7 @@ export default function Sidebar({
           isMobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         )}
       >
-        <div className="flex flex-shrink-0 items-start justify-between border-b border-white/10 p-4">
-          <div className={cn('min-w-0', isCollapsed && 'md:hidden')}>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-200/80">Mbill OS</div>
-            <h2 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-white">Operations</h2>
-            <p className="mt-1 text-xs text-slate-300">
-              Purchases, ledgers, stock, and business controls in one workspace.
-            </p>
-          </div>
+        <div className="flex flex-shrink-0 items-center justify-end border-b border-white/10 p-4">
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
@@ -322,18 +313,6 @@ export default function Sidebar({
             >
               {isCollapsed ? <Menu className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
             </Button>
-          </div>
-        </div>
-        <div className={cn('mx-4 mt-4 rounded-2xl border border-white/10 bg-white/5 px-3 py-3', isCollapsed && 'md:hidden')}>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Workspace</div>
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-white">Active company session</div>
-              <div className="truncate text-xs text-slate-300">{activeCompanyLabel}</div>
-            </div>
-            <div className="rounded-full bg-emerald-400/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-300">
-              Live
-            </div>
           </div>
         </div>
         <nav className="flex-1 overflow-y-auto px-3 py-4">
@@ -447,13 +426,6 @@ export default function Sidebar({
           )
         })}
         </nav>
-        <div className={cn('border-t border-white/10 px-4 py-3', isCollapsed && 'md:hidden')}>
-          <div className="rounded-2xl bg-white/5 px-3 py-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Mode</div>
-            <div className="mt-1 text-sm font-semibold text-white">Business control center</div>
-            <div className="mt-1 text-xs text-slate-300">Designed for dense operations on desktop and clear task flow on mobile.</div>
-          </div>
-        </div>
       </aside>
     </>
   )

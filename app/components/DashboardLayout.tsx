@@ -25,6 +25,7 @@ interface DashboardLayoutProps {
   companyId: string
   headerActions?: React.ReactNode
   lockViewport?: boolean
+  hidePageIntro?: boolean
   initialData?: DashboardLayoutInitialData | null
 }
 
@@ -56,6 +57,7 @@ export default function DashboardLayout({
   companyId,
   headerActions,
   lockViewport = false,
+  hidePageIntro = false,
   initialData = null
 }: DashboardLayoutProps) {
   const initialShellBootstrap = initialData?.shellBootstrap || null
@@ -386,22 +388,24 @@ export default function DashboardLayout({
                 >
                   <Menu className="h-4 w-4" />
                 </Button>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full border border-white/65 bg-slate-950 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-white">
-                      {platformLabel}
-                    </span>
-                    <span className="rounded-full border border-slate-200 bg-white/75 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                      {densityLabel}
-                    </span>
+                {!hidePageIntro ? (
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-white/65 bg-slate-950 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-white">
+                        {platformLabel}
+                      </span>
+                      <span className="rounded-full border border-slate-200 bg-white/75 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                        {densityLabel}
+                      </span>
+                    </div>
+                    <h1 className="mt-2 text-[1.45rem] font-semibold tracking-[-0.03em] text-slate-950 md:text-[1.75rem]">
+                      Business Operations Hub
+                    </h1>
+                    <p className="mt-1 max-w-2xl text-sm text-slate-600">
+                      Run purchases, payments, ledgers, stock, and reporting from one structured workspace built for long-form business operations.
+                    </p>
                   </div>
-                  <h1 className="mt-2 text-[1.45rem] font-semibold tracking-[-0.03em] text-slate-950 md:text-[1.75rem]">
-                    Business Operations Hub
-                  </h1>
-                  <p className="mt-1 max-w-2xl text-sm text-slate-600">
-                    Run purchases, payments, ledgers, stock, and reporting from one structured workspace built for long-form business operations.
-                  </p>
-                </div>
+                ) : null}
               </div>
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[320px] sm:items-end">
                 <div className="flex w-full flex-wrap items-center justify-end gap-2">
