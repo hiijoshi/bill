@@ -523,8 +523,12 @@ function CashBankPaymentEntryPageContent() {
 
       invalidateAppDataCaches(companyId, ['payments'])
       notifyAppDataChanged({ companyId, scopes: ['payments'] })
+      setSelectedReferenceValue('')
+      setAmount('')
+      setRemark('')
+      setMode(DEFAULT_PAYMENT_MODES[0]?.code || 'CASH')
+      setSelectedBankId('')
       alert('Cash / bank payment recorded successfully.')
-      router.push('/payment/dashboard')
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to record cash / bank payment')
     } finally {
@@ -604,8 +608,11 @@ function CashBankPaymentEntryPageContent() {
 
       invalidateAppDataCaches(companyId, ['payments'])
       notifyAppDataChanged({ companyId, scopes: ['payments'] })
+      setFromAccount('')
+      setToAccount('')
+      setTransferAmount('')
+      setTransferRemark('')
       alert('Self transfer recorded successfully.')
-      router.push('/payment/dashboard')
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to record self transfer')
     } finally {

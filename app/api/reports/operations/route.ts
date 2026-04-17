@@ -2146,11 +2146,80 @@ export async function GET(request: NextRequest) {
           ].sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName) || a.id.localeCompare(b.id))
         : []
 
+      const consolidateCashLedgerRows = (rows: Array<{
+        id: string
+        date: string
+        companyId: string
+        companyName: string
+        direction: string
+        billType: string
+        billNo: string
+        refNo: string
+        partyName: string
+        bankName: string
+        mode: string
+        amountIn: number
+        amountOut: number
+        txnRef: string
+        ifscCode: string
+        accountNo: string
+        note: string
+      }>) => {
+        const consolidated = new Map<string, typeof rows[number] & { farmerCount: number }>()
+        const passthrough: typeof rows = []
+
+        for (const row of rows) {
+          const shouldConsolidate =
+            row.billType === 'Purchase Payment' &&
+            row.direction === 'OUT' &&
+            row.amountOut > 0 &&
+            row.mode.toLowerCase() === 'cash' &&
+            row.partyName.trim().length > 0 &&
+            row.partyName.trim().toLowerCase() !== 'cash'
+
+          if (!shouldConsolidate) {
+            passthrough.push(row)
+            continue
+          }
+
+          const key = `${row.companyId}:${row.date}`
+          const existing = consolidated.get(key)
+          if (existing) {
+            existing.amountOut = roundCurrency(existing.amountOut + row.amountOut)
+            existing.farmerCount += 1
+            existing.note = `Consolidated farmer cash payment for ${existing.farmerCount} farmers`
+            continue
+          }
+
+          consolidated.set(key, {
+            ...row,
+            id: `cash-farmer-day:${key}`,
+            billNo: '',
+            refNo: `DAY-${row.date}`,
+            partyName: 'Farmer Payment',
+            note: 'Consolidated farmer cash payment for 1 farmer',
+            txnRef: '',
+            ifscCode: '',
+            accountNo: '',
+            farmerCount: 1
+          })
+        }
+
+        return [
+          ...passthrough,
+          ...Array.from(consolidated.values()).map((row) => {
+            const { farmerCount, ...nextRow } = row
+            void farmerCount
+            return nextRow
+          })
+        ].sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName) || a.id.localeCompare(b.id))
+      }
+
       const cashLedgerRows = needsCashLedgerView
-        ? [
+        ? consolidateCashLedgerRows([
             ...payments.flatMap((payment) => mapPaymentToCashLedgerRows(payment)),
             ...journalVoucherEntries.flatMap((entry) => mapJournalVoucherToCashLedgerRows(entry))
-          ].sort((a, b) => b.date.localeCompare(a.date) || a.partyName.localeCompare(b.partyName) || a.id.localeCompare(b.id))
+          ])
         : []
 
       const bankFilterOptions = needsBankLedgerView

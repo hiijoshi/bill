@@ -1118,6 +1118,7 @@ export default function PurchaseListClient({
                         className="h-4 w-4 rounded border-slate-300"
                       />
                     </TableHead>
+                    <TableHead>Actions</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Bill/Invoice No</TableHead>
                     <TableHead>Date</TableHead>
@@ -1132,7 +1133,6 @@ export default function PurchaseListClient({
                     <TableHead>Paid</TableHead>
                     <TableHead>Balance</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1153,49 +1153,6 @@ export default function PurchaseListClient({
                             aria-label={`Select purchase bill ${bill.type === 'regular' ? bill.billNo : bill.supplierInvoiceNo}`}
                             className="h-4 w-4 rounded border-slate-300"
                           />
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={bill.type === 'regular' ? 'default' : 'secondary'}>
-                            {bill.type === 'regular' ? 'Farmer' : 'Supplier'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {bill.type === 'regular' ? bill.billNo : bill.supplierInvoiceNo}
-                        </TableCell>
-                        <TableCell>{new Date(bill.billDate).toLocaleDateString()}</TableCell>
-                        <TableCell>
-                          {bill.type === 'regular' ? getRegularFarmerName(bill) : bill.supplier.name}
-                        </TableCell>
-                        <TableCell>
-                          {bill.type === 'regular' ? getRegularFarmerAddress(bill) : bill.supplier.address}
-                        </TableCell>
-                        <TableCell>
-                          {bill.type === 'regular'
-                            ? getRegularAnubandh(bill)
-                            : bill.supplier.gstNumber
-                          }
-                        </TableCell>
-                        <TableCell>{getBillMarka(bill) || '-'}</TableCell>
-                        <TableCell>
-                          {getBillBags(bill).toFixed(0)}
-                        </TableCell>
-                        <TableCell>
-                          {getBillWeightQt(bill).toFixed(2)}
-                        </TableCell>
-                        <TableCell>
-                          {getBillRate(bill).toFixed(2)}
-                        </TableCell>
-                        <TableCell>₹{bill.totalAmount.toFixed(2)}</TableCell>
-                        <TableCell>₹{bill.paidAmount.toFixed(2)}</TableCell>
-                        <TableCell>₹{bill.balanceAmount.toFixed(2)}</TableCell>
-                        <TableCell>
-                          <Badge variant={
-                            bill.status === 'paid' ? 'default' :
-                            (bill.status === 'partial' || bill.status === 'partially_paid') ? 'secondary' :
-                            bill.status === 'cancelled' ? 'outline' : 'destructive'
-                          }>
-                            {bill.status}
-                          </Badge>
                         </TableCell>
                         <TableCell>
                           <div className="flex gap-1">
@@ -1243,6 +1200,49 @@ export default function PurchaseListClient({
                               </Button>
                             )}
                           </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={bill.type === 'regular' ? 'default' : 'secondary'}>
+                            {bill.type === 'regular' ? 'Farmer' : 'Supplier'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {bill.type === 'regular' ? bill.billNo : bill.supplierInvoiceNo}
+                        </TableCell>
+                        <TableCell>{new Date(bill.billDate).toLocaleDateString()}</TableCell>
+                        <TableCell>
+                          {bill.type === 'regular' ? getRegularFarmerName(bill) : bill.supplier.name}
+                        </TableCell>
+                        <TableCell>
+                          {bill.type === 'regular' ? getRegularFarmerAddress(bill) : bill.supplier.address}
+                        </TableCell>
+                        <TableCell>
+                          {bill.type === 'regular'
+                            ? getRegularAnubandh(bill)
+                            : bill.supplier.gstNumber
+                          }
+                        </TableCell>
+                        <TableCell>{getBillMarka(bill) || '-'}</TableCell>
+                        <TableCell>
+                          {getBillBags(bill).toFixed(0)}
+                        </TableCell>
+                        <TableCell>
+                          {getBillWeightQt(bill).toFixed(2)}
+                        </TableCell>
+                        <TableCell>
+                          {getBillRate(bill).toFixed(2)}
+                        </TableCell>
+                        <TableCell>₹{bill.totalAmount.toFixed(2)}</TableCell>
+                        <TableCell>₹{bill.paidAmount.toFixed(2)}</TableCell>
+                        <TableCell>₹{bill.balanceAmount.toFixed(2)}</TableCell>
+                        <TableCell>
+                          <Badge variant={
+                            bill.status === 'paid' ? 'default' :
+                            (bill.status === 'partial' || bill.status === 'partially_paid') ? 'secondary' :
+                            bill.status === 'cancelled' ? 'outline' : 'destructive'
+                          }>
+                            {bill.status}
+                          </Badge>
                         </TableCell>
                       </TableRow>
                     ))
