@@ -109,6 +109,17 @@ function formatLabel(value?: string | null) {
     .replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
+function formatBackupErrorMessage(message?: string | null) {
+  const normalized = String(message || '').trim()
+  if (!normalized) return '-'
+
+  if (/enoent/i.test(normalized) || /no such file or directory/i.test(normalized) || /\/var\/task\/var/i.test(normalized)) {
+    return 'Backup storage path was unavailable on the server. Generate a fresh backup after the storage fix.'
+  }
+
+  return normalized
+}
+
 function getBadgeVariant(value?: string | null): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (value === 'trial') return 'secondary'
   if (value === 'backup_ready') return 'secondary'
@@ -669,7 +680,7 @@ export default function SuperAdminTraderSubscriptionsClient({
                                   Download
                                 </Button>
                               ) : (
-                                <span className="text-xs text-slate-500">{backup.errorMessage || '-'}</span>
+                                <span className="text-xs text-slate-500">{formatBackupErrorMessage(backup.errorMessage)}</span>
                               )}
                             </TableCell>
                           </TableRow>
