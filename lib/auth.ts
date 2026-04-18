@@ -207,9 +207,9 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
         })
       : null
 
-    // For the standard Trader ID login flow, prefer the exact trader-scoped user
-    // lookup first. Fall back to the broader scan only to preserve older trader-name
-    // matching behavior.
+    // For Trader ID login, prefer the exact trader-scoped user lookup first.
+    // If no exact candidate is found we still scan by userId so we can preserve
+    // case-insensitive Trader ID matching, but never fall back to trader name.
     const candidates = exactTraderCandidate
       ? [exactTraderCandidate]
       : await prisma.user.findMany({
@@ -244,9 +244,8 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
     const traderMatchedCandidates = traderInput
       ? validCandidates.filter((candidate) => {
           const id = candidate.traderId.toLowerCase()
-          const traderName = candidate.trader?.name?.toLowerCase() || ''
           const input = traderInput.toLowerCase()
-          return id === input || traderName === input
+          return id === input
         })
       : validCandidates
 

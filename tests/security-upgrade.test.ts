@@ -747,6 +747,59 @@ test('Login enforces provided trader scope and blocks soft-deleted users', async
   }
 })
 
+test('Login accepts only exact trader ID and rejects trader-name aliases', async () => {
+  const suffix = Date.now().toString()
+  const password = 'StrictTraderId#123'
+  const hashedPassword = await bcrypt.hash(password, 12)
+  const traderId = `H${suffix}`
+  const legacyTraderName = `demo-Treader-${suffix}`
+  const userId = `strict-trader-${suffix}`
+
+  const trader = await prisma.trader.create({
+    data: {
+      id: traderId,
+      name: legacyTraderName
+    }
+  })
+  const company = await prisma.company.create({
+    data: {
+      name: `strict-trader-company-${suffix}`,
+      traderId
+    }
+  })
+  const user = await prisma.user.create({
+    data: {
+      traderId,
+      companyId: company.id,
+      userId,
+      password: hashedPassword,
+      role: 'company_user'
+    }
+  })
+
+  try {
+    const withLegacyName = await authenticateUser({
+      traderId: legacyTraderName,
+      userId,
+      password
+    })
+    assert.equal(withLegacyName.success, false)
+    assert.equal(withLegacyName.error, 'Invalid credentials')
+
+    const withCurrentTraderId = await authenticateUser({
+      traderId,
+      userId,
+      password
+    })
+    assert.equal(withCurrentTraderId.success, true)
+    assert.equal(withCurrentTraderId.user?.traderId, traderId)
+  } finally {
+    await prisma.user.deleteMany({ where: { id: user.id } })
+    await prisma.company.deleteMany({ where: { id: company.id } })
+    await prisma.trader.deleteMany({ where: { id: trader.id } })
+  }
+})
+
 test('Company mutation RBAC blocks company_user and out-of-scope trader_admin', async () => {
   const suffix = Date.now().toString()
   const traderA = await prisma.trader.create({ data: { name: `company-rbac-a-${suffix}` } })
