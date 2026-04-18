@@ -31,14 +31,16 @@ function createPrismaClient() {
       )
     : undefined
 
-  return new PrismaClient({
-    ...(adapter ? { adapter } : {}),
-    log: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
-    transactionOptions: {
-      maxWait: 10_000,
-      timeout: 20_000
-    }
-  })
+
+
+return new PrismaClient({
+  ...(adapter ? { adapter } as any : {}), // Add 'as any' here
+  log: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
+  transactionOptions: {
+    maxWait: 5000,
+    timeout: 10000,
+  },
+} as any); // Also add 'as any' here to be safe
 }
 
 export const prisma =

@@ -9,6 +9,7 @@
     "dev:stable": "next dev --webpack",
     "prebuild": "prisma generate",
     "build": "node scripts/build.mjs",
+    "build:standalone": "bash scripts/build-standalone-package.sh",
     "build:analyze": "ANALYZE=true npm run build",
     "postinstall": "prisma generate",
     "start": "next start",

@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ChevronDown, ChevronLeft, ChevronRight, LayoutDashboard, ShoppingCart, TrendingUp, Menu, Package, CreditCard, FileText, Settings, Lock, type LucideIcon } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getClientCache } from '@/lib/client-fetch-cache'
 import { APP_COMPANY_CHANGED_EVENT, notifyAppCompanyChanged } from '@/lib/company-context'
 import { loadClientPermissions } from '@/lib/client-permissions'
@@ -144,6 +144,8 @@ export default function Sidebar({
   const searchParams = useSearchParams()
   const [openItems, setOpenItems] = useState<string[]>([])
   const [allowedModules, setAllowedModules] = useState<Set<MenuPermissionModule> | null>(null)
+  const routeKey = `${pathname}?${searchParams.toString()}`
+  const previousRouteKeyRef = useRef(routeKey)
 
   const withCompany = useCallback((href?: string) => {
     void companyId
@@ -223,6 +225,14 @@ export default function Sidebar({
       window.removeEventListener(APP_COMPANY_CHANGED_EVENT, onCompanyChanged)
     }
   }, [companyId, pathname])
+
+  useEffect(() => {
+    if (previousRouteKeyRef.current !== routeKey && isMobileOpen) {
+      onCloseMobile?.()
+    }
+
+    previousRouteKeyRef.current = routeKey
+  }, [isMobileOpen, onCloseMobile, routeKey])
 
   const hasChildAccess = useCallback((child: MenuChild) => {
     if (!child.permissionModule) return true

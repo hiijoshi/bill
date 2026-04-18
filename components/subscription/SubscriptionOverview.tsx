@@ -48,6 +48,8 @@ type BackupSummary = {
   format: string
   fileName: string | null
   exportedAt: string | null
+  failedAt?: string | null
+  createdAt?: string | null
   downloadCount: number
   lastDownloadedAt: string | null
   errorMessage?: string | null
@@ -186,7 +188,7 @@ export default function SubscriptionOverview({
   }, [current])
 
   const runAction = useCallback(
-    async (action: 'request_backup' | 'request_closure') => {
+    async (action: 'request_backup' | 'request_closure' | 'cancel_closure_request') => {
       setActionLoading(true)
       setActionError(null)
 
@@ -280,6 +282,18 @@ export default function SubscriptionOverview({
               >
                 <Lock className="mr-2 h-4 w-4" />
                 {current?.dataLifecycle?.closureRequestedAt ? 'Update Closure' : 'Request Closure'}
+              </Button>
+            ) : null}
+            {current?.dataLifecycle?.closureRequestedAt ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-xl"
+                onClick={() => void runAction('cancel_closure_request')}
+                disabled={loading || actionLoading}
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Cancel Closure Request
               </Button>
             ) : null}
             {latestReadyBackup?.id ? (

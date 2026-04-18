@@ -5,7 +5,7 @@ import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
 import { cleanString, normalizeTenDigitPhone } from '@/lib/field-validation'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 import { normalizeNonNegative, roundCurrency } from '@/lib/billing-calculations'
-import { getOrSetServerCache, makeServerCacheKey, clearServerCacheByPrefix } from '@/lib/server-cache'
+import { getOrSetServerCache, makeServerCacheKey, makeServerCachePrefix, clearServerCacheByPrefix } from '@/lib/server-cache'
 import {
   getPartyOpeningBalanceReference,
   getSignedPartyOpeningBalance,
@@ -450,7 +450,7 @@ export async function POST(request: NextRequest) {
     })
 
     // Clear parties cache for this company
-    clearServerCacheByPrefix(makeServerCacheKey('parties', [companyId]))
+    clearServerCacheByPrefix(makeServerCachePrefix('parties', [companyId]))
 
     return NextResponse.json({
       success: true,
@@ -582,7 +582,7 @@ export async function PUT(request: NextRequest) {
     })
 
     // Clear parties cache for this company
-    clearServerCacheByPrefix(makeServerCacheKey('parties', [companyId]))
+    clearServerCacheByPrefix(makeServerCachePrefix('parties', [companyId]))
 
     return NextResponse.json({
       success: true,
@@ -619,7 +619,7 @@ export async function DELETE(request: NextRequest) {
       })
 
       // Clear parties cache for this company
-      clearServerCacheByPrefix(makeServerCacheKey('parties', [companyId]))
+      clearServerCacheByPrefix(makeServerCachePrefix('parties', [companyId]))
 
       return NextResponse.json({
         success: true,
@@ -644,7 +644,7 @@ export async function DELETE(request: NextRequest) {
     await prisma.party.delete({ where: { id } })
 
     // Clear parties cache for this company
-    clearServerCacheByPrefix(makeServerCacheKey('parties', [companyId]))
+    clearServerCacheByPrefix(makeServerCachePrefix('parties', [companyId]))
 
     return NextResponse.json({ success: true, message: 'Party deleted successfully' })
   } catch (error) {

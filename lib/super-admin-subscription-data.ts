@@ -248,6 +248,7 @@ export type TraderSubscriptionDetailPayload = {
     format: string
     fileName: string | null
     exportedAt: string | null
+    failedAt?: string | null
     downloadCount: number
     createdAt: string
     errorMessage?: string | null
@@ -428,7 +429,7 @@ function buildLifecycleMessage(args: {
   }
 
   if (args.closureRequestedAt) {
-    return 'Closure request submitted. Super admin review is pending.'
+    return 'Closure request is active and waiting for review. It can still be cancelled before final processing.'
   }
 
   return args.subscriptionMessage

@@ -219,7 +219,7 @@ function buildStateMessage(args: {
   }
 
   if (args.closureRequestedAt) {
-    return 'Closure request submitted. Super admin review is pending.'
+    return 'Closure request is active. Super admin can review it, or you can cancel it before final processing.'
   }
 
   return args.subscriptionMessage
