@@ -80,6 +80,15 @@ export function makeServerCacheKey(prefix: string, parts: unknown[]): string {
   return `${prefix}:${JSON.stringify(parts)}`
 }
 
+export function makeServerCachePrefix(prefix: string, parts: unknown[] = []): string {
+  if (parts.length === 0) {
+    return `${prefix}:`
+  }
+
+  const serialized = JSON.stringify(parts)
+  return `${prefix}:${serialized.slice(0, -1)}`
+}
+
 async function getRedisCache<T>(key: string): Promise<T | null> {
   const client = await getRedisClient()
   if (!client) return null

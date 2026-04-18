@@ -642,13 +642,13 @@ export default function PurchaseEntryPage() {
 
                   {/* Marka Number */}
                   <div>
-                    <Label htmlFor="markaNumber">मार्का नं.</Label>
+                    <Label htmlFor="markaNumber">Marka No.</Label>
                     <Input
                       id="markaNumber"
                       list="purchaseMarkaOptions"
                       value={markaNumber}
                       onChange={(e) => setMarkaNumber(e.target.value.toUpperCase())}
-                      placeholder="मार्का नंबर दर्ज करें"
+                      placeholder="Enter marka number"
                     />
                     {markas.length > 0 ? (
                       <datalist id="purchaseMarkaOptions">

@@ -124,7 +124,7 @@ export function PurchasePrintSheet({ printData }: Props) {
       <div className="grid grid-cols-6 border-b border-black text-[12px] font-medium print:text-[10px]">
         <div className="border-r border-black p-1 print:p-[2px]">कृषि उपज का नाम : {printData.productName || '-'}</div>
         <div className="border-r border-black p-1 print:p-[2px]">अनुबंध/सौदा पत्रक के आधार पर वजन /क्विंटल : {printData.totalWeightQt.toFixed(2)}</div>
-        <div className="border-r border-black p-1 print:p-[2px]">मिका नं. : {printData.markaNo || '-'}</div>
+        <div className="border-r border-black p-1 print:p-[2px]">मार्का नं. : {printData.markaNo || '-'}</div>
         <div className="border-r border-black p-1 print:p-[2px]">तौल पर्ची के आधार पर वास्तविक वजन क्विंटल : {printData.qty.toFixed(2)}</div>
         <div className="border-r border-black p-1 print:p-[2px]">दर : ₹ {printData.rate.toFixed(2)}</div>
         <div className="p-1 print:p-[2px]">कुल मूल्य : ₹ {printData.grossAmount.toFixed(2)}</div>

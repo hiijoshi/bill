@@ -6,12 +6,12 @@ import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { markSuperAdminLiveUpdate } from '@/lib/live-update-state'
 import { prisma } from '@/lib/prisma'
 import { getCurrentTraderSubscription } from '@/lib/subscription-core'
-import { createTraderDataBackup, requestTraderClosure, TraderRetentionError } from '@/lib/trader-backups'
+import { clearTraderClosureRequest, createTraderDataBackup, requestTraderClosure, TraderRetentionError } from '@/lib/trader-backups'
 import { getTraderBackupHistory, getTraderDataLifecycleSummary } from '@/lib/trader-retention'
 
 const actionSchema = z
   .object({
-    action: z.enum(['request_backup', 'request_closure']),
+    action: z.enum(['request_backup', 'request_closure', 'cancel_closure_request']),
     notes: z.string().trim().max(1_000).optional().nullable()
   })
   .strict()
@@ -99,6 +99,14 @@ export async function POST(request: NextRequest) {
     }
 
     await prisma.$transaction(async (tx) => {
+      if (parsed.data.action === 'cancel_closure_request') {
+        await clearTraderClosureRequest(tx, {
+          traderId: trader.id,
+          notes: parsed.data.notes || null
+        })
+        return
+      }
+
       await requestTraderClosure(tx, {
         traderId: trader.id,
         actorId,

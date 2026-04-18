@@ -186,6 +186,21 @@ export default function BankStatementUploadClient({
     }
   }, [activeBatchId, loadBatchDetail])
 
+  useEffect(() => {
+    const recentBatches = workspace?.recentBatches || []
+    if (recentBatches.length === 0) {
+      if (activeBatchId) {
+        setActiveBatchId('')
+        setBatchDetail(null)
+      }
+      return
+    }
+
+    if (!activeBatchId || !recentBatches.some((batch) => batch.id === activeBatchId)) {
+      setActiveBatchId(recentBatches[0].id)
+    }
+  }, [activeBatchId, workspace?.recentBatches])
+
   const runStage = async (label: string, action: () => Promise<void>) => {
     setRunning(true)
     setErrorMessage(null)
@@ -221,13 +236,10 @@ export default function BankStatementUploadClient({
         fileSizeBytes: selectedFile.size
       })
       setStageProgress(45)
-      await apiClient.postBinary(`/api/bank-statements/batches/${createResponse.data.batch.id}/file`, selectedFile, {
-        'content-type': selectedFile.type || 'application/octet-stream',
-        'x-company-id': companyId,
-        'x-file-name': encodeURIComponent(selectedFile.name),
-        'x-file-mime-type': encodeURIComponent(selectedFile.type || 'application/octet-stream'),
-        'x-file-size-bytes': String(selectedFile.size)
-      })
+      const formData = new FormData()
+      formData.append('companyId', companyId)
+      formData.append('file', selectedFile)
+      await apiClient.postForm(`/api/bank-statements/batches/${createResponse.data.batch.id}/file`, formData)
       setStageProgress(60)
       await apiClient.postJson(`/api/bank-statements/batches/${createResponse.data.batch.id}/parse`, { companyId })
       setStageProgress(82)
@@ -617,25 +629,7 @@ export default function BankStatementUploadClient({
           ) : null}
         </section>
 
-        <section className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex flex-wrap gap-2">
-            {(workspace?.recentBatches || []).slice(0, 10).map((batch) => (
-              <button
-                key={batch.id}
-                type="button"
-                onClick={() => setActiveBatchId(batch.id)}
-                className={`rounded-lg border px-3 py-2 text-left text-[12px] transition-colors ${
-                  activeBatchId === batch.id
-                    ? 'border-slate-900 bg-slate-900 text-white'
-                    : 'border-[color:var(--color-border-tertiary)] bg-white text-[color:var(--color-text-secondary)] hover:bg-slate-50'
-                }`}
-              >
-                <div className="max-w-[200px] truncate font-medium">{batch.fileName}</div>
-                <div className={activeBatchId === batch.id ? 'text-slate-300' : 'text-[color:var(--color-text-tertiary)]'}>{dateText(batch.createdAt)}</div>
-              </button>
-            ))}
-          </div>
-
+        <section className="flex justify-end">
           <div className="relative w-full xl:w-80">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[color:var(--color-text-tertiary)]" />
             <Input
