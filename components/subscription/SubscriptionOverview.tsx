@@ -125,6 +125,17 @@ function formatLifecycleLabel(state?: string | null) {
     .replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
+function formatBackupErrorMessage(message?: string | null) {
+  const normalized = String(message || '').trim()
+  if (!normalized) return '-'
+
+  if (/enoent/i.test(normalized) || /no such file or directory/i.test(normalized) || /\/var\/task\/var/i.test(normalized)) {
+    return 'Backup storage path was unavailable on the server. Generate a fresh backup after the storage fix.'
+  }
+
+  return normalized
+}
+
 function getBadgeVariant(state?: string | null): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (state === 'trial') return 'secondary'
   if (state === 'active') return 'default'
@@ -493,7 +504,7 @@ export default function SubscriptionOverview({
                           Download
                         </Button>
                       ) : (
-                        <span className="text-xs text-slate-500">{backup.errorMessage || '-'}</span>
+                        <span className="text-xs text-slate-500">{formatBackupErrorMessage(backup.errorMessage)}</span>
                       )}
                     </TableCell>
                   </TableRow>

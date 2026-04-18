@@ -16,9 +16,32 @@ import {
 
 type DbClient = typeof prisma | Prisma.TransactionClient
 
-const PRIMARY_BACKUP_DIRECTORY = path.join(process.cwd(), 'var', 'trader-backups')
-const FALLBACK_BACKUP_DIRECTORY = path.join(tmpdir(), 'mbill', 'trader-backups')
-const MANAGED_BACKUP_DIRECTORIES = [PRIMARY_BACKUP_DIRECTORY, FALLBACK_BACKUP_DIRECTORY].map((directory) => path.resolve(directory))
+function isServerlessRuntime() {
+  return Boolean(process.env.VERCEL || process.env.LAMBDA_TASK_ROOT || process.env.AWS_LAMBDA_FUNCTION_NAME)
+}
+
+function getPrimaryBackupDirectory() {
+  const configured = String(process.env.TRADER_BACKUP_STORAGE_DIR || '').trim()
+  if (configured) {
+    return path.resolve(configured)
+  }
+
+  if (isServerlessRuntime()) {
+    return path.join(tmpdir(), 'mbill', 'trader-backups')
+  }
+
+  return path.join(process.cwd(), 'var', 'trader-backups')
+}
+
+function getFallbackBackupDirectory() {
+  return path.join(tmpdir(), 'mbill', 'trader-backups')
+}
+
+function getManagedBackupDirectories() {
+  const primary = getPrimaryBackupDirectory()
+  const fallback = getFallbackBackupDirectory()
+  return Array.from(new Set([primary, fallback].map((directory) => path.resolve(directory))))
+}
 
 export class TraderRetentionError extends Error {
   status: number
@@ -63,7 +86,7 @@ async function fileExists(filePath: string) {
 
 function assertAbsoluteBackupPath(storagePath: string) {
   const normalized = path.resolve(storagePath)
-  const allowedRoot = MANAGED_BACKUP_DIRECTORIES.find((root) => normalized === root || normalized.startsWith(`${root}${path.sep}`))
+  const allowedRoot = getManagedBackupDirectories().find((root) => normalized === root || normalized.startsWith(`${root}${path.sep}`))
   if (!allowedRoot) {
     throw new TraderRetentionError('Backup file path is outside managed backup storage', 500)
   }
@@ -71,7 +94,7 @@ function assertAbsoluteBackupPath(storagePath: string) {
 }
 
 async function resolveWritableBackupDirectory() {
-  for (const candidate of [PRIMARY_BACKUP_DIRECTORY, FALLBACK_BACKUP_DIRECTORY]) {
+  for (const candidate of getManagedBackupDirectories()) {
     try {
       await mkdir(candidate, { recursive: true })
       return candidate
