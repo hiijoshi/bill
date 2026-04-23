@@ -106,6 +106,18 @@ function hasMappedTarget(draft: DraftState) {
   return Boolean(draft.accountingHeadId || draft.partyId || draft.supplierId)
 }
 
+function buildDraftPayload(companyId: string, draft: DraftState) {
+  return {
+    companyId,
+    accountingHeadId: draft.accountingHeadId || null,
+    partyId: draft.partyId || null,
+    supplierId: draft.supplierId || null,
+    voucherType: draft.voucherType || null,
+    paymentMode: draft.paymentMode || null,
+    remarks: draft.remarks || null
+  }
+}
+
 export default function BankStatementUploadClient({
   initialCompanyId,
   initialWorkspace,
@@ -132,6 +144,7 @@ export default function BankStatementUploadClient({
   const [matchedSearch, setMatchedSearch] = useState('')
   const [unmatchedSearch, setUnmatchedSearch] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
+  const [autoMatchNotice, setAutoMatchNotice] = useState<string | null>(null)
   const deferredSearch = useDeferredValue(search)
   const deferredMatchedSearch = useDeferredValue(matchedSearch)
   const deferredUnmatchedSearch = useDeferredValue(unmatchedSearch)
@@ -248,6 +261,7 @@ export default function BankStatementUploadClient({
       await loadBatchDetail(createResponse.data.batch.id)
       await refreshWorkspace()
       setSelectedFile(null)
+      setAutoMatchNotice('System auto-matched transactions.')
     })
   }
 
@@ -266,6 +280,7 @@ export default function BankStatementUploadClient({
       await apiClient.postJson(`/api/bank-statements/batches/${activeBatchId}/match`, { companyId })
       await loadBatchDetail(activeBatchId)
       await refreshWorkspace()
+      setAutoMatchNotice('System auto-matched transactions.')
     })
   }
 
@@ -312,15 +327,7 @@ export default function BankStatementUploadClient({
     const draft = drafts[rowId]
     if (!draft) return
     await runStage('Saving reconciliation draft', async () => {
-      await apiClient.patchJson(`/api/bank-statements/rows/${rowId}/draft`, {
-        companyId,
-        accountingHeadId: draft.accountingHeadId || null,
-        partyId: draft.partyId || null,
-        supplierId: draft.supplierId || null,
-        voucherType: draft.voucherType || null,
-        paymentMode: draft.paymentMode || null,
-        remarks: draft.remarks || null
-      })
+      await apiClient.patchJson(`/api/bank-statements/rows/${rowId}/draft`, buildDraftPayload(companyId, draft))
       await loadBatchDetail(activeBatchId)
     })
   }
@@ -345,6 +352,61 @@ export default function BankStatementUploadClient({
         rowIds
       })
       setSelectedRows({})
+      await loadBatchDetail(activeBatchId)
+      await refreshWorkspace()
+    })
+  }
+
+  const settleRowNow = async (rowId: string) => {
+    if (!activeBatchId) return
+    const draft = drafts[rowId]
+    if (!draft || !hasMappedTarget(draft)) return
+
+    await runStage('Settling row in one click', async () => {
+      await apiClient.patchJson(`/api/bank-statements/rows/${rowId}/draft`, buildDraftPayload(companyId, draft))
+      await apiClient.postJson(`/api/bank-statements/batches/${activeBatchId}/post`, {
+        companyId,
+        rowIds: [rowId]
+      })
+      setSelectedRows((current) => ({ ...current, [rowId]: false }))
+      await loadBatchDetail(activeBatchId)
+      await refreshWorkspace()
+    })
+  }
+
+  const acceptMatch = async (row: BatchDetailRow) => {
+    if (!activeBatchId) return
+    const bestCandidate = row.matchCandidates?.[0]
+    if (!bestCandidate) return
+
+    await runStage('Accepting suggested match', async () => {
+      try {
+        await apiClient.patchJson(`/api/bank-statements/rows/${row.id}/review`, {
+          companyId,
+          action: 'accept_match',
+          candidateId: bestCandidate.id
+        })
+      } catch {
+        await apiClient.patchJson(`/api/bank-statements/rows/${row.id}/review`, {
+          companyId,
+          action: 'manual_link',
+          paymentId: bestCandidate.paymentId
+        })
+      }
+      setSelectedRows((current) => ({ ...current, [row.id]: false }))
+      await loadBatchDetail(activeBatchId)
+      await refreshWorkspace()
+    })
+  }
+
+  const rejectMatch = async (rowId: string) => {
+    if (!activeBatchId) return
+    await runStage('Marking row as unsettled', async () => {
+      await apiClient.patchJson(`/api/bank-statements/rows/${rowId}/review`, {
+        companyId,
+        action: 'mark_unsettled'
+      })
+      setSelectedRows((current) => ({ ...current, [rowId]: false }))
       await loadBatchDetail(activeBatchId)
       await refreshWorkspace()
     })
@@ -448,6 +510,9 @@ export default function BankStatementUploadClient({
   const handleFileSelection = useCallback((file: File | null) => {
     setSelectedFile(file)
     setIsDragOver(false)
+    if (file) {
+      setAutoMatchNotice(null)
+    }
   }, [])
 
   return (
@@ -616,6 +681,7 @@ export default function BankStatementUploadClient({
           <div className="mt-4 flex flex-wrap items-center gap-2 text-[13px] text-[color:var(--color-text-secondary)]">
             <span className="rounded-full bg-[color:var(--color-background-secondary)] px-3 py-1">Formats: PDF, CSV, Excel, image</span>
             <span className="rounded-full bg-[color:var(--color-background-secondary)] px-3 py-1">System parses rows, runs matching, and suggests ERP targets</span>
+            {autoMatchNotice ? <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700">{autoMatchNotice}</span> : null}
           </div>
 
           {stageMessage ? (
@@ -693,7 +759,7 @@ export default function BankStatementUploadClient({
                       </div>
                       <div className="flex justify-start xl:justify-center">
                         <Badge className="rounded-md border-0 bg-[color:var(--color-background-success)] px-2.5 py-1 text-[12px] font-medium text-[color:var(--color-text-success)]">
-                          {row.postedPaymentId || row.postedLedgerEntryId ? 'Manual match' : 'Auto-matched'}
+                          Auto Matched
                         </Badge>
                       </div>
                       <div className="flex justify-start xl:justify-end">
@@ -719,7 +785,7 @@ export default function BankStatementUploadClient({
                         {unresolvedRows.length}
                       </Badge>
                     </div>
-                    <p className="mt-1 text-[13px] text-[color:var(--color-text-secondary)]">Resolve with ERP mapping, quick create, or manual review before posting.</p>
+                    <p className="mt-1 text-[13px] text-[color:var(--color-text-secondary)]">Resolve in one click with Settle Now, Accept Match, or Reject. Draft and quick create stay optional.</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button variant="outline" size="sm" className="h-9 rounded-lg text-[13px]" onClick={() => void Promise.all(unresolvedRows.map((row) => saveDraft(row.id)))} disabled={running || unresolvedRows.length === 0}>
@@ -750,6 +816,10 @@ export default function BankStatementUploadClient({
                 ) : unresolvedRows.map((row) => {
                   const draft = drafts[row.id] || buildDraft(row)
                   const mapped = hasMappedTarget(draft)
+                  const bestCandidate = row.matchCandidates?.[0] || null
+                  const autoSuggested = Boolean(bestCandidate && bestCandidate.totalScore > 85 && row.reviewStatus !== 'rejected')
+                  const rowStatusClass = autoSuggested ? 'bg-amber-50 text-amber-700' : 'bg-[color:var(--color-background-danger)] text-[color:var(--color-text-danger)]'
+                  const rowStatusLabel = autoSuggested ? 'Suggested Match' : 'Unmatched'
                   return (
                     <article key={row.id} className="rounded-lg border border-[color:var(--color-border-tertiary)] bg-white p-4">
                       <div className="flex flex-col gap-4">
@@ -764,9 +834,12 @@ export default function BankStatementUploadClient({
                             <div>
                               <div className="flex flex-wrap items-center gap-2">
                                 <div className="text-[13px] text-[color:var(--color-text-secondary)]">{dateText(row.transactionDate)}</div>
-                                <Badge className={`rounded-md border-0 px-2.5 py-1 text-[12px] font-medium ${row.matchStatus === 'ambiguous' ? 'bg-amber-50 text-amber-700' : 'bg-[color:var(--color-background-danger)] text-[color:var(--color-text-danger)]'}`}>
-                                  {mapped ? 'Ready to post' : row.matchStatus === 'ambiguous' ? 'Suggested match' : 'Unmatched'}
+                                <Badge className={`rounded-md border-0 px-2.5 py-1 text-[12px] font-medium ${rowStatusClass}`}>
+                                  {rowStatusLabel}
                                 </Badge>
+                                {bestCandidate ? (
+                                  <span className="text-[12px] text-[color:var(--color-text-tertiary)]">Score: {Math.round(bestCandidate.totalScore)}</span>
+                                ) : null}
                               </div>
                               <button type="button" className="mt-1 text-left text-[14px] font-medium text-[color:var(--color-text-primary)] hover:underline" onClick={() => setDetailRowId(row.id)}>
                                 {row.description}
@@ -857,8 +930,21 @@ export default function BankStatementUploadClient({
                           </div>
 
                           <div className="space-y-2">
-                            <Button variant="outline" size="sm" className="h-9 w-full rounded-lg text-[13px]" onClick={() => void saveDraft(row.id)}>
-                              Save
+                            {mapped ? (
+                              <Button size="sm" className="h-9 w-full rounded-lg text-[13px]" onClick={() => void settleRowNow(row.id)} disabled={running}>
+                                Settle Now
+                              </Button>
+                            ) : null}
+                            {bestCandidate ? (
+                              <Button size="sm" className="h-9 w-full rounded-lg text-[13px]" onClick={() => void acceptMatch(row)} disabled={running}>
+                                Accept Match
+                              </Button>
+                            ) : null}
+                            <Button variant="ghost" size="sm" className="h-9 w-full rounded-lg text-[13px]" onClick={() => void rejectMatch(row.id)} disabled={running}>
+                              Reject
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-9 w-full rounded-lg text-[13px]" onClick={() => void saveDraft(row.id)} disabled={running}>
+                              Save Draft (Optional)
                             </Button>
                             {!mapped ? (
                               <>
@@ -880,14 +966,10 @@ export default function BankStatementUploadClient({
                                   </SelectContent>
                                 </Select>
                                 <Button variant="outline" size="sm" className="h-9 w-full rounded-lg text-[13px]" onClick={() => void quickCreateTarget(row.id)} disabled={running}>
-                                  Create
+                                  Quick Create (Optional)
                                 </Button>
                               </>
-                            ) : (
-                              <Button size="sm" className="h-9 w-full rounded-lg text-[13px]" onClick={() => void postRows([row.id])}>
-                                Create / Post
-                              </Button>
-                            )}
+                            ) : null}
                             <Button variant="ghost" size="sm" className="h-9 w-full rounded-lg text-[13px]" onClick={() => setDetailRowId(row.id)}>
                               Match / Review
                             </Button>
@@ -895,7 +977,7 @@ export default function BankStatementUploadClient({
                         </div>
 
                         <div className="rounded-lg bg-[color:var(--color-background-secondary)] px-3 py-2 text-[13px] text-[color:var(--color-text-secondary)]">
-                          {row.suggestedReason || row.matchReason || 'No direct ERP match found. Select account or party mapping, then save and post.'}
+                          {row.suggestedReason || row.matchReason || 'No direct ERP match found. Select account or party mapping and click Settle Now.'}
                         </div>
                       </div>
                     </article>
