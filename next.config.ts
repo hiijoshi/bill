@@ -38,6 +38,12 @@ const nextConfig: NextConfig = {
   output: 'standalone',
   allowedDevOrigins: DEFAULT_LOCAL_ALLOWED_HOSTS,
   serverExternalPackages: ['@napi-rs/canvas', 'pdf-parse', 'pdfjs-dist'],
+  outputFileTracingIncludes: {
+    '*': [
+      './public/pdf.worker.mjs',
+      './node_modules/pdf-parse/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'
+    ]
+  },
   turbopack: {
     root: process.cwd()
   },

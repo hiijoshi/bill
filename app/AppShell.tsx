@@ -92,6 +92,9 @@ export default function AppShell({
       const isSuperAdminApi =
         urlString.startsWith('/api/super-admin') ||
         urlString.startsWith(`${window.location.origin}/api/super-admin`)
+      const isCsrfTokenEndpoint =
+        urlString === '/api/security/csrf' ||
+        urlString === `${window.location.origin}/api/security/csrf`
       const isSuperAdminAuthEndpoint =
         urlString === '/api/super-admin/auth' ||
         urlString === `${window.location.origin}/api/super-admin/auth`
@@ -230,6 +233,10 @@ export default function AppShell({
       }
 
       if (response.status === 401 && isSuperAdminApi && isSuperAdminAuthEndpoint) {
+        return response
+      }
+
+      if (response.status === 401 && isCsrfTokenEndpoint) {
         return response
       }
 
