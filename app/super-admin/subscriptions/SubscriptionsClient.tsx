@@ -547,7 +547,7 @@ export default function SuperAdminTraderSubscriptionsClient({
           </CardContent>
         </Card>
 
-        <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.65fr)_minmax(360px,1fr)]">
           <Card>
             <CardHeader className="pb-3">
               <CardTitle>Selected Trader Summary</CardTitle>
@@ -728,7 +728,7 @@ export default function SuperAdminTraderSubscriptionsClient({
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="h-fit xl:sticky xl:top-6">
             <CardHeader className="pb-3">
               <CardTitle>Subscription Action</CardTitle>
             </CardHeader>
@@ -790,7 +790,7 @@ export default function SuperAdminTraderSubscriptionsClient({
                 ) : null}
 
                 {(form.action === 'assign_trial' || form.action === 'assign_paid' || form.action === 'renew_paid' || form.action === 'convert_to_paid') ? (
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3">
                     <Input
                       type="date"
                       value={form.startDate}
@@ -815,7 +815,7 @@ export default function SuperAdminTraderSubscriptionsClient({
                 ) : null}
 
                 {form.action === 'extend' ? (
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3">
                     <Input
                       type="number"
                       min="1"
@@ -832,7 +832,7 @@ export default function SuperAdminTraderSubscriptionsClient({
                 ) : null}
 
                 {(form.action === 'mark_read_only' || form.action === 'update_retention' || form.action === 'mark_deletion_pending') ? (
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3">
                     {form.action === 'mark_read_only' ? (
                       <label className="text-sm">
                         <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Read Only State</span>
@@ -884,7 +884,7 @@ export default function SuperAdminTraderSubscriptionsClient({
                 ) : null}
 
                 {(form.action === 'assign_paid' || form.action === 'renew_paid' || form.action === 'convert_to_paid') ? (
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3">
                     <Input
                       type="number"
                       min="0"
@@ -916,7 +916,7 @@ export default function SuperAdminTraderSubscriptionsClient({
                 ) : null}
 
                 {form.action === 'assign_trial' || form.action === 'assign_paid' ? (
-                  <label className="flex items-center gap-2 rounded border border-slate-200 px-3 py-2 text-sm">
+                  <label className="flex items-center gap-2 rounded border border-slate-200 px-3 py-2 text-sm leading-5">
                     <input
                       type="checkbox"
                       checked={form.replaceExisting}

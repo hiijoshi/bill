@@ -6,6 +6,28 @@ function normalizeScopeSource(value: string | null | undefined) {
   return String(value || '').trim() || null
 }
 
+function resolveCsrfTokenFromCookies(
+  cookieStore: Awaited<ReturnType<typeof cookies>>,
+  scopeSource: string | null
+) {
+  const scopedCandidates =
+    getSessionCookieNameCandidates('app', scopeSource)
+      .map((cookieNames) => cookieStore.get(cookieNames.csrfToken)?.value)
+      .find((value): value is string => Boolean(value)) || ''
+
+  if (scopedCandidates) {
+    return scopedCandidates
+  }
+
+  // Fallback for environments where host normalization can drift between
+  // requests (for example, proxy or localhost alias differences).
+  const prefixed = cookieStore
+    .getAll()
+    .find((cookie) => cookie.name === 'csrf-token' || cookie.name.startsWith('csrf-token__'))
+
+  return prefixed?.value || ''
+}
+
 export async function GET() {
   const cookieStore = await cookies()
   const headerStore = await headers()
@@ -13,10 +35,7 @@ export async function GET() {
     headerStore.get('x-forwarded-host') || headerStore.get('host')
   )
 
-  const csrfToken =
-    getSessionCookieNameCandidates('app', scopeSource)
-      .map((cookieNames) => cookieStore.get(cookieNames.csrfToken)?.value)
-      .find((value): value is string => Boolean(value)) || ''
+  const csrfToken = resolveCsrfTokenFromCookies(cookieStore, scopeSource)
 
   if (!csrfToken) {
     return NextResponse.json(
@@ -28,7 +47,7 @@ export async function GET() {
           retryable: true
         }
       },
-      { status: 401 }
+      { status: 400 }
     )
   }
 

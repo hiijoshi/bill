@@ -271,9 +271,9 @@ function LoginPageContent() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-6">
-              {/* Trader ID Input */}
+              {/* Trader ID / Name Input */}
               <div>
-                <Label htmlFor="traderId">Trader ID (optional)</Label>
+                <Label htmlFor="traderId">Trader ID or Trader Name (optional)</Label>
                 <div className="relative">
                   <Building2 className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
                   <Input
@@ -282,7 +282,7 @@ function LoginPageContent() {
                     type="text"
                     autoComplete="organization"
                     className="pl-10"
-                    placeholder="Enter your trader ID (optional)"
+                    placeholder="Enter trader ID or trader name"
                     disabled={loading}
                     value={traderId}
                     onChange={(event) => setTraderId(event.target.value)}

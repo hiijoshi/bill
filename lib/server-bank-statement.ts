@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { getCsvValue, normalizeCsvHeader, parseCsvObjects, parseCsvRows, type CsvImportRow } from '@/lib/master-csv'
 import type { StatementDirection, StatementDocumentKind, StatementDocumentMeta } from '@/lib/bank-statement-types'
@@ -74,6 +75,7 @@ type TesseractWorker = Awaited<ReturnType<TesseractModule['createWorker']>>
 
 let pdfCanvasGlobalsReady: Promise<void> | null = null
 let pdfParseModuleReady: Promise<PdfParseModule> | null = null
+let pdfWorkerConfigured = false
 let ocrWorkerReady: Promise<TesseractWorker> | null = null
 let ocrWorkerQueue: Promise<unknown> = Promise.resolve()
 let ocrWorkerIdleTimer: ReturnType<typeof setTimeout> | null = null
@@ -81,6 +83,8 @@ let ocrWorkerIdleTimer: ReturnType<typeof setTimeout> | null = null
 const OCR_WORKER_IDLE_TIMEOUT_MS = 2 * 60_000
 const OCR_MAX_IMAGE_EDGE_PX = 1800
 const OCR_MAX_IMAGE_PIXELS = 2_400_000
+const PDF_PUBLIC_WORKER_URL_PATH = '/pdf.worker.mjs'
+const PDF_PUBLIC_WORKER_FILE_PATH = path.join(process.cwd(), 'public', 'pdf.worker.mjs')
 const TESSERACT_NODE_WORKER_PATH = path.join(
   process.cwd(),
   'node_modules',
@@ -570,6 +574,15 @@ async function getPdfParseModule(): Promise<PdfParseModule> {
 
   pdfParseModuleReady = (async () => {
     const pdfParseModule = await import('pdf-parse')
+    const setWorker = pdfParseModule?.PDFParse?.setWorker
+
+    if (!pdfWorkerConfigured && typeof setWorker === 'function') {
+      const resolvedWorkerSource = existsSync(PDF_PUBLIC_WORKER_FILE_PATH)
+        ? pathToFileURL(PDF_PUBLIC_WORKER_FILE_PATH).href
+        : PDF_PUBLIC_WORKER_URL_PATH
+      setWorker(resolvedWorkerSource)
+      pdfWorkerConfigured = true
+    }
 
     return pdfParseModule
   })()
