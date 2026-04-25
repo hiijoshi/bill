@@ -5,8 +5,9 @@ import ErrorBoundary from '@/components/ErrorBoundary'
 import NetworkStatusBanner from '@/components/NetworkStatusBanner'
 import { SessionProvider } from '@/components/SessionProvider'
 import PwaClientBoot from '@/components/pwa/PwaClientBoot'
+import { sanitizeCompanyId } from '@/lib/company-id'
 import { isAbortError } from '@/lib/http'
-import { getSessionCookieNameCandidates } from '@/lib/session-cookies'
+import { getCompanyCookieNameCandidates, getSessionCookieNameCandidates } from '@/lib/session-cookies'
 
 export default function AppShell({
   children
@@ -42,6 +43,30 @@ export default function AppShell({
     const getCookieValue = (name: string): string | null => {
       const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))
       return match ? decodeURIComponent(match[1]) : null
+    }
+
+    const shouldInjectCompanyId = (pathname: string): boolean => {
+      if (!pathname.startsWith('/api/')) return false
+      if (pathname.startsWith('/api/super-admin')) return false
+      if (pathname === '/api/security/csrf') return false
+      if (pathname.startsWith('/api/auth')) return false
+      if (pathname.startsWith('/api/subscription/')) return false
+      return true
+    }
+
+    const resolveActiveCompanyId = (requestUrl?: URL): string => {
+      const fromRequest = sanitizeCompanyId(requestUrl?.searchParams.get('companyId') || '')
+      if (fromRequest) return fromRequest
+
+      const fromLocation = sanitizeCompanyId(new URL(window.location.href).searchParams.get('companyId') || '')
+      if (fromLocation) return fromLocation
+
+      for (const cookieName of getCompanyCookieNameCandidates(window.location.host)) {
+        const fromCookie = sanitizeCompanyId(getCookieValue(cookieName) || '')
+        if (fromCookie) return fromCookie
+      }
+
+      return ''
     }
 
     const isAuthScreen = () => {
@@ -216,17 +241,67 @@ export default function AppShell({
         }
       }
 
+      const scopedRequestInit: RequestInit = { ...requestInit }
+      if (isInternalApi && !scopedRequestInit.credentials) {
+        scopedRequestInit.credentials = 'same-origin'
+      }
+      let requestInput: RequestInfo | URL = url
+
+      if ((typeof url === 'string' || url instanceof URL) && isInternalApi) {
+        const targetUrl = new URL(urlString, window.location.origin)
+        if (shouldInjectCompanyId(targetUrl.pathname)) {
+          const activeCompanyId = resolveActiveCompanyId(targetUrl)
+          if (activeCompanyId) {
+            const headers = new Headers(scopedRequestInit.headers || {})
+            headers.set('x-company-id', activeCompanyId)
+            headers.set('x-auth-company-id', activeCompanyId)
+            scopedRequestInit.headers = headers
+
+            if (!targetUrl.searchParams.has('companyId') && method === 'GET') {
+              targetUrl.searchParams.set('companyId', activeCompanyId)
+            }
+
+            const contentType = headers.get('Content-Type') || headers.get('content-type') || ''
+            if (
+              scopedRequestInit.body &&
+              typeof scopedRequestInit.body === 'string' &&
+              contentType.toLowerCase().includes('application/json')
+            ) {
+              try {
+                const parsedBody = JSON.parse(scopedRequestInit.body) as Record<string, unknown>
+                if (parsedBody && typeof parsedBody === 'object' && !('companyId' in parsedBody)) {
+                  parsedBody.companyId = activeCompanyId
+                  scopedRequestInit.body = JSON.stringify(parsedBody)
+                }
+              } catch {
+                // Leave malformed JSON untouched; server will validate body.
+              }
+            }
+
+            if (scopedRequestInit.body instanceof FormData && !scopedRequestInit.body.has('companyId')) {
+              scopedRequestInit.body.append('companyId', activeCompanyId)
+            }
+
+            if (typeof url === 'string') {
+              requestInput = targetUrl.pathname + targetUrl.search
+            } else {
+              requestInput = targetUrl
+            }
+          }
+        }
+      }
+
       let response = await safeFetch(
-        url,
-        requestInit,
+        requestInput,
+        scopedRequestInit,
         isInternalApi,
         timeoutMsForRequest
       )
 
       if (shouldRetryTimedGet && await isTimeoutResponse(response)) {
         response = await safeFetch(
-          url,
-          requestInit,
+          requestInput,
+          scopedRequestInit,
           isInternalApi,
           Math.min(timeoutMsForRequest + 15000, isSuperAdminApi ? 120000 : 90000)
         )
@@ -249,8 +324,8 @@ export default function AppShell({
 
         if (refreshed) {
           response = await safeFetch(
-            url,
-            requestInit,
+            requestInput,
+            scopedRequestInit,
             isInternalApi,
             timeoutMsForRequest
           )

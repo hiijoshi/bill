@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
-import { getAccessibleCompanies, requireAuthContext } from '@/lib/api-security'
+import { getAccessibleCompanies, requireAuthContext, validateCompanyAccess } from '@/lib/api-security'
 import { loadAuthGuardState } from '@/lib/auth-guard-state'
+import { sanitizeCompanyId } from '@/lib/company-id'
 import { getCompanyLiveUpdates, getUserSessionLiveUpdate, markCompanyLiveUpdate } from '@/lib/live-update-state'
 
 const postBodySchema = z
@@ -14,14 +15,14 @@ const postBodySchema = z
 function parseRequestedCompanyIds(value: string | null, fallbackCompanyId?: string | null): string[] {
   const ids = (value || '')
     .split(',')
-    .map((entry) => entry.trim())
+    .map((entry) => sanitizeCompanyId(entry))
     .filter((entry, index, items) => entry.length > 0 && items.indexOf(entry) === index)
 
   if (ids.length > 0) {
     return ids
   }
 
-  const normalizedFallbackCompanyId = String(fallbackCompanyId || '').trim()
+  const normalizedFallbackCompanyId = sanitizeCompanyId(fallbackCompanyId)
   return normalizedFallbackCompanyId ? [normalizedFallbackCompanyId] : []
 }
 
@@ -34,7 +35,7 @@ export async function GET(request: NextRequest) {
     authResult.auth.companyId
   )
   const authGuard = await loadAuthGuardState(authResult.auth)
-  const activeCompanyId = String(authResult.auth.companyId || '').trim()
+  const activeCompanyId = sanitizeCompanyId(authResult.auth.companyId)
   const accessibleCompanyIds =
     requestedCompanyIds.length === 1 && activeCompanyId && requestedCompanyIds[0] === activeCompanyId
       ? [activeCompanyId]
@@ -76,19 +77,14 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const accessibleCompany = (
-    await getAccessibleCompanies(authResult.auth, parsedBody.data.companyId)
-  )[0]
+  const companyValidation = await validateCompanyAccess(request, parsedBody.data.companyId)
+  if (!companyValidation.ok) return companyValidation.response
 
-  if (!accessibleCompany) {
-    return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
-  }
-
-  const updatedAt = markCompanyLiveUpdate(accessibleCompany.id)
+  const updatedAt = markCompanyLiveUpdate(companyValidation.companyId)
 
   return NextResponse.json({
     success: true,
-    companyId: accessibleCompany.id,
+    companyId: companyValidation.companyId,
     updatedAt
   })
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { canAccessCompanyRoute, requireRoles } from '@/lib/api-security'
+import { canAccessCompanyRoute, requireRoles, validateCompanyAccess } from '@/lib/api-security'
 import { getFinancialYearDateFilter } from '@/lib/financial-years'
 import { loadStockWorkspaceData } from '@/lib/server-stock-workspace'
 
@@ -11,22 +11,22 @@ export async function GET(request: NextRequest) {
     const searchParams = new URL(request.url).searchParams
     const companyId = searchParams.get('companyId')?.trim() || ''
 
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
-    }
+    const companyValidation = await validateCompanyAccess(request, companyId)
+    if (!companyValidation.ok) return companyValidation.response
+    const scopedCompanyId = companyValidation.companyId
 
-    const allowed = await canAccessCompanyRoute(request, companyId, '/api/stock-ledger', 'GET')
+    const allowed = await canAccessCompanyRoute(request, scopedCompanyId, '/api/stock-ledger', 'GET')
     if (!allowed) {
-      return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
+      return NextResponse.json({ error: 'User not linked to company' }, { status: 403 })
     }
 
     const financialYearFilter = await getFinancialYearDateFilter({
       request,
       auth: authResult.auth,
-      companyId
+      companyId: scopedCompanyId
     })
 
-    const payload = await loadStockWorkspaceData(companyId, 60, {
+    const payload = await loadStockWorkspaceData(scopedCompanyId, 60, {
       dateFrom: financialYearFilter.dateFrom,
       dateTo: financialYearFilter.dateTo
     })

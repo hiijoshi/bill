@@ -261,7 +261,7 @@ export async function GET(request: NextRequest) {
       request.method
     )
     if (!permissionScopedIds.includes(companyId)) {
-      return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
+      return NextResponse.json({ error: 'Missing privilege for requested company action' }, { status: 403 })
     }
 
     const financialYearFilter = await getFinancialYearDateFilter({
@@ -356,7 +356,7 @@ export async function POST(request: NextRequest) {
       request.method
     )
     if (!permissionScopedIds.includes(data.companyId)) {
-      return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
+      return NextResponse.json({ error: 'Missing privilege for requested company action' }, { status: 403 })
     }
 
     const voucherDate = parseVoucherDate(data.voucherDate)

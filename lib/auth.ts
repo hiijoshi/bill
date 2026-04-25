@@ -20,12 +20,23 @@ type DecodedAuthPayload = jwt.JwtPayload & {
   role?: string
   userDbId?: string
   user_db_id?: string
+  companyIds?: unknown
+  company_ids?: unknown
 }
 
 export type VerifiedSessionPayload = Omit<AuthUser, 'id'> & {
   userDbId?: string | null
+  companyIds?: string[]
   iat?: number
   exp?: number
+}
+
+function normalizeCompanyIdsClaim(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const ids = value
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter((entry) => entry.length > 0)
+  return Array.from(new Set(ids))
 }
 
 function parseDecodedPayload(decoded: string | jwt.JwtPayload): VerifiedSessionPayload | null {
@@ -48,6 +59,9 @@ function parseDecodedPayload(decoded: string | jwt.JwtPayload): VerifiedSessionP
         : typeof payload.user_db_id === 'string'
           ? payload.user_db_id
           : null,
+    companyIds: normalizeCompanyIdsClaim(
+      Array.isArray(payload.companyIds) ? payload.companyIds : payload.company_ids
+    ),
     iat: typeof payload.iat === 'number' ? payload.iat : undefined,
     exp: typeof payload.exp === 'number' ? payload.exp : undefined
   }
@@ -108,10 +122,10 @@ export function normalizeRole(role?: string | null): string | undefined {
 }
 
 export function generateToken(
-  payload: Omit<AuthUser, 'id'> & { userDbId?: string | null },
+  payload: Omit<AuthUser, 'id'> & { userDbId?: string | null; companyIds?: string[] },
   expiresIn: jwt.SignOptions['expiresIn'] = JWT_EXPIRES_IN
 ): string {
-  const normalized: Omit<AuthUser, 'id'> & { userDbId?: string } = {
+  const normalized: Omit<AuthUser, 'id'> & { userDbId?: string; companyIds?: string[] } = {
     userId: payload.userId,
     traderId: payload.traderId,
     name: payload.name,
@@ -119,15 +133,18 @@ export function generateToken(
   }
   if (payload.userDbId) {
     normalized.userDbId = payload.userDbId
+  }
+  if (payload.companyIds && payload.companyIds.length > 0) {
+    normalized.companyIds = Array.from(new Set(payload.companyIds.map((entry) => String(entry || '').trim()).filter(Boolean)))
   }
   return jwt.sign(normalized, JWT_SECRET!, { expiresIn } as jwt.SignOptions)
 }
 
 export function generateRefreshToken(
-  payload: Omit<AuthUser, 'id'> & { userDbId?: string | null },
+  payload: Omit<AuthUser, 'id'> & { userDbId?: string | null; companyIds?: string[] },
   expiresIn: jwt.SignOptions['expiresIn'] = REFRESH_EXPIRES_IN
 ): string {
-  const normalized: Omit<AuthUser, 'id'> & { userDbId?: string } = {
+  const normalized: Omit<AuthUser, 'id'> & { userDbId?: string; companyIds?: string[] } = {
     userId: payload.userId,
     traderId: payload.traderId,
     name: payload.name,
@@ -135,6 +152,9 @@ export function generateRefreshToken(
   }
   if (payload.userDbId) {
     normalized.userDbId = payload.userDbId
+  }
+  if (payload.companyIds && payload.companyIds.length > 0) {
+    normalized.companyIds = Array.from(new Set(payload.companyIds.map((entry) => String(entry || '').trim()).filter(Boolean)))
   }
   return jwt.sign(normalized, REFRESH_SECRET!, { expiresIn } as jwt.SignOptions)
 }
@@ -361,13 +381,21 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
             orderBy: { name: 'asc' }
           }))
 
+    const allowedCompanyIds = Array.from(
+      new Set([
+        ...fallbackCompanyIds,
+        ...(resolvedCompany?.id ? [resolvedCompany.id] : [])
+      ])
+    )
+
     // Generate JWT tokens
     const token = generateToken({
       userId: user.userId,
       traderId: user.traderId,
       name: user.name || undefined,
       role: user.role || undefined,
-      userDbId: user.id
+      userDbId: user.id,
+      companyIds: allowedCompanyIds
     })
     
     const refreshToken = generateRefreshToken({
@@ -375,7 +403,8 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       traderId: user.traderId,
       name: user.name || undefined,
       role: user.role || undefined,
-      userDbId: user.id
+      userDbId: user.id,
+      companyIds: allowedCompanyIds
     })
 
     return {

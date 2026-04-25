@@ -1,4 +1,4 @@
-const SW_VERSION = 'mbill-pwa-v2'
+const SW_VERSION = 'mbill-pwa-v3'
 const STATIC_CACHE = `${SW_VERSION}-static`
 const RUNTIME_CACHE = `${SW_VERSION}-runtime`
 const OFFLINE_URL = '/offline'
@@ -56,6 +56,21 @@ self.addEventListener('fetch', (event) => {
   const requestUrl = new URL(request.url)
 
   if (requestUrl.origin === self.location.origin && requestUrl.pathname.startsWith('/api/')) {
+    event.respondWith(
+      fetch(request, { cache: 'no-store' }).catch(() =>
+        new Response(
+          JSON.stringify({
+            error: 'Network unavailable'
+          }),
+          {
+            status: 503,
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          }
+        )
+      )
+    )
     return
   }
 

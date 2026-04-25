@@ -170,7 +170,12 @@ export default function SubscriptionOverview({
 
     try {
       const [currentPayload, historyPayload] = await Promise.all([
-        apiClient.getJson<CurrentPayload>('/api/subscription/current'),
+        apiClient.getJson<CurrentPayload>('/api/subscription/current').catch((error) => {
+          if (error instanceof Error && /status 404/i.test(error.message)) {
+            return null as CurrentPayload | null
+          }
+          throw error
+        }),
         apiClient.getJson<HistoryPayload>('/api/subscription/history')
       ])
 
