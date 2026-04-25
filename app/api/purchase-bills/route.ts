@@ -5,12 +5,11 @@ import {
   ensureCompanyAccess,
   forbidden,
   getRequestAuthContext,
-  hasCompanyAccess,
   isSuperAdmin,
   parseBooleanParam,
   parseJsonWithSchema,
   requireAuthContext,
-  unauthorized
+  validateCompanyAccess
 } from '@/lib/api-security'
 import { normalizeTenDigitPhone, parseNonNegativeNumber } from '@/lib/field-validation'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
@@ -153,15 +152,12 @@ async function ensurePurchaseBillReadAccess(
   request: NextRequest,
   companyId: string
 ): Promise<NextResponse | null> {
-  const auth = getRequestAuthContext(request)
-  if (!auth) {
-    return unauthorized('Authentication required')
+  const companyValidation = await validateCompanyAccess(request, companyId)
+  if (!companyValidation.ok) {
+    return companyValidation.response
   }
-
-  const allowedCompany = await hasCompanyAccess(companyId, auth, request)
-  if (!allowedCompany) {
-    return forbidden('Company access denied')
-  }
+  const auth = companyValidation.auth
+  const scopedCompanyId = companyValidation.companyId
 
   if (isSuperAdmin(auth)) {
     return null
@@ -174,7 +170,7 @@ async function ensurePurchaseBillReadAccess(
   const permissions = await prisma.userPermission.findMany({
     where: {
       userId: auth.userDbId,
-      companyId,
+      companyId: scopedCompanyId,
       module: { in: ['PURCHASE_LIST', 'PURCHASE_ENTRY'] }
     },
     select: {

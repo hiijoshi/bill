@@ -1,10 +1,9 @@
 import { NextRequest } from 'next/server'
+import { sanitizeCompanyId } from '@/lib/company-id'
 
 export function normalizeRequestCompanyId(raw: string | null): string | null {
-  if (!raw) return null
-  const value = raw.trim()
-  if (!value || value === 'null' || value === 'undefined') return null
-  return value
+  const value = sanitizeCompanyId(raw)
+  return value || null
 }
 
 export function readCompanyIdFromRequest(request: NextRequest): string | null {
@@ -51,4 +50,3 @@ export function resolveCompanyIdFromRequest(request: NextRequest): string | null
     readCompanyIdFromRequest(request)
   )
 }
-

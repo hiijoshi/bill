@@ -140,7 +140,7 @@ export async function POST(request: NextRequest) {
     )
 
     if (!permissionScopedIds.includes(data.companyId)) {
-      return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
+      return NextResponse.json({ error: 'Missing privilege for requested company action' }, { status: 403 })
     }
 
     const payDate = new Date(data.payDate)

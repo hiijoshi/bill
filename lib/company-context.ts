@@ -1,4 +1,5 @@
 import { deleteClientCache, getClientCache, getOrLoadClientCache, setClientCache } from './client-fetch-cache'
+import { sanitizeCompanyId } from './company-id'
 import { getCompanyCookieNameCandidates } from './session-cookies'
 import {
   SHELL_ACTIVE_COMPANY_CACHE_AGE_MS,
@@ -46,7 +47,7 @@ function getCompanyIdFromCookie(): string {
 const ALLOWED_INTERNAL_PATHS = new Set(['/api/auth/company', '/api/auth/me'])
 
 function normalizeCompanyId(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : ''
+  return sanitizeCompanyId(value)
 }
 
 function pickKnownCompanyId(

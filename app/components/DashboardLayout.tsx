@@ -132,7 +132,7 @@ export default function DashboardLayout({
           SUBSCRIPTION_CACHE_AGE_MS,
           async () => {
             const response = await fetch('/api/subscription/current', { cache: 'no-store' })
-            if (response.status === 401 || response.status === 403) {
+            if (response.status === 401 || response.status === 403 || response.status === 404) {
               return null
             }
             if (!response.ok) {

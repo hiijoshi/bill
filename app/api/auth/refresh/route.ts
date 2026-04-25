@@ -91,6 +91,7 @@ export async function POST(request: NextRequest) {
         id: true,
         userId: true,
         traderId: true,
+        companyId: true,
         name: true,
         role: true,
         locked: true,
@@ -116,12 +117,36 @@ export async function POST(request: NextRequest) {
       return response
     }
 
+    const permissionRows = await prisma.userPermission.findMany({
+      where: {
+        userId: user.id,
+        OR: [{ canRead: true }, { canWrite: true }],
+        company: {
+          deletedAt: null,
+          locked: false,
+          OR: [{ traderId: user.traderId }, { traderId: null }]
+        }
+      },
+      select: {
+        companyId: true
+      }
+    })
+
+    const allowedCompanyIds = Array.from(
+      new Set([
+        ...(user.companyId ? [user.companyId] : []),
+        ...permissionRows.map((row) => row.companyId),
+        ...(Array.isArray(payload.companyIds) ? payload.companyIds : [])
+      ].map((entry) => String(entry || '').trim()).filter(Boolean))
+    )
+
     const refreshedPayload = {
       userId: user.userId,
       traderId: user.traderId,
       name: user.name || undefined,
       role: normalizeRole(user.role) || undefined,
-      userDbId: user.id
+      userDbId: user.id,
+      companyIds: allowedCompanyIds
     }
     const newAccessToken = generateToken(refreshedPayload)
     const nextRefreshToken = generateRefreshToken(refreshedPayload)

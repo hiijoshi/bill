@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { canAccessCompanyRoute, requireRoles } from '@/lib/api-security'
+import { canAccessCompanyRoute, requireRoles, validateCompanyAccess } from '@/lib/api-security'
 import { getFinancialYearDateFilter } from '@/lib/financial-years'
 import { loadReportDashboardData, type ReportDashboardType } from '@/lib/server-report-dashboard'
 
@@ -17,28 +17,28 @@ export async function GET(request: NextRequest) {
     const companyId = searchParams.get('companyId')?.trim() || ''
     const reportType = normalizeReportType(searchParams.get('reportType'))
 
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
-    }
+    const companyValidation = await validateCompanyAccess(request, companyId)
+    if (!companyValidation.ok) return companyValidation.response
+    const scopedCompanyId = companyValidation.companyId
 
     const [hasPurchaseAccess, hasSalesAccess, hasPaymentsAccess, hasBanksAccess] = await Promise.all([
-      canAccessCompanyRoute(request, companyId, '/api/purchase-bills', 'GET'),
-      canAccessCompanyRoute(request, companyId, '/api/sales-bills', 'GET'),
-      canAccessCompanyRoute(request, companyId, '/api/payments', 'GET'),
-      canAccessCompanyRoute(request, companyId, '/api/banks', 'GET')
+      canAccessCompanyRoute(request, scopedCompanyId, '/api/purchase-bills', 'GET'),
+      canAccessCompanyRoute(request, scopedCompanyId, '/api/sales-bills', 'GET'),
+      canAccessCompanyRoute(request, scopedCompanyId, '/api/payments', 'GET'),
+      canAccessCompanyRoute(request, scopedCompanyId, '/api/banks', 'GET')
     ])
 
     if (!hasPurchaseAccess && !hasSalesAccess && !hasPaymentsAccess && !hasBanksAccess) {
-      return NextResponse.json({ error: 'Company access denied' }, { status: 403 })
+      return NextResponse.json({ error: 'User not linked to company' }, { status: 403 })
     }
 
     const financialYearFilter = await getFinancialYearDateFilter({
       request,
       auth: authResult.auth,
-      companyId
+      companyId: scopedCompanyId
     })
 
-    const payload = await loadReportDashboardData(companyId, reportType, {
+    const payload = await loadReportDashboardData(scopedCompanyId, reportType, {
       loadPurchase: hasPurchaseAccess,
       loadSales: hasSalesAccess,
       loadPayments: hasPaymentsAccess,

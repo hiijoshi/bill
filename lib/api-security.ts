@@ -5,6 +5,7 @@ import { resolveRoutePermission } from '@/lib/permissions'
 import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
 import { getCompanySubscriptionAccess, getSubscriptionAccessMessage, isModuleEnabledForEntitlement } from '@/lib/subscription-core'
 import { getTraderDataAccessMessage, getTraderDataLifecycleSummary } from '@/lib/trader-retention'
+import { sanitizeCompanyId } from '@/lib/company-id'
 
 export type AppRole = 'super_admin' | 'trader_admin' | 'company_admin' | 'company_user'
 
@@ -13,6 +14,7 @@ export type RequestAuthContext = {
   traderId: string
   role: AppRole
   companyId: string | null
+  companyIds?: string[]
   userDbId: string | null
   sessionIssuedAt?: number | null
   requestId?: string
@@ -54,6 +56,14 @@ function normalizeNullableHeaderValue(value: string | null | undefined): string 
   return trimmed.length > 0 ? trimmed : null
 }
 
+function normalizeCompanyIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const ids = value
+    .map((entry) => sanitizeCompanyId(entry))
+    .filter((entry): entry is string => Boolean(entry))
+  return Array.from(new Set(ids))
+}
+
 export function encodeRequestAuthContext(auth: RequestAuthContext): string {
   return Buffer.from(JSON.stringify(auth), 'utf8').toString('base64url')
 }
@@ -72,6 +82,7 @@ export function decodeRequestAuthContext(value: string | null | undefined): Requ
       traderId: parsed.traderId,
       role: normalizeAppRole(parsed.role),
       companyId: normalizeNullableHeaderValue(parsed.companyId),
+      companyIds: normalizeCompanyIdList(parsed.companyIds),
       userDbId: normalizeNullableHeaderValue(parsed.userDbId),
       sessionIssuedAt: typeof parsed.sessionIssuedAt === 'number' ? parsed.sessionIssuedAt : null,
       requestId: normalizeNullableHeaderValue(parsed.requestId) || undefined
@@ -102,6 +113,14 @@ export function getRequestAuthContext(request: NextRequest): RequestAuthContext 
       request.headers.get('x-user-role-normalized') || request.headers.get('x-user-role')
     ),
     companyId: normalizeNullableHeaderValue(request.headers.get('x-company-id')),
+    companyIds: Array.from(
+      new Set(
+        String(request.headers.get('x-company-ids') || '')
+          .split(',')
+          .map((entry) => sanitizeCompanyId(entry))
+          .filter((entry): entry is string => Boolean(entry))
+      )
+    ),
     userDbId: normalizeNullableHeaderValue(request.headers.get('x-user-db-id')),
     sessionIssuedAt: null,
     requestId: request.headers.get('x-request-id') || undefined
@@ -265,6 +284,12 @@ async function getPermissionScopedCompanyCandidateIds(auth: RequestAuthContext):
     if (auth.companyId) {
       candidateIds.add(auth.companyId)
     }
+    ;(auth.companyIds || []).forEach((companyId) => {
+      const normalized = sanitizeCompanyId(companyId)
+      if (normalized) {
+        candidateIds.add(normalized)
+      }
+    })
 
     if (auth.userDbId) {
       const permissionRows = await prisma.userPermission.findMany({
@@ -371,7 +396,7 @@ export async function canAccessCompanyRoute(
   pathname: string,
   method: string
 ): Promise<boolean> {
-  const normalizedCompanyId = companyId.trim()
+  const normalizedCompanyId = sanitizeCompanyId(companyId)
   if (!normalizedCompanyId) {
     return false
   }
@@ -499,24 +524,97 @@ export async function ensureCompanyAccess(
   return ensureCompanyAccessForAction(request, companyId)
 }
 
+type CompanyAccessValidationResult =
+  | { ok: true; auth: RequestAuthContext; companyId: string }
+  | { ok: false; response: NextResponse; reason: 'missing_company_id' | 'invalid_company_id' | 'auth_required' | 'user_not_linked' }
+
+export async function validateCompanyAccess(
+  request: NextRequest,
+  companyId: string | null | undefined
+): Promise<CompanyAccessValidationResult> {
+  const normalizedCompanyId = sanitizeCompanyId(companyId)
+  if (!String(companyId || '').trim()) {
+    console.warn('[company-access] denied', {
+      pathname: request.nextUrl.pathname,
+      method: request.method,
+      incomingCompanyId: companyId || null,
+      rejectionReason: 'missing_company_id'
+    })
+    return {
+      ok: false,
+      reason: 'missing_company_id',
+      response: badRequest('Missing companyId')
+    }
+  }
+
+  if (!normalizedCompanyId) {
+    console.warn('[company-access] denied', {
+      pathname: request.nextUrl.pathname,
+      method: request.method,
+      incomingCompanyId: companyId || null,
+      rejectionReason: 'invalid_company_id'
+    })
+    return {
+      ok: false,
+      reason: 'invalid_company_id',
+      response: badRequest('Invalid companyId')
+    }
+  }
+
+  const authResult = requireAuthContext(request)
+  if (!authResult.ok) {
+    console.warn('[company-access] denied', {
+      pathname: request.nextUrl.pathname,
+      method: request.method,
+      incomingCompanyId: normalizedCompanyId,
+      rejectionReason: 'auth_required'
+    })
+    return {
+      ok: false,
+      reason: 'auth_required',
+      response: authResult.response
+    }
+  }
+
+  const allowed = await hasCompanyAccess(normalizedCompanyId, authResult.auth, request)
+  if (!allowed) {
+    const scopedCompanyIds = await getScopedCompanyIds(authResult.auth).catch(() => [])
+    console.warn('[company-access] denied', {
+      pathname: request.nextUrl.pathname,
+      method: request.method,
+      incomingCompanyId: normalizedCompanyId,
+      authCompanyId: authResult.auth.companyId,
+      userId: authResult.auth.userId,
+      traderId: authResult.auth.traderId,
+      role: authResult.auth.role,
+      scopedCompanyIds,
+      rejectionReason: 'user_not_linked'
+    })
+    return {
+      ok: false,
+      reason: 'user_not_linked',
+      response: forbidden('User not linked to company')
+    }
+  }
+
+  return {
+    ok: true,
+    auth: authResult.auth,
+    companyId: normalizedCompanyId
+  }
+}
+
 export async function ensureCompanyAccessForAction(
   request: NextRequest,
   companyId: string | null | undefined,
   actionOverride?: 'read' | 'write'
 ): Promise<NextResponse | null> {
-  if (!companyId || companyId.trim().length === 0) {
-    return badRequest('Company ID is required')
+  const validation = await validateCompanyAccess(request, companyId)
+  if (!validation.ok) {
+    return validation.response
   }
-
-  const authResult = requireAuthContext(request)
-  if (!authResult.ok) {
-    return authResult.response
-  }
-
-  const allowed = await hasCompanyAccess(companyId, authResult.auth, request)
-  if (!allowed) {
-    return forbidden('Company access denied')
-  }
+  const resolvedCompanyId = validation.companyId
+  const auth = validation.auth
 
   const routeMethod =
     actionOverride === 'read'
@@ -527,8 +625,8 @@ export async function ensureCompanyAccessForAction(
   const routePermission = resolveRoutePermission(request.nextUrl.pathname, routeMethod)
   if (routePermission) {
     const hasPermission = await hasModulePermission(
-      authResult.auth,
-      companyId,
+      auth,
+      resolvedCompanyId,
       routePermission.action,
       routePermission.module
     )
@@ -539,8 +637,8 @@ export async function ensureCompanyAccessForAction(
       )
     }
 
-    if (authResult.auth.role !== 'super_admin') {
-      const subscriptionAccess = await getCompanySubscriptionAccess(prisma, companyId)
+    if (auth.role !== 'super_admin') {
+      const subscriptionAccess = await getCompanySubscriptionAccess(prisma, resolvedCompanyId)
 
       if (subscriptionAccess) {
         const allowedBySubscription = isModuleEnabledForEntitlement(
@@ -582,7 +680,7 @@ export async function getScopedCompanyIds(
   auth: RequestAuthContext,
   requestedCompanyId?: string | null
 ): Promise<string[]> {
-  const companyId = requestedCompanyId?.trim()
+  const companyId = sanitizeCompanyId(requestedCompanyId)
 
   if (auth.role === 'super_admin') {
     const rows = await withRequestScopedCache(auth, `scoped-company-ids:super_admin:${companyId || '*'}`, () =>
@@ -640,7 +738,7 @@ export async function getAccessibleCompanies(
   auth: RequestAuthContext,
   requestedCompanyId?: string | null
 ): Promise<Array<{ id: string; name: string; locked: boolean; traderId: string | null }>> {
-  const companyId = requestedCompanyId?.trim()
+  const companyId = sanitizeCompanyId(requestedCompanyId)
 
   if (auth.role === 'super_admin') {
     return withRequestScopedCache(auth, `accessible-companies:super_admin:${companyId || '*'}`, () =>

@@ -43,8 +43,8 @@ export async function assertCompanyScope(
 ): Promise<void> {
   const denied = await ensureCompanyAccessForAction(request, companyId, action)
   if (denied) {
-    const payload = await denied.json().catch(() => ({ error: 'Company access denied' }))
-    throw new BankStatementError('COMPANY_SCOPE_DENIED', String(payload?.error || 'Company access denied'), {
+    const payload = await denied.json().catch(() => ({ error: 'User not linked to company' }))
+    throw new BankStatementError('COMPANY_SCOPE_DENIED', String(payload?.error || 'User not linked to company'), {
       status: denied.status
     })
   }

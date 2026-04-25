@@ -4,6 +4,7 @@ import { verifyTokenWithMetadata } from '@/lib/auth'
 import { env } from '@/lib/config'
 import { AUTH_CONTEXT_HEADER, encodeRequestAuthContext, normalizeAppRole, type RequestAuthContext } from '@/lib/api-security'
 import { hasSessionStateDrift, loadAuthGuardState } from '@/lib/auth-guard-state'
+import { sanitizeCompanyId } from '@/lib/company-id'
 import { getCompanyCookieNameCandidates, getSessionCookieNameCandidates } from '@/lib/session-cookies'
 import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { getSupabaseClaimsFromRequest, hasSupabaseAppContext } from '@/lib/supabase/auth-bridge'
@@ -85,11 +86,21 @@ function getScopeSource(request: NextRequest): string {
 }
 
 function getCookieCompanyId(request: NextRequest, scopeSource: string): string | null {
-  return (
+  const candidate = (
     getCompanyCookieNameCandidates(scopeSource)
       .map((name) => request.cookies.get(name)?.value?.trim() || '')
       .find((value) => value.length > 0) || null
   )
+  const normalized = sanitizeCompanyId(candidate)
+  return normalized || null
+}
+
+function normalizeCompanyIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const normalized = value
+    .map((entry) => sanitizeCompanyId(entry))
+    .filter((entry): entry is string => Boolean(entry))
+  return Array.from(new Set(normalized))
 }
 
 function getMatchingCsrfCookieValues(
@@ -197,6 +208,7 @@ async function resolveSupabaseAuthContext(request: NextRequest): Promise<Middlew
     traderId: supabaseContext.claims.trader_id,
     role: normalizeAppRole(supabaseContext.claims.app_role),
     companyId: getCookieCompanyId(request, scopeSource) || defaultCompanyId,
+    companyIds: normalizeCompanyIdList((supabaseContext.claims as { company_ids?: unknown }).company_ids),
     userDbId: supabaseContext.claims.user_db_id,
     sessionIssuedAt: typeof supabaseContext.claims.iat === 'number' ? supabaseContext.claims.iat : null
   }
@@ -234,6 +246,7 @@ function resolveLegacyAuthContext(
       traderId: payload.traderId,
       role: normalizeAppRole(String(payload.role || '')),
       companyId: getCookieCompanyId(request, scopeSource) || (payload as { companyId?: string }).companyId || null,
+      companyIds: normalizeCompanyIdList((payload as { companyIds?: unknown }).companyIds),
       userDbId: payload.userDbId || null,
       sessionIssuedAt: payload.iat || null
     }
@@ -354,28 +367,34 @@ export async function proxy(request: NextRequest) {
     }
 
     // Company scope check — JWT only for super_admin/trader_admin, skip for lock-bypass routes
-    const urlCompanyId = request.nextUrl.searchParams.get('companyId')
+    const urlCompanyId = sanitizeCompanyId(request.nextUrl.searchParams.get('companyId'))
     const lockedCompanyId = getCookieCompanyId(request, scopeSource)
 
     if (urlCompanyId && !isLockBypassApiRoute(pathname)) {
       if (lockedCompanyId && urlCompanyId !== lockedCompanyId && normalizedRole !== 'super_admin') {
         return NextResponse.json({ error: 'Company mismatch. Open company select to switch company.' }, { status: 403 })
       }
-      // For company_user: verify against JWT claims (companyId in token payload)
-      // Full DB check is done inside the route handler itself via ensureCompanyAccess()
-      // This avoids a DB round-trip in middleware for every request
+      if (normalizedRole !== 'super_admin' && normalizedRole !== 'trader_admin') {
+        const claimCompanyIds = authResolution.auth.companyIds || []
+        if (claimCompanyIds.length > 0 && !claimCompanyIds.includes(urlCompanyId)) {
+          return NextResponse.json({ error: 'User not linked to company' }, { status: 403 })
+        }
+      }
     }
 
     const effectiveCompanyId =
-      (urlCompanyId && urlCompanyId.trim()) ||
+      urlCompanyId ||
       lockedCompanyId ||
-      authResolution.auth.companyId ||
+      sanitizeCompanyId(authResolution.auth.companyId) ||
       null
 
     const h = new Headers(request.headers)
     if (effectiveCompanyId) {
       h.set('x-company-id', effectiveCompanyId)
       h.set('x-auth-company-id', effectiveCompanyId)
+    }
+    if ((authResolution.auth.companyIds || []).length > 0) {
+      h.set('x-company-ids', (authResolution.auth.companyIds || []).join(','))
     }
     h.set(
       AUTH_CONTEXT_HEADER,
@@ -408,12 +427,15 @@ export async function proxy(request: NextRequest) {
     }
     const effectiveCompanyId =
       getCookieCompanyId(request, scopeSource) ||
-      authResolution.auth.companyId ||
+      sanitizeCompanyId(authResolution.auth.companyId) ||
       null
     const h = new Headers(request.headers)
     if (effectiveCompanyId) {
       h.set('x-company-id', effectiveCompanyId)
       h.set('x-auth-company-id', effectiveCompanyId)
+    }
+    if ((authResolution.auth.companyIds || []).length > 0) {
+      h.set('x-company-ids', (authResolution.auth.companyIds || []).join(','))
     }
     h.set(
       AUTH_CONTEXT_HEADER,
@@ -460,9 +482,9 @@ export async function proxy(request: NextRequest) {
   }
 
   // Company cookie mismatch redirect
-  const urlCompanyId = request.nextUrl.searchParams.get('companyId')
+  const urlCompanyId = sanitizeCompanyId(request.nextUrl.searchParams.get('companyId'))
   const lockedCompanyId = getCompanyCookieNameCandidates(scopeSource)
-    .map(n => request.cookies.get(n)?.value).find(Boolean) || null
+    .map(n => sanitizeCompanyId(request.cookies.get(n)?.value || '')).find(Boolean) || null
   if (!isApiRoute && urlCompanyId && lockedCompanyId && urlCompanyId !== lockedCompanyId) {
     const u = request.nextUrl.clone()
     u.searchParams.set('companyId', lockedCompanyId)
