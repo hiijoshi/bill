@@ -87,7 +87,7 @@ export interface AuthUser {
 export interface LoginCredentials {
   userId: string
   password: string
-  // Kept as traderId for API compatibility; treated as traderName during authentication.
+  // Optional explicit trader scope.
   traderId?: string
 }
 
@@ -195,9 +195,9 @@ export function verifyTokenWithMetadata(token: string): VerifiedSessionPayload |
 
 export async function authenticateUser(credentials: LoginCredentials): Promise<AuthResponse> {
   try {
-    const { userId, password, traderId: traderNameInputRaw } = credentials
+    const { userId, password, traderId: traderIdInputRaw } = credentials
     const normalizedUserId = userId.toLowerCase().trim()
-    const traderNameInput = traderNameInputRaw?.trim()
+    const traderIdInput = traderIdInputRaw?.trim()
     const candidateSelect = {
       id: true,
       userId: true,
@@ -217,25 +217,24 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       }
     } as const
 
-    const exactTraderCandidate = traderNameInput
+    const exactTraderCandidate = traderIdInput
       ? await prisma.user.findFirst({
           where: {
             userId: normalizedUserId,
-            trader: {
-              is: {
-                name: traderNameInput,
-                deletedAt: null
-              }
-            },
+            traderId: traderIdInput,
             deletedAt: null
           },
           select: candidateSelect
         })
       : null
 
-    // For trader-scoped login, prefer exact trader-name lookup first.
-    // If no exact candidate is found we still scan by userId so we can preserve
-    // case-insensitive matching for trader names.
+    if (traderIdInput && !exactTraderCandidate) {
+      return {
+        success: false,
+        error: 'Invalid credentials'
+      }
+    }
+
     const candidates = exactTraderCandidate
       ? [exactTraderCandidate]
       : await prisma.user.findMany({
@@ -267,22 +266,7 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       }
     }
 
-    const traderMatchedCandidates = traderNameInput
-      ? validCandidates.filter((candidate) => {
-          const input = traderNameInput.toLowerCase()
-          const traderNameMatch = String(candidate.trader?.name || '').trim().toLowerCase() === input
-          return traderNameMatch
-        })
-      : validCandidates
-
-    if (traderNameInput && traderMatchedCandidates.length === 0) {
-      return {
-        success: false,
-        error: 'Invalid credentials'
-      }
-    }
-
-    const verificationPool = traderNameInput ? traderMatchedCandidates : validCandidates
+    const verificationPool = validCandidates
     const passwordMatched: typeof candidates = []
 
     for (const candidate of verificationPool) {
