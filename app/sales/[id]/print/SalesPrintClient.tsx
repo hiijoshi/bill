@@ -321,10 +321,11 @@ export function InvoiceTemplate({
         <thead>
           <tr className="border-b border-black">
             <th className="w-[5%] border-r border-black px-1 py-1 text-left font-semibold">Sl</th>
-            <th className="w-[35%] border-r border-black px-1 py-1 text-left font-semibold">Description of Goods</th>
-            <th className="w-[10%] border-r border-black px-1 py-1 text-right font-semibold">GST %</th>
+            <th className="w-[28%] border-r border-black px-1 py-1 text-left font-semibold">Sales Item</th>
+            <th className="w-[10%] border-r border-black px-1 py-1 text-left font-semibold">Marka No.</th>
+            <th className="w-[9%] border-r border-black px-1 py-1 text-right font-semibold">GST %</th>
             <th className="w-[12%] border-r border-black px-1 py-1 text-right font-semibold">Quantity</th>
-            <th className="w-[14%] border-r border-black px-1 py-1 text-right font-semibold">Weight (Qt)</th>
+            <th className="w-[12%] border-r border-black px-1 py-1 text-right font-semibold">Weight (Qt)</th>
             <th className="w-[12%] border-r border-black px-1 py-1 text-right font-semibold">Rate</th>
             <th className="w-[12%] px-1 py-1 text-right font-semibold">Amount</th>
           </tr>
@@ -333,7 +334,8 @@ export function InvoiceTemplate({
           {rows.map((item, index) => (
             <tr key={`invoice-row-${index}`} className="h-6 align-top">
               <td className="border-r border-black px-1 py-0.5">{item ? index + 1 : ''}</td>
-              <td className="border-r border-black px-1 py-0.5">{item?.productName || ''}</td>
+              <td className="border-r border-black px-1 py-0.5">{item ? item.salesItemName || item.productName : ''}</td>
+              <td className="border-r border-black px-1 py-0.5">{item?.markaNo || ''}</td>
               <td className="border-r border-black px-1 py-0.5 text-right">{item ? `${Number(item.gstRate || 0).toFixed(0)}%` : ''}</td>
               <td className="border-r border-black px-1 py-0.5 text-right">{item ? `${toFixed2(item.bags)} bags` : ''}</td>
               <td className="border-r border-black px-1 py-0.5 text-right">{item ? toFixed2(item.totalWeightQt) : ''}</td>
@@ -344,32 +346,32 @@ export function InvoiceTemplate({
         </tbody>
         <tfoot>
           <tr className="border-t border-black">
-            <td className="border-r border-black px-1 py-1 font-semibold" colSpan={3}>Total</td>
+            <td className="border-r border-black px-1 py-1 font-semibold" colSpan={4}>Total</td>
             <td className="border-r border-black px-1 py-1 text-right font-semibold">{toFixed2(printData.totalBags)} bags</td>
             <td className="border-r border-black px-1 py-1 text-right font-semibold">{toFixed2(printData.totalWeightQt)}</td>
             <td className="border-r border-black px-1 py-1 text-right font-semibold">-</td>
             <td className="px-1 py-1 text-right font-semibold">{formatCurrency(totalLineAmount)}</td>
           </tr>
           <tr>
-            <td className="border-r border-black px-1 py-0.5" colSpan={6}>Taxable Amount</td>
+            <td className="border-r border-black px-1 py-0.5" colSpan={7}>Taxable Amount</td>
             <td className="px-1 py-0.5 text-right">{formatCurrency(printData.subTotalAmount)}</td>
           </tr>
           <tr>
-            <td className="border-r border-black px-1 py-0.5" colSpan={6}>CGST</td>
+            <td className="border-r border-black px-1 py-0.5" colSpan={7}>CGST</td>
             <td className="px-1 py-0.5 text-right">{formatCurrency(cgstAmount)}</td>
           </tr>
           <tr>
-            <td className="border-r border-black px-1 py-0.5" colSpan={6}>SGST</td>
+            <td className="border-r border-black px-1 py-0.5" colSpan={7}>SGST</td>
             <td className="px-1 py-0.5 text-right">{formatCurrency(sgstAmount)}</td>
           </tr>
           <tr>
-            <td className="border-r border-black px-1 py-0.5" colSpan={6}>Freight</td>
+            <td className="border-r border-black px-1 py-0.5" colSpan={7}>Freight</td>
             <td className="px-1 py-0.5 text-right">{formatCurrency(printData.freightAmount)}</td>
           </tr>
           {printData.additionalCharges.length > 0 ? (
             printData.additionalCharges.map((charge, index) => (
               <tr key={`additional-charge-${index}`}>
-                <td className="border-r border-black px-1 py-0.5" colSpan={6}>
+                <td className="border-r border-black px-1 py-0.5" colSpan={7}>
                   {charge.chargeType}
                   {charge.remark ? ` - ${charge.remark}` : ''}
                 </td>
@@ -379,21 +381,21 @@ export function InvoiceTemplate({
           ) : (
             <>
               <tr>
-                <td className="border-r border-black px-1 py-0.5" colSpan={6}>Other Charges</td>
+                <td className="border-r border-black px-1 py-0.5" colSpan={7}>Other Charges</td>
                 <td className="px-1 py-0.5 text-right">{formatCurrency(printData.otherAmount)}</td>
               </tr>
               <tr>
-                <td className="border-r border-black px-1 py-0.5" colSpan={6}>Insurance</td>
+                <td className="border-r border-black px-1 py-0.5" colSpan={7}>Insurance</td>
                 <td className="px-1 py-0.5 text-right">{formatCurrency(printData.insuranceAmount)}</td>
               </tr>
             </>
           )}
           <tr>
-            <td className="border-r border-black px-1 py-0.5" colSpan={6}>Advance</td>
+            <td className="border-r border-black px-1 py-0.5" colSpan={7}>Advance</td>
             <td className="px-1 py-0.5 text-right">{formatCurrency(printData.advance)}</td>
           </tr>
           <tr className="border-t border-black">
-            <td className="border-r border-black px-1 py-1 text-[13px] font-bold" colSpan={6}>Grand Total</td>
+            <td className="border-r border-black px-1 py-1 text-[13px] font-bold" colSpan={7}>Grand Total</td>
             <td className="px-1 py-1 text-right text-[13px] font-bold">₹ {formatCurrency(printData.totalAmount)}</td>
           </tr>
         </tfoot>
@@ -504,7 +506,7 @@ export function DispatchTemplate({
       ) : null}
 
       <div className="grid grid-cols-3 gap-2 border-t border-black px-2 py-2 text-[12px]">
-        <div><span className="font-semibold">Goods Name</span>: {printData.items[0]?.productName || '-'}</div>
+        <div><span className="font-semibold">Goods Name</span>: {printData.items[0]?.salesItemName || printData.items[0]?.productName || '-'}</div>
         <div><span className="font-semibold">Quantity</span>: {toFixed2(printData.totalBags)}</div>
         <div><span className="font-semibold">Value of Goods</span>: {toFixed2(printData.totalAmount)}</div>
       </div>
@@ -532,24 +534,26 @@ export function DispatchTemplate({
         <thead>
           <tr>
             <th className="w-[8%] px-1 py-1 text-left">S.No.</th>
-            <th className="w-[34%] px-1 py-1 text-left">Goods Details</th>
+            <th className="w-[28%] px-1 py-1 text-left">Goods Details</th>
+            <th className="w-[14%] px-1 py-1 text-left">Marka No.</th>
             <th className="w-[16%] px-1 py-1 text-right">No. of Bags</th>
-            <th className="w-[20%] px-1 py-1 text-right">Weight/Bag Qt</th>
-            <th className="w-[22%] px-1 py-1 text-right">Total Weight Qt</th>
+            <th className="w-[16%] px-1 py-1 text-right">Weight/Bag Qt</th>
+            <th className="w-[18%] px-1 py-1 text-right">Total Weight Qt</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((item, index) => (
             <tr key={`dispatch-row-${index}`} className="h-6">
               <td className="px-1 py-0.5">{item ? index + 1 : ''}</td>
-              <td className="px-1 py-0.5">{item?.productName || ''}</td>
+              <td className="px-1 py-0.5">{item ? item.salesItemName || item.productName : ''}</td>
+              <td className="px-1 py-0.5">{item?.markaNo || ''}</td>
               <td className="px-1 py-0.5 text-right">{item ? toFixed2(item.bags) : ''}</td>
               <td className="px-1 py-0.5 text-right">{item ? toFixed2(item.weightPerBagQt) : ''}</td>
               <td className="px-1 py-0.5 text-right">{item ? toFixed2(item.totalWeightQt) : ''}</td>
             </tr>
           ))}
           <tr className="border-t border-black font-semibold">
-            <td className="px-1 py-1" colSpan={2}>Total</td>
+            <td className="px-1 py-1" colSpan={3}>Total</td>
             <td className="px-1 py-1 text-right">{toFixed2(printData.totalBags)}</td>
             <td className="px-1 py-1 text-right">
               {printData.totalBags > 0 ? toFixed2(printData.totalWeightQt / printData.totalBags) : toFixed2(0)}

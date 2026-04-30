@@ -32,6 +32,8 @@ import { buildSalesBillSplitSummary } from '@/lib/sales-split-service'
 const salesItemSchema = z.object({
   productId: z.string().min(1),
   salesItemId: z.string().optional(),
+  salesItemName: z.string().optional(),
+  markaNo: z.string().optional().nullable(),
   totalWeight: z.coerce.number().nonnegative().optional(),
   qty: z.coerce.number().nonnegative().optional(),
   weight: z.coerce.number().nonnegative().optional(),
@@ -135,6 +137,8 @@ function normalizeSalesItems(items: Array<z.infer<typeof salesItemSchema>>) {
 
     return {
       productId: item.productId,
+      salesItemName: String(item.salesItemName || '').trim() || null,
+      markaNo: String(item.markaNo || '').trim() || null,
       weight,
       rate,
       bags,
@@ -145,7 +149,15 @@ function normalizeSalesItems(items: Array<z.infer<typeof salesItemSchema>>) {
 
 async function enrichSalesItemsWithTax(
   companyId: string,
-  items: Array<{ productId: string; weight: number; rate: number; bags: number | null; amount: number }>
+  items: Array<{
+    productId: string
+    salesItemName: string | null
+    markaNo: string | null
+    weight: number
+    rate: number
+    bags: number | null
+    amount: number
+  }>
 ) {
   const productIds = Array.from(new Set(items.map((item) => item.productId)))
   const [products, salesItemMasters] = await Promise.all([
@@ -505,6 +517,8 @@ export async function POST(request: NextRequest) {
           data: {
             salesBillId: salesBill.id,
             productId: item.productId,
+            salesItemName: item.salesItemName,
+            markaNo: item.markaNo,
             weight: item.weight,
             bags: item.bags,
             rate: item.rate,
@@ -1121,6 +1135,8 @@ export async function PUT(request: NextRequest) {
             data: {
               salesBillId: existing.id,
               productId: item.productId,
+              salesItemName: item.salesItemName,
+              markaNo: item.markaNo,
               weight: item.weight,
               bags: item.bags,
               rate: item.rate,

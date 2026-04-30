@@ -6,7 +6,9 @@ import {
 
 export interface SalesPrintItem {
   id: string
+  salesItemName: string
   productName: string
+  markaNo: string
   bags: number
   totalWeightQt: number
   weightPerBagQt: number
@@ -80,6 +82,8 @@ type SalesPrintProduct = {
 
 type SalesPrintItemSource = {
   id?: unknown
+  salesItemName?: unknown
+  markaNo?: unknown
   product?: SalesPrintProduct | null
   bags?: unknown
   weight?: unknown
@@ -223,7 +227,9 @@ function mapSalesItems(items: SalesPrintItemSource[] | null | undefined): SalesP
 
     return {
       id: String(item?.id || `line-${index + 1}`),
+      salesItemName: toStringValue(item?.salesItemName),
       productName: toStringValue(item?.product?.name, 'Item'),
+      markaNo: toStringValue(item?.markaNo),
       bags,
       totalWeightQt,
       weightPerBagQt,

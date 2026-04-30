@@ -22,6 +22,7 @@ export const DEFAULT_SALES_ADDITIONAL_CHARGE_TYPES = [
   'Labour',
   'Loading labour',
   'Bardan',
+  'Commission %',
   'Commission',
   'Miscellaneous',
   'Other Amount',
@@ -57,15 +58,37 @@ export function isInsuranceChargeType(value: unknown): boolean {
   return normalized === 'insurance' || normalized.includes('insurance')
 }
 
+export function isPercentageChargeType(value: unknown): boolean {
+  const normalized = normalizeText(value).toLowerCase()
+  if (!normalized) return false
+  return normalized.includes('%')
+}
+
+export function resolveAdditionalChargeAmount(inputAmount: unknown, chargeType: unknown, baseAmount = 0): number {
+  const normalizedInputAmount = normalizeAmount(inputAmount)
+  if (!isPercentageChargeType(chargeType)) {
+    return normalizedInputAmount
+  }
+
+  const safeBaseAmount = normalizeAmount(baseAmount)
+  if (safeBaseAmount <= 0 || normalizedInputAmount <= 0) return 0
+
+  return roundCurrency((safeBaseAmount * normalizedInputAmount) / 100)
+}
+
 export function normalizeSalesAdditionalCharges(
-  entries: SalesAdditionalChargeInput[] | null | undefined
+  entries: SalesAdditionalChargeInput[] | null | undefined,
+  options?: {
+    percentageBaseAmount?: number
+  }
 ): Array<Pick<SalesAdditionalChargeRecord, 'chargeType' | 'amount' | 'remark' | 'sortOrder'>> {
   if (!Array.isArray(entries)) return []
+  const percentageBaseAmount = normalizeAmount(options?.percentageBaseAmount ?? 0)
 
   return entries
     .map((entry, index) => ({
       chargeType: normalizeSalesAdditionalChargeType(entry?.chargeType),
-      amount: normalizeAmount(entry?.amount),
+      amount: resolveAdditionalChargeAmount(entry?.amount, entry?.chargeType, percentageBaseAmount),
       remark: normalizeSalesAdditionalChargeRemark(entry?.remark),
       sortOrder: index,
     }))

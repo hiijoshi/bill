@@ -96,6 +96,8 @@ type SplitAllocationRow = NonNullable<ParentBillQueryResult['splitGroup']>['allo
 
 type WorkspaceSalesItem = {
   id: string
+  salesItemName: string
+  markaNo: string
   productId: string
   productName: string
   weight: number
@@ -147,6 +149,8 @@ type WorkspacePart = {
     id?: string
     parentSalesItemId: string
     childSalesItemId?: string | null
+    salesItemName: string
+    markaNo: string
     productId: string
     productName: string
     weight: number
@@ -257,6 +261,8 @@ type PreviewPartRecord = {
   }>
   allocations: Array<{
     parentSalesItemId: string
+    salesItemName: string
+    markaNo: string
     productId: string
     productName: string
     weight: number
@@ -319,6 +325,8 @@ function normalizeWorkspaceSalesItems(items: ParentBillQueryResult['salesItems']
   return items.map((item) => ({
     dbId: item.id,
     id: item.id,
+    salesItemName: String(item.salesItemName || item.product?.name || 'Item'),
+    markaNo: String(item.markaNo || ''),
     productId: item.productId,
     productName: String(item.product?.name || 'Item'),
     weight: toNonNegativeNumber(item.weight),
@@ -675,6 +683,8 @@ function computeSplitPreview(
 
       partAccumulator.allocations.push({
         parentSalesItemId: parentItem.id,
+        salesItemName: parentItem.salesItemName,
+        markaNo: parentItem.markaNo,
         productId: parentItem.productId,
         productName: parentItem.productName,
         weight: roundCurrency(entry.allocation.weight),
@@ -925,6 +935,8 @@ function mapWorkspacePart(
             id: allocation.id,
             parentSalesItemId: allocation.parentSalesItemId,
             childSalesItemId: allocation.childSalesItemId,
+            salesItemName: String(childItem?.salesItemName || childItem?.product?.name || 'Item'),
+            markaNo: String(childItem?.markaNo || ''),
             productId: childItem?.productId || '',
             productName: String(childItem?.product?.name || 'Item'),
             weight: toNonNegativeNumber(allocation.weight),
@@ -1175,10 +1187,12 @@ async function createChildBillsFromPreview(
 
     for (const [allocationIndex, allocation] of part.allocations.entries()) {
       const createdItem = await tx.salesItem.create({
-        data: {
-          salesBillId: createdBill.id,
-          productId: allocation.productId,
-          weight: allocation.weight,
+          data: {
+            salesBillId: createdBill.id,
+            productId: allocation.productId,
+            salesItemName: allocation.salesItemName || allocation.productName || null,
+            markaNo: allocation.markaNo || null,
+            weight: allocation.weight,
           bags: allocation.bags > 0 ? allocation.bags : null,
           rate: allocation.rate,
           taxableAmount: allocation.taxableAmount,

@@ -586,6 +586,8 @@ model SalesItem {
   salesBill              SalesBill                  @relation(fields: [salesBillId], references: [id], onDelete: Cascade)
   productId              String
   product                Product                    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  salesItemName          String?
+  markaNo                String?
   weight                 Float
   bags                   Int?
   rate                   Float

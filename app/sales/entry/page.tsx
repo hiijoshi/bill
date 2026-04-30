@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { MetricRail, ModuleChrome } from '@/components/business/module-chrome'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -20,6 +19,7 @@ import { loadClientCachedValue } from '@/lib/client-cached-value'
 import { calculateMandiCharges, getCalculationBasisLabel } from '@/lib/mandi-charge-engine'
 import {
   DEFAULT_SALES_ADDITIONAL_CHARGE_TYPES,
+  isPercentageChargeType,
   normalizeSalesAdditionalCharges,
   summarizeSalesAdditionalCharges,
 } from '@/lib/sales-additional-charges'
@@ -57,6 +57,7 @@ interface SalesItem {
   salesItemName: string
   productName: string
   productId: string
+  markaNo: string
   weight: number
   bags: number
   rate: number
@@ -98,8 +99,10 @@ type ItemPricingMode = 'rate' | 'amount'
 
 const createEmptyCurrentItem = () => ({
   salesItemId: '',
+  markaNo: '',
   noOfBags: '',
   weightPerBag: '',
+  totalWeightQt: '',
   rate: '',
   amount: '',
   pricingMode: 'rate' as ItemPricingMode
@@ -124,6 +127,7 @@ const PERMANENT_ADDITIONAL_CHARGE_TYPES = [
   'Labour',
   'Loading labour',
   'Bardan',
+  'Commission %',
   'Commission',
   'Miscellaneous'
 ] as const
@@ -153,6 +157,8 @@ interface ExistingSalesBill {
   salesItems?: Array<{
     id: string
     productId: string
+    salesItemName?: string | null
+    markaNo?: string | null
     gstRateSnapshot?: number
     gstAmount?: number
     lineTotal?: number
@@ -195,6 +201,11 @@ interface TransportOption {
   vehicleNumber?: string
 }
 
+interface MarkaOption {
+  id: string
+  markaNumber: string
+}
+
 interface SalesBillSaveResponse {
   salesBillId?: string
   salesBill?: {
@@ -210,6 +221,7 @@ type SalesEntryCachePayload = {
   parties: Party[]
   transports: TransportOption[]
   salesItems: SalesItemMasterOption[]
+  markas: MarkaOption[]
   accountingHeads: AccountingHeadCharge[]
   existingBill: ExistingSalesBill | null
   lastBillNumber: number
@@ -257,6 +269,7 @@ export default function SalesEntryPage() {
 
   const [transports, setTransports] = useState<TransportOption[]>([])
   const [selectedTransportId, setSelectedTransportId] = useState('')
+  const [markas, setMarkas] = useState<MarkaOption[]>([])
 
   // Sales Items state
   const [salesItems, setSalesItems] = useState<SalesItemMasterOption[]>([])
@@ -318,9 +331,10 @@ export default function SalesEntryPage() {
           chargeType: bucket.chargeType,
           amount: bucket.amount,
           remark: bucket.remark,
-        }))
+        })),
+        { percentageBaseAmount: totalAmount }
       ),
-    [additionalChargeBuckets]
+    [additionalChargeBuckets, totalAmount]
   )
   const extraChargesSummary = useMemo(
     () => summarizeSalesAdditionalCharges(normalizedAdditionalCharges),
@@ -383,6 +397,17 @@ export default function SalesEntryPage() {
         keywords: [salesItem.salesItemName, salesItem.product?.name].filter(Boolean) as string[],
       })),
     [salesItems]
+  )
+
+  const markaOptions = useMemo<SearchableSelectOption[]>(
+    () =>
+      markas.map((marka) => ({
+        value: marka.markaNumber,
+        label: marka.markaNumber,
+        description: 'Marka number',
+        keywords: [marka.markaNumber],
+      })),
+    [markas]
   )
 
   const additionalChargeTypeOptions = useMemo<SearchableSelectOption[]>(() => {
@@ -737,12 +762,27 @@ export default function SalesEntryPage() {
 
     const nextAdditionalCharges =
       Array.isArray(bill.additionalCharges) && bill.additionalCharges.length > 0
-        ? bill.additionalCharges.map((charge) => ({
-            id: String(charge.id || createEmptyAdditionalChargeBucket().id),
-            chargeType: String(charge.chargeType || ''),
-            amount: String(Math.max(0, Number(charge.amount || 0))),
-            remark: String(charge.remark || '')
-          }))
+        ? (() => {
+            const billItemAmount = Array.isArray(bill.salesItems)
+              ? bill.salesItems.reduce((sum, entry) => sum + Math.max(0, Number(entry.amount || 0)), 0)
+              : 0
+
+            return bill.additionalCharges.map((charge) => {
+              const chargeType = String(charge.chargeType || '')
+              const storedAmount = Math.max(0, Number(charge.amount || 0))
+              const displayAmount =
+                isPercentageChargeType(chargeType) && billItemAmount > 0
+                  ? (storedAmount * 100) / billItemAmount
+                  : storedAmount
+
+              return {
+                id: String(charge.id || createEmptyAdditionalChargeBucket().id),
+                chargeType,
+                amount: String(displayAmount > 0 ? Number(displayAmount.toFixed(2)) : 0),
+                remark: String(charge.remark || '')
+              }
+            })
+          })()
         : [
             ...(Math.max(0, Number(firstTransport?.otherAmount || 0)) > 0
               ? [{
@@ -769,9 +809,10 @@ export default function SalesEntryPage() {
           return {
             id: String(item.id || `existing-${index + 1}`),
             salesItemId: String(mappedMaster?.id || ''),
-            salesItemName: String(mappedMaster?.salesItemName || item.product?.name || ''),
+            salesItemName: String(item.salesItemName || mappedMaster?.salesItemName || item.product?.name || ''),
             productName: String(item.product?.name || mappedMaster?.product?.name || ''),
             productId: String(item.productId || ''),
+            markaNo: String(item.markaNo || ''),
             weight: Math.max(0, Number(item.weight || 0)),
             bags: Math.max(0, Number(item.bags || 0)),
             rate: Math.max(0, Number(item.rate || 0)),
@@ -830,23 +871,34 @@ export default function SalesEntryPage() {
               : fetch(`/api/sales-bills?companyId=${resolvedCompanyId}&last=true`)
           ])
 
-          if ([partiesRes, transportsRes, salesItemsRes, accountingHeadsRes].some((res) => res.status === 401 || res.status === 403)) {
+          const markasRes = await fetch(`/api/markas?companyId=${resolvedCompanyId}`)
+
+          if ([partiesRes, transportsRes, salesItemsRes, accountingHeadsRes, markasRes].some((res) => res.status === 401 || res.status === 403)) {
             const authError = new Error('Session expired') as Error & { status?: number }
             authError.status = 401
             throw authError
           }
 
-          const [partiesData, transportsData, salesItemsData, accountingHeadsData] = await Promise.all([
+          const [partiesData, transportsData, salesItemsData, accountingHeadsData, markasData] = await Promise.all([
             parseApiJson<Party[]>(partiesRes, [], 'Parties API'),
             parseApiJson<TransportOption[]>(transportsRes, [], 'Transports API'),
             parseApiJson<SalesItemMasterOption[]>(salesItemsRes, [], 'Sales item masters API'),
-            parseApiJson<AccountingHeadCharge[]>(accountingHeadsRes, [], 'Accounting heads API')
+            parseApiJson<AccountingHeadCharge[]>(accountingHeadsRes, [], 'Accounting heads API'),
+            parseApiJson<MarkaOption[]>(markasRes, [], 'Markas API')
           ])
 
           const nextParties = Array.isArray(partiesData) ? partiesData : []
           const nextTransports = Array.isArray(transportsData) ? transportsData : []
           const nextSalesItems = Array.isArray(salesItemsData) ? salesItemsData : []
           const nextAccountingHeads = Array.isArray(accountingHeadsData) ? accountingHeadsData : []
+          const nextMarkas = Array.isArray(markasData)
+            ? markasData
+                .map((row) => ({
+                  id: String(row?.id || ''),
+                  markaNumber: String(row?.markaNumber || '').trim(),
+                }))
+                .filter((row) => row.id && row.markaNumber)
+            : []
 
           if (billIdFromQuery) {
             const existingBill = detailRes.ok
@@ -857,6 +909,7 @@ export default function SalesEntryPage() {
               parties: nextParties,
               transports: nextTransports,
               salesItems: nextSalesItems,
+              markas: nextMarkas,
               accountingHeads: nextAccountingHeads,
               existingBill,
               lastBillNumber: 0
@@ -871,6 +924,7 @@ export default function SalesEntryPage() {
             parties: nextParties,
             transports: nextTransports,
             salesItems: nextSalesItems,
+            markas: nextMarkas,
             accountingHeads: nextAccountingHeads,
             existingBill: null,
             lastBillNumber: Number(billsData.lastBillNumber || 0)
@@ -882,11 +936,13 @@ export default function SalesEntryPage() {
       const nextParties = payload.parties
       const nextTransports = payload.transports
       const nextSalesItems = payload.salesItems
+      const nextMarkas = Array.isArray(payload.markas) ? payload.markas : []
       const nextAccountingHeads = payload.accountingHeads
 
       setParties(nextParties)
       setTransports(nextTransports)
       setSalesItems(nextSalesItems)
+      setMarkas(nextMarkas)
       setAccountingHeads(nextAccountingHeads)
 
       if (billIdFromQuery) {
@@ -937,12 +993,14 @@ export default function SalesEntryPage() {
   const calculateItemTotals = () => {
     const noOfBags = parseFloat(currentItem.noOfBags) || 0
     const weightPerBag = parseFloat(currentItem.weightPerBag) || 0
+    const manualTotalWeightQt = parseFloat(currentItem.totalWeightQt) || 0
     const enteredRate = parseFloat(currentItem.rate) || 0
     const enteredAmount = parseFloat(currentItem.amount) || 0
 
     // Mandi calculations: Weight in kg, then convert to Qt (100kg = 1Qt)
     const totalWeightKg = noOfBags * weightPerBag
-    const totalWeightQt = totalWeightKg / 100
+    const autoTotalWeightQt = totalWeightKg / 100
+    const totalWeightQt = currentItem.totalWeightQt ? manualTotalWeightQt : autoTotalWeightQt
 
     if (currentItem.pricingMode === 'amount') {
       const effectiveRate = totalWeightQt > 0 ? enteredAmount / totalWeightQt : 0
@@ -1003,6 +1061,7 @@ export default function SalesEntryPage() {
       salesItemName: salesItem?.salesItemName || salesItem?.product?.name || '',
       productName: salesItem?.product?.name || '',
       productId: salesItem?.productId || '',
+      markaNo: currentItem.markaNo.trim(),
       weight: totalWeight || 0,
       bags,
       rate,
@@ -1052,6 +1111,8 @@ export default function SalesEntryPage() {
       salesItemId: matchedSalesItem?.id || item.salesItemId || '',
       noOfBags: item.bags ? String(item.bags) : '',
       weightPerBag: computedWeightPerBag > 0 ? computedWeightPerBag.toFixed(2) : '',
+      totalWeightQt: item.weight > 0 ? item.weight.toFixed(2) : '',
+      markaNo: item.markaNo || '',
       rate: nextPricingMode === 'rate' ? String(item.rate || '') : '',
       amount: nextPricingMode === 'amount' ? String(item.amount || '') : '',
       pricingMode: nextPricingMode
@@ -1164,6 +1225,9 @@ export default function SalesEntryPage() {
 
     const salesBillItems = sanitizedItems.map((item) => ({
       productId: item.productId,
+      salesItemId: item.salesItemId,
+      salesItemName: item.salesItemName,
+      markaNo: item.markaNo || undefined,
       weight: item.weight,
       bags: item.bags,
       rate: item.rate,
@@ -1224,6 +1288,10 @@ export default function SalesEntryPage() {
         ? itemTotals.amount.toFixed(2)
         : ''
       : currentItem.amount
+  const displayedTotalWeightQt =
+    currentItem.totalWeightQt || currentItem.noOfBags || currentItem.weightPerBag
+      ? itemTotals.totalWeight.toFixed(2)
+      : ''
   const previewTax = calculateTaxBreakdown(itemTotals.amount || 0, selectedCurrentSalesItem?.gstRate || 0)
   const itemAmountHint =
     currentItem.pricingMode === 'amount' && itemTotals.totalWeight > 0
@@ -1292,61 +1360,6 @@ export default function SalesEntryPage() {
     <DashboardLayout companyId={companyId}>
       <div className="min-h-full bg-[#f5f5f7] p-6 md:p-8">
         <div className="mx-auto max-w-6xl space-y-6">
-          <ModuleChrome
-            eyebrow="Sales Entry"
-            title={isEditMode ? 'Update invoice with confidence' : 'Fast invoice creation workspace'}
-            description="This transaction flow is tuned for daily billing work: quick party selection, transport capture, live mandi charge preview, and risk-aware submission without slowing down keyboard-heavy desktop use."
-            badges={
-              <>
-                <span className="inline-flex rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-semibold text-slate-600">
-                  Items: {currentFormItems.length}
-                </span>
-                <span className="inline-flex rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-semibold text-slate-600">
-                  Date: {invoiceDate || 'Not selected'}
-                </span>
-                <span className="inline-flex rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-semibold text-slate-600">
-                  Risk: {hasRisk ? 'Review required' : 'Within limits'}
-                </span>
-                <span className="inline-flex rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-xs font-semibold text-slate-600">
-                  Shortcut: Ctrl / Cmd + S
-                </span>
-              </>
-            }
-            actions={
-              isEditMode ? (
-                <Button type="button" variant="outline" className="rounded-xl" onClick={() => setSplitDialogOpen(true)}>
-                  <SplitSquareVertical className="mr-2 h-4 w-4" />
-                  Split Invoice
-                </Button>
-              ) : undefined
-            }
-          >
-            <MetricRail
-              items={[
-                {
-                  label: 'Invoice',
-                  value: invoiceNo || 'Draft',
-                  helper: isEditMode ? 'Editing existing bill' : 'New sales invoice'
-                },
-                {
-                  label: 'Subtotal',
-                  value: `₹${totalAmount.toFixed(2)}`,
-                  helper: `${currentFormItems.length} line item${currentFormItems.length === 1 ? '' : 's'}`
-                },
-                {
-                  label: 'Grand Total',
-                  value: `₹${grandTotal.toFixed(2)}`,
-                  helper: `Mandi charges ₹${mandiChargePreview.totalChargeAmount.toFixed(2)}`
-                },
-                {
-                  label: 'Outstanding',
-                  value: `₹${outstandingAmount.toFixed(2)}`,
-                  helper: hasRisk ? `Remaining ${formatRemainingLimitText(remainingLimit)}` : 'Buyer looks within limit'
-                }
-              ]}
-            />
-          </ModuleChrome>
-
           <Card className="overflow-hidden rounded-[1.85rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
             <CardHeader>
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -1684,7 +1697,7 @@ export default function SalesEntryPage() {
                           <p className="text-sm text-slate-500">Update the selected row and save it back into the bill.</p>
                         ) : null}
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-8 gap-4">
                         <div className="lg:col-span-2">
                           <Label htmlFor="itemProduct">Sales Items</Label>
                           <SearchableSelect
@@ -1730,6 +1743,23 @@ export default function SalesEntryPage() {
                           />
                         </div>
                         <div>
+                          <Label htmlFor="itemMarka">Marka No.</Label>
+                          <SearchableSelect
+                            id="itemMarka"
+                            value={currentItem.markaNo}
+                            onValueChange={(value) => setCurrentItem({ ...currentItem, markaNo: value })}
+                            options={markaOptions}
+                            placeholder="Search marka"
+                            searchPlaceholder="Search marka number..."
+                            emptyText="No marka found."
+                          />
+                          {markaOptions.length === 0 ? (
+                            <p className="mt-1 text-xs text-slate-500">
+                              Marka optional hai. Master &gt; Marka me add kar sakte hain.
+                            </p>
+                          ) : null}
+                        </div>
+                        <div>
                           <Label htmlFor="itemRate">
                             Rate / Qt
                           </Label>
@@ -1751,10 +1781,19 @@ export default function SalesEntryPage() {
                         <div>
                           <Label>Total Weight (Qt.)</Label>
                           <Input
-                            value={itemTotals.totalWeight.toFixed(2)}
-                            readOnly
-                            className="bg-gray-100"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={displayedTotalWeightQt}
+                            onChange={(e) => setCurrentItem({
+                              ...currentItem,
+                              totalWeightQt: toNonNegative(e.target.value)
+                            })}
+                            placeholder="Auto from bags & weight"
                           />
+                          <p className="mt-1 text-xs text-slate-500">
+                            Leave empty to auto-calculate from bags and weight per bag.
+                          </p>
                         </div>
                         <div>
                           <Label>Amount</Label>
@@ -1817,6 +1856,7 @@ export default function SalesEntryPage() {
                                 <th className="text-left p-2">Sales Item</th>
                                 <th className="text-right p-2">Bags</th>
                                 <th className="text-right p-2">Weight (Qt.)</th>
+                                <th className="text-left p-2">Marka No.</th>
                                 <th className="text-right p-2">Rate / Qt</th>
                                 <th className="text-right p-2">Amount</th>
                                 <th className="text-right p-2">GST</th>
@@ -1831,6 +1871,7 @@ export default function SalesEntryPage() {
                                   <td className="p-2">{item.salesItemName || item.productName || '-'}</td>
                                   <td className="p-2 text-right">{item.bags || 0}</td>
                                   <td className="p-2 text-right">{(item.weight || 0).toFixed(2)}</td>
+                                  <td className="p-2">{item.markaNo || '-'}</td>
                                   <td className="p-2 text-right">{(item.rate || 0).toFixed(2)}</td>
                                   <td className="p-2 text-right">{(item.amount || 0).toFixed(2)}</td>
                                   <td className="p-2 text-right">
@@ -1875,13 +1916,7 @@ export default function SalesEntryPage() {
                   <h3 className="text-lg font-semibold mb-2 pb-2 border-b">4. Additional Charges</h3>
                   <div className="grid grid-cols-1 gap-4">
                     <div className="rounded-lg border p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <Button type="button" variant="outline" onClick={handleAddAdditionalChargeRow}>
-                          Add Charge
-                        </Button>
-                      </div>
-
-                      <div className="mt-4 space-y-3">
+                      <div className="space-y-3">
                         {additionalChargeBuckets.map((bucket, index) => (
                           <div
                             key={bucket.id}
@@ -1900,7 +1935,9 @@ export default function SalesEntryPage() {
                               />
                             </div>
                             <div>
-                              <Label htmlFor={`additional-charge-amount-${bucket.id}`}>Amount</Label>
+                              <Label htmlFor={`additional-charge-amount-${bucket.id}`}>
+                                {isPercentageChargeType(bucket.chargeType) ? 'Percent (%)' : 'Amount'}
+                              </Label>
                               <Input
                                 id={`additional-charge-amount-${bucket.id}`}
                                 type="number"
@@ -1910,6 +1947,11 @@ export default function SalesEntryPage() {
                                 onChange={(e) => handleAdditionalChargeRowChange(bucket.id, 'amount', e.target.value)}
                                 placeholder="0.00"
                               />
+                              {isPercentageChargeType(bucket.chargeType) ? (
+                                <p className="mt-1 text-xs text-slate-500">
+                                  Auto-calculated on item subtotal (₹{totalAmount.toFixed(2)}).
+                                </p>
+                              ) : null}
                             </div>
                             <div>
                               <Label htmlFor={`additional-charge-remark-${bucket.id}`}>Remark</Label>
@@ -1933,6 +1975,12 @@ export default function SalesEntryPage() {
                             </div>
                           </div>
                         ))}
+                      </div>
+
+                      <div className="mt-4">
+                        <Button type="button" variant="outline" onClick={handleAddAdditionalChargeRow}>
+                          Add Charge
+                        </Button>
                       </div>
 
                       {normalizedAdditionalCharges.length > 0 ? (
