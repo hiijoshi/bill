@@ -23,24 +23,24 @@ function isServerlessRuntime() {
 function getPrimaryBackupDirectory() {
   const configured = String(process.env.TRADER_BACKUP_STORAGE_DIR || '').trim()
   if (configured) {
-    return path.resolve(configured)
+    return path.resolve(/* turbopackIgnore: true */ configured)
   }
 
   if (isServerlessRuntime()) {
-    return path.join(tmpdir(), 'mbill', 'trader-backups')
+    return path.join(/* turbopackIgnore: true */ tmpdir(), 'mbill', 'trader-backups')
   }
 
-  return path.join(process.cwd(), 'var', 'trader-backups')
+  return path.join(/* turbopackIgnore: true */ process.cwd(), 'var', 'trader-backups')
 }
 
 function getFallbackBackupDirectory() {
-  return path.join(tmpdir(), 'mbill', 'trader-backups')
+  return path.join(/* turbopackIgnore: true */ tmpdir(), 'mbill', 'trader-backups')
 }
 
 function getManagedBackupDirectories() {
   const primary = getPrimaryBackupDirectory()
   const fallback = getFallbackBackupDirectory()
-  return Array.from(new Set([primary, fallback].map((directory) => path.resolve(directory))))
+  return Array.from(new Set([primary, fallback].map((directory) => path.resolve(/* turbopackIgnore: true */ directory))))
 }
 
 export class TraderRetentionError extends Error {
@@ -60,6 +60,11 @@ type BackupActor = {
 }
 
 type BackupCounts = Record<string, number>
+
+const INTERACTIVE_TX_OPTIONS = {
+  maxWait: 30_000,
+  timeout: 60_000
+} as const
 
 function sanitizeSegment(value: string) {
   const normalized = String(value || '')
@@ -824,7 +829,7 @@ export async function createTraderDataBackup(params: {
     })
 
     return created
-  })
+  }, INTERACTIVE_TX_OPTIONS)
 
   try {
     const exportedAt = new Date().toISOString()
@@ -835,8 +840,8 @@ export async function createTraderDataBackup(params: {
     const safeName = sanitizeSegment(traderName)
     const fileName = `${safeName}-backup-${stamp}.json`
     const backupRoot = await resolveWritableBackupDirectory()
-    const traderDir = path.join(backupRoot, trader.id)
-    const storagePath = path.join(traderDir, `${backup.id}-${fileName}`)
+    const traderDir = path.join(/* turbopackIgnore: true */ backupRoot, trader.id)
+    const storagePath = path.join(/* turbopackIgnore: true */ traderDir, `${backup.id}-${fileName}`)
 
     await mkdir(traderDir, { recursive: true })
     await writeFile(storagePath, serialized, 'utf8')
@@ -880,7 +885,7 @@ export async function createTraderDataBackup(params: {
         },
         data: lifecycleUpdate
       })
-    })
+    }, INTERACTIVE_TX_OPTIONS)
   } catch (error) {
     await prisma.traderDataBackup.update({
       where: {
@@ -981,7 +986,7 @@ export async function markTraderDeletionPending(params: {
         notes: params.notes === undefined ? undefined : params.notes || null
       }
     })
-  })
+  }, INTERACTIVE_TX_OPTIONS)
 }
 
 export async function confirmTraderFinalDeletion(params: {
@@ -1113,7 +1118,7 @@ export async function confirmTraderFinalDeletion(params: {
         deletedAt: now
       }
     })
-  })
+  }, INTERACTIVE_TX_OPTIONS)
 
   return {
     deletedAt: now,

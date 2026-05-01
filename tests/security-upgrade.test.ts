@@ -747,7 +747,7 @@ test('Login enforces provided trader scope and blocks soft-deleted users', async
   }
 })
 
-test('Login accepts trader scope by trader ID and trader name alias', async () => {
+test('Login accepts trader scope only by trader ID (not trader name alias)', async () => {
   const suffix = Date.now().toString()
   const password = 'StrictTraderId#123'
   const hashedPassword = await bcrypt.hash(password, 12)
@@ -783,8 +783,8 @@ test('Login accepts trader scope by trader ID and trader name alias', async () =
       userId,
       password
     })
-    assert.equal(withLegacyName.success, true)
-    assert.equal(withLegacyName.user?.traderId, traderId)
+    assert.equal(withLegacyName.success, false)
+    assert.equal(withLegacyName.error, 'Invalid credentials')
 
     const withCurrentTraderId = await authenticateUser({
       traderId,

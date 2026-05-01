@@ -27,6 +27,11 @@ const createUserSchema = z
   })
   .strict()
 
+const INTERACTIVE_TX_OPTIONS = {
+  maxWait: 30_000,
+  timeout: 60_000
+} as const
+
 function normalizeCreatePayload(payload: z.infer<typeof createUserSchema>) {
   const activeLocked = payload.active === undefined ? undefined : !payload.active
   const companyIds = Array.from(
@@ -181,7 +186,7 @@ async function respondForExistingUserLink(params: {
         preset: normalized.privilegePreset
       })
     }
-  })
+  }, INTERACTIVE_TX_OPTIONS)
 
   const refreshedUser = await findExistingUserForCreate(normalized.traderId, normalized.userId)
 
@@ -512,7 +517,7 @@ export async function POST(request: NextRequest) {
       }
 
       return createdUser.id
-    })
+    }, INTERACTIVE_TX_OPTIONS)
 
     const user = await prisma.user.findFirstOrThrow({
       where: { id: createdUserId },
@@ -561,7 +566,7 @@ export async function POST(request: NextRequest) {
               id: user.id
             }
           })
-        })
+        }, INTERACTIVE_TX_OPTIONS)
 
         throw new Error(syncResult.reason || 'Failed to provision Supabase login for the new user')
       }

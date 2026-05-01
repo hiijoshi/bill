@@ -217,16 +217,28 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       }
     } as const
 
-    const exactTraderCandidate = traderIdInput
-      ? await prisma.user.findFirst({
+    let exactTraderCandidate = null
+    if (traderIdInput) {
+      exactTraderCandidate = await prisma.user.findFirst({
+        where: {
+          userId: normalizedUserId,
+          traderId: traderIdInput,
+          deletedAt: null
+        },
+        select: candidateSelect
+      })
+
+      if (!exactTraderCandidate && traderIdInput !== traderIdInput.toLowerCase()) {
+        exactTraderCandidate = await prisma.user.findFirst({
           where: {
             userId: normalizedUserId,
-            traderId: traderIdInput,
+            traderId: traderIdInput.toLowerCase(),
             deletedAt: null
           },
           select: candidateSelect
         })
-      : null
+      }
+    }
 
     if (traderIdInput && !exactTraderCandidate) {
       return {
@@ -284,7 +296,7 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
     if (passwordMatched.length > 1) {
       return {
         success: false,
-        error: 'Multiple accounts found. Please enter exact Trader Name.'
+        error: 'Multiple accounts found. Please enter exact Trader ID.'
       }
     }
 
