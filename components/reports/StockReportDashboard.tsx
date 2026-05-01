@@ -709,19 +709,19 @@ export default function StockReportDashboard({
         <Card className={surfaceCardClass}>
           <CardContent className="pt-6">
             <p className="text-xs text-slate-500">Total Qty In</p>
-            <p className="mt-1 text-2xl font-semibold text-emerald-700">{numberFormatter.format(summary.totalQtyIn)}</p>
+            <p className="mt-1 text-2xl font-semibold text-slate-900">{numberFormatter.format(summary.totalQtyIn)}</p>
           </CardContent>
         </Card>
         <Card className={surfaceCardClass}>
           <CardContent className="pt-6">
             <p className="text-xs text-slate-500">Total Qty Out</p>
-            <p className="mt-1 text-2xl font-semibold text-rose-700">{numberFormatter.format(summary.totalQtyOut)}</p>
+            <p className="mt-1 text-2xl font-semibold text-slate-900">{numberFormatter.format(summary.totalQtyOut)}</p>
           </CardContent>
         </Card>
         <Card className={surfaceCardClass}>
           <CardContent className="pt-6">
             <p className="text-xs text-slate-500">Net Movement / Products</p>
-            <p className="mt-1 text-2xl font-semibold text-sky-700">
+            <p className="mt-1 text-2xl font-semibold text-slate-900">
               {numberFormatter.format(summary.netMovement)} / {summary.products.size}
             </p>
           </CardContent>

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertTriangle, MessageCircle, Pencil, Plus, SplitSquareVertical, Trash2 } from 'lucide-react'
 import DashboardLayout from '@/app/components/DashboardLayout'
@@ -1360,20 +1360,17 @@ export default function SalesEntryPage() {
     <DashboardLayout companyId={companyId}>
       <div className="min-h-full bg-[#f5f5f7] p-6 md:p-8">
         <div className="mx-auto max-w-6xl space-y-6">
-          <Card className="overflow-hidden rounded-[1.85rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
-            <CardHeader>
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <CardTitle className="text-2xl font-bold">{isEditMode ? 'Edit Sales Bill' : 'Sales Entry'}</CardTitle>
-                {isEditMode ? (
-                  <Button type="button" variant="outline" onClick={() => setSplitDialogOpen(true)}>
-                    <SplitSquareVertical className="mr-2 h-4 w-4" />
-                    Split Invoice
-                  </Button>
-                ) : null}
-              </div>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleSubmit}>
+          <div className="rounded-[1.5rem] border border-slate-200 bg-white p-5 md:p-6">
+            <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <CardTitle className="text-2xl font-bold">{isEditMode ? 'Edit Sales Bill' : 'Sales Entry'}</CardTitle>
+              {isEditMode ? (
+                <Button type="button" variant="outline" onClick={() => setSplitDialogOpen(true)}>
+                  <SplitSquareVertical className="mr-2 h-4 w-4" />
+                  Split Invoice
+                </Button>
+              ) : null}
+            </div>
+            <form onSubmit={handleSubmit}>
                 {isSplitManagedBill ? (
                   <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                     <p className="font-semibold">This invoice is already managed through the split workflow.</p>
@@ -2124,9 +2121,8 @@ export default function SalesEntryPage() {
                     {submitting ? 'Saving...' : isEditMode ? 'Update Sales Bill' : 'Save Sales Bill'}
                   </Button>
                 </div>
-              </form>
-            </CardContent>
-          </Card>
+            </form>
+          </div>
         </div>
       </div>
       <Dialog open={riskDialogOpen} onOpenChange={setRiskDialogOpen}>

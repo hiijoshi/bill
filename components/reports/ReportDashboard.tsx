@@ -1367,28 +1367,28 @@ export default function ReportDashboard({
     if (reportType === 'sales') {
       return [
         { label: 'Total Sales', helper: 'Total bill amount', value: round2(totals.salesTotal), tone: 'text-slate-900', format: 'amount' as const },
-        { label: 'Received', helper: 'Money collected', value: round2(totals.salesReceived), tone: 'text-emerald-700', format: 'amount' as const },
-        { label: 'Pending', helper: 'Money still to collect', value: round2(totals.salesPending), tone: 'text-amber-700', format: 'amount' as const },
-        { label: 'Bills', helper: 'Bills in this report', value: summary.totalRecords, tone: 'text-sky-700', format: 'count' as const }
+        { label: 'Received', helper: 'Money collected', value: round2(totals.salesReceived), tone: 'text-slate-900', format: 'amount' as const },
+        { label: 'Pending', helper: 'Money still to collect', value: round2(totals.salesPending), tone: 'text-slate-900', format: 'amount' as const },
+        { label: 'Bills', helper: 'Bills in this report', value: summary.totalRecords, tone: 'text-slate-900', format: 'count' as const }
       ]
     }
 
     if (reportType === 'purchase') {
       return [
         { label: 'Total Purchase', helper: 'Total bill amount', value: round2(totals.purchaseTotal), tone: 'text-slate-900', format: 'amount' as const },
-        { label: 'Bhugtan Paid', helper: 'Money already paid', value: round2(totals.purchasePaid), tone: 'text-rose-700', format: 'amount' as const },
-        { label: 'Bhugtan Pending', helper: 'Money still to pay', value: round2(totals.purchasePending), tone: 'text-amber-700', format: 'amount' as const },
-        { label: 'Bills', helper: 'Bills in this report', value: summary.totalRecords, tone: 'text-sky-700', format: 'count' as const }
+        { label: 'Bhugtan Paid', helper: 'Money already paid', value: round2(totals.purchasePaid), tone: 'text-slate-900', format: 'amount' as const },
+        { label: 'Bhugtan Pending', helper: 'Money still to pay', value: round2(totals.purchasePending), tone: 'text-slate-900', format: 'amount' as const },
+        { label: 'Bills', helper: 'Bills in this report', value: summary.totalRecords, tone: 'text-slate-900', format: 'count' as const }
       ]
     }
 
     return [
       { label: 'Sales Total', helper: 'All sales bills', value: round2(totals.salesTotal), tone: 'text-slate-900', format: 'amount' as const },
       { label: 'Purchase Total', helper: 'All purchase bills', value: round2(totals.purchaseTotal), tone: 'text-slate-900', format: 'amount' as const },
-      { label: 'Received', helper: 'Money collected', value: round2(totals.salesReceived), tone: 'text-emerald-700', format: 'amount' as const },
-      { label: 'Paid', helper: 'Money already paid', value: round2(totals.purchasePaid), tone: 'text-rose-700', format: 'amount' as const },
-      { label: 'Sales Pending', helper: 'Still to collect', value: round2(totals.salesPending), tone: 'text-amber-700', format: 'amount' as const },
-      { label: 'Purchase Pending', helper: 'Still to pay', value: round2(totals.purchasePending), tone: 'text-sky-700', format: 'amount' as const }
+      { label: 'Received', helper: 'Money collected', value: round2(totals.salesReceived), tone: 'text-slate-900', format: 'amount' as const },
+      { label: 'Paid', helper: 'Money already paid', value: round2(totals.purchasePaid), tone: 'text-slate-900', format: 'amount' as const },
+      { label: 'Sales Pending', helper: 'Still to collect', value: round2(totals.salesPending), tone: 'text-slate-900', format: 'amount' as const },
+      { label: 'Purchase Pending', helper: 'Still to pay', value: round2(totals.purchasePending), tone: 'text-slate-900', format: 'amount' as const }
     ]
   }, [filteredRows, reportType, summary.totalRecords])
 
@@ -1604,7 +1604,7 @@ export default function ReportDashboard({
                     <TableCell className="font-medium text-slate-800">{row.label}</TableCell>
                     <TableCell className="text-right">{numberFormatter.format(row.purchase)}</TableCell>
                     <TableCell className="text-right">{numberFormatter.format(row.sales)}</TableCell>
-                    <TableCell className={`text-right font-medium ${row.profitLoss >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                    <TableCell className="text-right font-medium text-slate-900">
                       {numberFormatter.format(row.profitLoss)}
                     </TableCell>
                     <TableCell className="text-right font-medium text-slate-700">{formatMargin(row.margin)}</TableCell>

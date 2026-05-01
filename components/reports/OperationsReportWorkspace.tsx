@@ -280,38 +280,11 @@ type StatementDisplayRow = {
 }
 
 function toneClasses(tone: MetricTone) {
-  if (tone === 'emerald') {
-    return {
-      card: 'from-emerald-500 via-emerald-500 to-teal-500 text-white shadow-emerald-500/25',
-      soft: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-      accent: 'text-emerald-700',
-    }
-  }
-  if (tone === 'rose') {
-    return {
-      card: 'from-rose-500 via-rose-500 to-orange-500 text-white shadow-rose-500/25',
-      soft: 'border-rose-200 bg-rose-50 text-rose-700',
-      accent: 'text-rose-700',
-    }
-  }
-  if (tone === 'amber') {
-    return {
-      card: 'from-amber-500 via-orange-500 to-yellow-500 text-white shadow-amber-500/25',
-      soft: 'border-amber-200 bg-amber-50 text-amber-700',
-      accent: 'text-amber-700',
-    }
-  }
-  if (tone === 'violet') {
-    return {
-      card: 'from-violet-500 via-indigo-500 to-sky-500 text-white shadow-violet-500/25',
-      soft: 'border-violet-200 bg-violet-50 text-violet-700',
-      accent: 'text-violet-700',
-    }
-  }
+  void tone
   return {
-    card: 'from-sky-500 via-blue-500 to-indigo-500 text-white shadow-sky-500/25',
-    soft: 'border-sky-200 bg-sky-50 text-sky-700',
-    accent: 'text-sky-700',
+    card: 'border-slate-200 bg-white text-slate-900',
+    soft: 'border-slate-200 bg-slate-50 text-slate-700',
+    accent: 'text-slate-900'
   }
 }
 
@@ -2223,120 +2196,62 @@ export default function OperationsReportWorkspace({
 
   return (
     <div className="space-y-6">
-      {!embedded ? (
-        <section className="overflow-hidden rounded-[2rem] border border-slate-200/70 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.18),_transparent_28%),linear-gradient(135deg,#071226_0%,#111c33_45%,#f8fafc_180%)] shadow-[0_40px_100px_-48px_rgba(15,23,42,0.45)]">
-          <div className="px-6 py-6 md:px-8 md:py-7">
-            <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
-              <div className="max-w-4xl">
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.22em] text-sky-100/90">
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Ledger Intelligence
-                </div>
-                <h2 className="mt-4 text-4xl font-semibold tracking-tight text-white">
-                  Premium ledger and reporting workspace
-                </h2>
-                <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200/85">
-                  Instant overview, receivable drilldown, daily movement, and cash-bank traceability in one modern reporting canvas.
-                </p>
-                <div className="mt-5 flex flex-wrap items-center gap-2 text-xs text-slate-200/75">
-                  <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1">
-                    Scope: {selectedCompanySummary}
-                  </span>
-                  {lastGeneratedAt ? (
-                    <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1">
-                      Synced: {lastGeneratedAt}
-                    </span>
-                  ) : null}
-                  <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1">
-                    Recovery progress: {recoveryProgress.toFixed(1)}%
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-2 xl:justify-end">
-                {onBackToDashboard ? (
-                  <Button variant="outline" onClick={onBackToDashboard} className="rounded-2xl border-white/15 bg-white/10 text-white hover:bg-white/15 hover:text-white">
-                    Back to Dashboard
-                  </Button>
-                ) : null}
-                <Button
-                  onClick={() => void generateReport()}
-                  disabled={loading || loadingCompanies}
-                  className="rounded-2xl bg-white text-slate-950 shadow-lg shadow-slate-950/15 hover:bg-slate-100"
-                >
-                  <RefreshCw className={cn('mr-2 h-4 w-4', loading ? 'animate-spin' : '')} />
-                  {loading ? 'Refreshing...' : 'Refresh'}
-                </Button>
-                {renderExportMenu()}
-              </div>
+      <section className="rounded-[1.8rem] border border-slate-200/80 bg-white p-4 shadow-[0_24px_60px_-46px_rgba(15,23,42,0.18)] md:p-5">
+        {!embedded ? (
+          <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="text-2xl font-semibold tracking-tight text-slate-950">Operations Report Workspace</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Scope: {selectedCompanySummary}
+                {lastGeneratedAt ? ` | Synced: ${lastGeneratedAt}` : ''}
+              </p>
             </div>
-
-            <div className="mt-6 flex overflow-x-auto pb-1">
-              <div className="flex min-w-max items-center gap-2 rounded-[1.4rem] border border-white/15 bg-white/10 p-1.5 backdrop-blur-md">
-                {operationsViewOptions.map((item) => {
-                  const active = activeView === item.value
-                  return (
-                    <button
-                      key={item.value}
-                      type="button"
-                      onClick={() => handleViewChange(item.value)}
-                      onMouseEnter={() => void prefetchReportView(item.value)}
-                      className={cn(
-                        'rounded-[1rem] px-4 py-2.5 text-sm font-medium transition-all duration-200',
-                        active
-                          ? 'bg-white text-slate-950 shadow-[0_14px_30px_-20px_rgba(15,23,42,0.55)]'
-                          : 'text-slate-200/85 hover:bg-white/10 hover:text-white'
-                      )}
-                    >
-                      {item.label}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          </div>
-        </section>
-      ) : (
-        <section className="rounded-[1.8rem] border border-slate-200/80 bg-white/80 p-4 shadow-[0_24px_60px_-46px_rgba(15,23,42,0.18)] backdrop-blur md:p-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex overflow-x-auto pb-1">
-              <div className="flex min-w-max items-center gap-2 rounded-[1.3rem] border border-slate-200 bg-slate-50/90 p-1.5">
-                {operationsViewOptions.map((item) => {
-                  const active = activeView === item.value
-                  return (
-                    <button
-                      key={item.value}
-                      type="button"
-                      onClick={() => handleViewChange(item.value)}
-                      onMouseEnter={() => void prefetchReportView(item.value)}
-                      className={cn(
-                        'rounded-[1rem] px-4 py-2.5 text-sm font-medium transition-colors',
-                        active
-                          ? 'bg-slate-950 text-white shadow-[0_14px_30px_-20px_rgba(15,23,42,0.45)]'
-                          : 'text-slate-600 hover:bg-white hover:text-slate-950'
-                      )}
-                    >
-                      {item.label}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Button
-                onClick={() => void generateReport()}
-                disabled={loading || loadingCompanies}
-                className="rounded-2xl bg-slate-950 text-white hover:bg-slate-800"
-              >
-                <RefreshCw className={cn('mr-2 h-4 w-4', loading ? 'animate-spin' : '')} />
-                {loading ? 'Refreshing...' : 'Refresh'}
+            {onBackToDashboard ? (
+              <Button variant="outline" onClick={onBackToDashboard} className="rounded-2xl border-slate-200 bg-white hover:bg-slate-50">
+                Back to Dashboard
               </Button>
-              {renderExportMenu()}
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex overflow-x-auto pb-1">
+            <div className="flex min-w-max items-center gap-2 rounded-[1.3rem] border border-slate-200 bg-slate-50/90 p-1.5">
+              {operationsViewOptions.map((item) => {
+                const active = activeView === item.value
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    onClick={() => handleViewChange(item.value)}
+                    onMouseEnter={() => void prefetchReportView(item.value)}
+                    className={cn(
+                      'rounded-[1rem] px-4 py-2.5 text-sm font-medium transition-colors',
+                      active
+                        ? 'bg-slate-950 text-white shadow-[0_14px_30px_-20px_rgba(15,23,42,0.45)]'
+                        : 'text-slate-600 hover:bg-white hover:text-slate-950'
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                )
+              })}
             </div>
           </div>
-        </section>
-      )}
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={() => void generateReport()}
+              disabled={loading || loadingCompanies}
+              className="rounded-2xl bg-slate-950 text-white hover:bg-slate-800"
+            >
+              <RefreshCw className={cn('mr-2 h-4 w-4', loading ? 'animate-spin' : '')} />
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </Button>
+            {renderExportMenu()}
+          </div>
+        </div>
+      </section>
 
       <section>
         <div className="rounded-[1.8rem] border border-slate-200/80 bg-white/90 p-5 shadow-[0_32px_70px_-46px_rgba(15,23,42,0.35)] backdrop-blur-xl md:p-6">
@@ -2613,21 +2528,16 @@ export default function OperationsReportWorkspace({
               layout
               whileHover={{ y: -3, scale: 1.01 }}
               transition={{ type: 'spring', stiffness: 320, damping: 26 }}
-              className={cn(
-                'overflow-hidden rounded-[1.7rem] bg-gradient-to-br p-[1px] shadow-[0_24px_60px_-38px_rgba(15,23,42,0.35)]',
-                tone.card
-              )}
+              className={cn('rounded-[1.35rem] border px-5 py-5 shadow-sm', tone.card)}
             >
-              <div className="h-full rounded-[calc(1.7rem-1px)] bg-[linear-gradient(180deg,rgba(255,255,255,0.14),rgba(255,255,255,0.04))] p-5 backdrop-blur-md">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/75">{card.label}</p>
-                    <p className="mt-4 text-2xl font-semibold tracking-tight text-white">{card.value}</p>
-                    <p className="mt-2 text-sm text-white/75">{card.hint}</p>
-                  </div>
-                  <div className="rounded-2xl bg-white/15 p-3 text-white shadow-inner shadow-white/10">
-                    <card.icon className="h-5 w-5" />
-                  </div>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{card.label}</p>
+                  <p className="mt-4 text-2xl font-semibold tracking-tight text-slate-900">{card.value}</p>
+                  <p className="mt-2 text-sm text-slate-500">{card.hint}</p>
+                </div>
+                <div className={cn('rounded-2xl border p-3', tone.soft)}>
+                  <card.icon className="h-5 w-5" />
                 </div>
               </div>
             </motion.div>
@@ -2638,13 +2548,13 @@ export default function OperationsReportWorkspace({
       {(activeView === 'overview' || activeView === 'outstanding') && reportData?.summary ? (
         <section className={surfaceCardClass}>
           <div className="grid gap-6 px-6 py-6 lg:grid-cols-[1.35fr_0.65fr]">
-            <div className="rounded-[1.5rem] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] p-5">
+            <div className="rounded-[1.5rem] border border-slate-200 bg-white p-5">
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <p className="text-sm font-semibold text-slate-950">Collection runway</p>
                   <p className="mt-1 text-sm text-slate-500">How much of booked sales has been recovered in the selected period.</p>
                 </div>
-                <Badge variant="outline" className="rounded-full border-sky-200 bg-sky-50 text-sky-700">
+                <Badge variant="outline" className="rounded-full border-slate-200 bg-slate-50 text-slate-700">
                   {recoveryProgress.toFixed(1)}%
                 </Badge>
               </div>
@@ -2658,7 +2568,7 @@ export default function OperationsReportWorkspace({
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
                   <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Receipts</p>
-                  <p className="mt-2 text-xl font-semibold text-emerald-700">{currencyText(reportData.summary.totalReceivedAmount)}</p>
+                  <p className="mt-2 text-xl font-semibold text-slate-950">{currencyText(reportData.summary.totalReceivedAmount)}</p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
                   <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Net Outstanding</p>
@@ -2667,24 +2577,24 @@ export default function OperationsReportWorkspace({
               </div>
             </div>
 
-            <div className="rounded-[1.5rem] border border-slate-200 bg-slate-950 p-5 text-white">
-              <p className="text-sm font-semibold">Quick stats</p>
+            <div className="rounded-[1.5rem] border border-slate-200 bg-white p-5">
+              <p className="text-sm font-semibold text-slate-900">Quick stats</p>
               <div className="mt-4 space-y-3 text-sm">
-                <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
-                  <span className="text-white/70">Receivables</span>
-                  <span className="font-semibold">{currencyText(reportData.summary.salesBalanceTotal)}</span>
+                <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <span className="text-slate-600">Receivables</span>
+                  <span className="font-semibold text-slate-900">{currencyText(reportData.summary.salesBalanceTotal)}</span>
                 </div>
-                <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
-                  <span className="text-white/70">Payables</span>
-                  <span className="font-semibold">{currencyText(reportData.summary.purchaseBalanceTotal)}</span>
+                <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <span className="text-slate-600">Payables</span>
+                  <span className="font-semibold text-slate-900">{currencyText(reportData.summary.purchaseBalanceTotal)}</span>
                 </div>
-                <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
-                  <span className="text-white/70">Stock Adjustment</span>
-                  <span className="font-semibold">{numberText(reportData.summary.totalStockAdjustmentQty)} Qt</span>
+                <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <span className="text-slate-600">Stock Adjustment</span>
+                  <span className="font-semibold text-slate-900">{numberText(reportData.summary.totalStockAdjustmentQty)} Qt</span>
                 </div>
-                <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
-                  <span className="text-white/70">Today Activity</span>
-                  <span className="font-semibold">{todayActivityGroup ? `${todayActivityGroup.rows.length} entries` : 'No entries'}</span>
+                <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <span className="text-slate-600">Today Activity</span>
+                  <span className="font-semibold text-slate-900">{todayActivityGroup ? `${todayActivityGroup.rows.length} entries` : 'No entries'}</span>
                 </div>
               </div>
             </div>
