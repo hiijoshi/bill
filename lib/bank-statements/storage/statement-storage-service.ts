@@ -20,7 +20,7 @@ function getPreferredStorageRoot() {
   }
 
   if (isServerlessRuntime()) {
-    return path.join(tmpdir(), 'mbill', 'bank-statements')
+    return path.join(/* turbopackIgnore: true */ tmpdir(), 'mbill', 'bank-statements')
   }
 
   return getLegacyStorageRoot()
@@ -64,8 +64,8 @@ export async function saveBankStatementFile(input: {
 }) {
   const storageRoot = getPreferredStorageRoot()
   const safeName = sanitizeSegment(input.fileName)
-  const storageKey = path.join(sanitizeSegment(input.companyId), sanitizeSegment(input.batchId), safeName)
-  const fullPath = path.join(storageRoot, storageKey)
+  const storageKey = [sanitizeSegment(input.companyId), sanitizeSegment(input.batchId), safeName].join(path.sep)
+  const fullPath = path.join(/* turbopackIgnore: true */ storageRoot, storageKey)
   const checksum = createHash('sha256').update(input.bytes).digest('hex')
   const fileSizeBytes = Number(input.bytes.byteLength || 0)
 
@@ -108,7 +108,7 @@ export async function saveBankStatementFile(input: {
   let cachedFullPath: string | null = null
 
   try {
-    const directory = path.join(storageRoot, sanitizeSegment(input.companyId), sanitizeSegment(input.batchId))
+    const directory = path.join(/* turbopackIgnore: true */ storageRoot, sanitizeSegment(input.companyId), sanitizeSegment(input.batchId))
     await mkdir(directory, { recursive: true })
     await writeFile(fullPath, input.bytes)
     const fileStat = await stat(fullPath)
@@ -171,7 +171,7 @@ export async function loadBankStatementFile(input: {
   let lastError: unknown = null
 
   for (const root of roots) {
-    const candidatePath = path.join(root, normalizedKey)
+    const candidatePath = path.join(/* turbopackIgnore: true */ root, normalizedKey)
     try {
       const bytes = await readFile(candidatePath)
       return {
@@ -206,7 +206,7 @@ export async function deleteBankStatementFile(input: {
 
   await Promise.all(
     getStorageRoots().map(async (root) => {
-      const fullPath = path.join(root, normalizedKey)
+      const fullPath = path.join(/* turbopackIgnore: true */ root, normalizedKey)
       await unlink(fullPath).catch(() => undefined)
     })
   )

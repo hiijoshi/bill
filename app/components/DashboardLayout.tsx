@@ -316,9 +316,9 @@ export default function DashboardLayout({
   const platformLabel = useMemo(() => {
     if (profile.runtimePlatform === 'ios') return 'iOS workspace'
     if (profile.runtimePlatform === 'android') return 'Android workspace'
-    return profile.isDesktop ? 'Web command center' : 'Web workspace'
+    return profile.isDesktop ? 'Web workspace' : 'Web workspace'
   }, [profile])
-  const densityLabel = profile.density === 'compact' ? 'Dense layout' : 'Comfort layout'
+  const densityLabel = profile.density === 'compact' ? 'Compact' : 'Comfort'
 
   const handleFinancialYearSwitch = async (nextFinancialYearId: string | null) => {
     const normalizedId = String(nextFinancialYearId || '').trim() || null
@@ -388,26 +388,8 @@ export default function DashboardLayout({
                 >
                   <Menu className="h-4 w-4" />
                 </Button>
-                {!hidePageIntro ? (
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full border border-white/65 bg-slate-950 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-white">
-                        {platformLabel}
-                      </span>
-                      <span className="rounded-full border border-slate-200 bg-white/75 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                        {densityLabel}
-                      </span>
-                    </div>
-                    <h1 className="mt-2 text-[1.45rem] font-semibold tracking-[-0.03em] text-slate-950 md:text-[1.75rem]">
-                      Business Operations Hub
-                    </h1>
-                    <p className="mt-1 max-w-2xl text-sm text-slate-600">
-                      Run purchases, payments, ledgers, stock, and reporting from one structured workspace built for long-form business operations.
-                    </p>
-                  </div>
-                ) : null}
               </div>
-              <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[320px] sm:items-end">
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
                 <div className="flex w-full flex-wrap items-center justify-end gap-2">
                   {showFinancialYearSwitcher ? (
                     <div className="flex min-w-[220px] flex-1 items-center gap-2 sm:max-w-[320px] sm:flex-none">
@@ -485,23 +467,12 @@ export default function DashboardLayout({
                       name={currentUserName}
                       userId={currentUser}
                       role={currentUserRole}
-                      contextLabel={currentCompanyName || 'Workspace not selected'}
                       menuItems={[
                         { label: 'Profile', icon: User, onClick: () => router.push('/main/profile') },
                         { label: 'Logout', icon: LogOut, onClick: handleLogout, tone: 'danger', separatorBefore: true }
                       ]}
                     />
                   )}
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-2 text-xs font-medium text-slate-600">
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700">
-                    <ShieldCheck className="h-3.5 w-3.5" />
-                    Secure session
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/80 px-3 py-1">
-                    <Layers3 className="h-3.5 w-3.5" />
-                    {currentCompanyName || 'No company selected'}
-                  </span>
                 </div>
               </div>
             </div>

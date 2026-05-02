@@ -1,6 +1,4 @@
 const PLACEHOLDER_COMPANY_IDS = new Set([
-  'demo-company',
-  'demo_company',
   'company-id',
   'company_id',
   'null',

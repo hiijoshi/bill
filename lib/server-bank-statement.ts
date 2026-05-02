@@ -84,9 +84,9 @@ const OCR_WORKER_IDLE_TIMEOUT_MS = 2 * 60_000
 const OCR_MAX_IMAGE_EDGE_PX = 1800
 const OCR_MAX_IMAGE_PIXELS = 2_400_000
 const PDF_PUBLIC_WORKER_URL_PATH = '/pdf.worker.mjs'
-const PDF_PUBLIC_WORKER_FILE_PATH = path.join(process.cwd(), 'public', 'pdf.worker.mjs')
+const PDF_PUBLIC_WORKER_FILE_PATH = path.join(/* turbopackIgnore: true */ process.cwd(), 'public', 'pdf.worker.mjs')
 const TESSERACT_NODE_WORKER_PATH = path.join(
-  process.cwd(),
+  /* turbopackIgnore: true */ process.cwd(),
   'node_modules',
   'tesseract.js',
   'src',

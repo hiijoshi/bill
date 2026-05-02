@@ -217,22 +217,37 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       }
     } as const
 
-    let exactTraderCandidate = null
+    // Check if traderId input is actually a trader name (like H00001)
+    let resolvedTraderId = traderIdInput
     if (traderIdInput) {
+      const traderByName = await prisma.trader.findFirst({
+        where: {
+          name: traderIdInput,
+          deletedAt: null
+        },
+        select: { id: true }
+      })
+      if (traderByName) {
+        resolvedTraderId = traderByName.id
+      }
+    }
+
+    let exactTraderCandidate = null
+    if (resolvedTraderId) {
       exactTraderCandidate = await prisma.user.findFirst({
         where: {
           userId: normalizedUserId,
-          traderId: traderIdInput,
+          traderId: resolvedTraderId,
           deletedAt: null
         },
         select: candidateSelect
       })
 
-      if (!exactTraderCandidate && traderIdInput !== traderIdInput.toLowerCase()) {
+      if (!exactTraderCandidate && resolvedTraderId !== resolvedTraderId.toLowerCase()) {
         exactTraderCandidate = await prisma.user.findFirst({
           where: {
             userId: normalizedUserId,
-            traderId: traderIdInput.toLowerCase(),
+            traderId: resolvedTraderId.toLowerCase(),
             deletedAt: null
           },
           select: candidateSelect
