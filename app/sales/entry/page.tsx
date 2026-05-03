@@ -66,6 +66,7 @@ interface SalesItem {
   gstAmount: number
   lineTotal: number
   discount: number
+  manualWeightOverride?: boolean
 }
 
 interface SalesItemMasterOption {
@@ -128,7 +129,6 @@ const PERMANENT_ADDITIONAL_CHARGE_TYPES = [
   'Loading labour',
   'Bardan',
   'Commission %',
-  'Commission',
   'Miscellaneous'
 ] as const
 
@@ -298,6 +298,7 @@ export default function SalesEntryPage() {
 
   // Invoice Tab 3 - Items
   const [currentItem, setCurrentItem] = useState(createEmptyCurrentItem)
+  const [manualWeightOverride, setManualWeightOverride] = useState(false)
 
   // Invoice Tab 4 - Totals
   const [totalProductItemQty, setTotalProductItemQty] = useState(0)
@@ -324,31 +325,18 @@ export default function SalesEntryPage() {
   }
 
   const freightAdvanceTotal = parseFloat(advance) || 0
-  const normalizedAdditionalCharges = useMemo(
-    () =>
-      normalizeSalesAdditionalCharges(
-        additionalChargeBuckets.map((bucket) => ({
-          chargeType: bucket.chargeType,
-          amount: bucket.amount,
-          remark: bucket.remark,
-        })),
-        { percentageBaseAmount: totalAmount }
-      ),
-    [additionalChargeBuckets, totalAmount]
-  )
-  const extraChargesSummary = useMemo(
-    () => summarizeSalesAdditionalCharges(normalizedAdditionalCharges),
-    [normalizedAdditionalCharges]
-  )
-  const extraChargesTotal = extraChargesSummary.totalAmount
-  const additionalTotal = freightAdvanceTotal + extraChargesTotal
   const totalGstAmount = useMemo(
     () => roundCurrency(currentFormItems.reduce((sum, item) => sum + (item.gstAmount || 0), 0)),
     [currentFormItems]
   )
-  const computedGrandTotal = useMemo(
-    () => roundCurrency(totalAmount + totalGstAmount + additionalTotal),
-    [additionalTotal, totalAmount, totalGstAmount]
+  const rawAdditionalChargeEntries = useMemo(
+    () =>
+      additionalChargeBuckets.map((bucket) => ({
+        chargeType: bucket.chargeType,
+        amount: bucket.amount,
+        remark: bucket.remark,
+      })),
+    [additionalChargeBuckets]
   )
 
   const selectedPartyRecord = useMemo(
@@ -412,6 +400,7 @@ export default function SalesEntryPage() {
 
   const additionalChargeTypeOptions = useMemo<SearchableSelectOption[]>(() => {
     const dynamicNames = accountingHeads
+      .filter((head) => Boolean(head.isMandiCharge))
       .map((head) => String(head.name || '').trim())
       .filter(Boolean)
 
@@ -456,15 +445,45 @@ export default function SalesEntryPage() {
       totalBags: totalNoOfBags
     })
   }, [accountingHeads, selectedPartyRecord?.mandiTypeId, totalAmount, totalNoOfBags, totalWeight])
-
-  const computedGrandTotalWithMandi = useMemo(
-    () => roundCurrency(computedGrandTotal + mandiChargePreview.totalChargeAmount),
-    [computedGrandTotal, mandiChargePreview.totalChargeAmount]
+  const fixedAdditionalCharges = useMemo(
+    () =>
+      normalizeSalesAdditionalCharges(
+        rawAdditionalChargeEntries.filter((entry) => !isPercentageChargeType(entry.chargeType))
+      ),
+    [rawAdditionalChargeEntries]
+  )
+  const fixedAdditionalChargesTotal = useMemo(
+    () => summarizeSalesAdditionalCharges(fixedAdditionalCharges).totalAmount,
+    [fixedAdditionalCharges]
+  )
+  const percentageChargeBaseAmount = useMemo(
+    () =>
+      roundCurrency(
+        totalAmount + totalGstAmount + freightAdvanceTotal + mandiChargePreview.totalChargeAmount + fixedAdditionalChargesTotal
+      ),
+    [fixedAdditionalChargesTotal, freightAdvanceTotal, mandiChargePreview.totalChargeAmount, totalAmount, totalGstAmount]
+  )
+  const normalizedAdditionalCharges = useMemo(
+    () =>
+      normalizeSalesAdditionalCharges(rawAdditionalChargeEntries, {
+        percentageBaseAmount: percentageChargeBaseAmount
+      }),
+    [percentageChargeBaseAmount, rawAdditionalChargeEntries]
+  )
+  const extraChargesSummary = useMemo(
+    () => summarizeSalesAdditionalCharges(normalizedAdditionalCharges),
+    [normalizedAdditionalCharges]
+  )
+  const extraChargesTotal = extraChargesSummary.totalAmount
+  const additionalTotal = freightAdvanceTotal + extraChargesTotal
+  const computedGrandTotal = useMemo(
+    () => roundCurrency(totalAmount + totalGstAmount + additionalTotal + mandiChargePreview.totalChargeAmount),
+    [additionalTotal, mandiChargePreview.totalChargeAmount, totalAmount, totalGstAmount]
   )
 
   const grandTotal = manualGrandTotal !== ''
     ? roundCurrency(parseFloat(manualGrandTotal) || 0)
-    : computedGrandTotalWithMandi
+    : computedGrandTotal
 
   const isEditMode = editBillId !== ''
 
@@ -511,10 +530,10 @@ export default function SalesEntryPage() {
 
   useEffect(() => {
     const previousComputedGrandTotal = previousComputedGrandTotalRef.current
-    previousComputedGrandTotalRef.current = computedGrandTotalWithMandi
+    previousComputedGrandTotalRef.current = computedGrandTotal
 
     if (previousComputedGrandTotal === null) return
-    if (Math.abs(previousComputedGrandTotal - computedGrandTotalWithMandi) < 0.01) return
+    if (Math.abs(previousComputedGrandTotal - computedGrandTotal) < 0.01) return
     if (preserveLoadedManualGrandTotalRef.current) {
       preserveLoadedManualGrandTotalRef.current = false
       return
@@ -522,7 +541,7 @@ export default function SalesEntryPage() {
     if (!manualGrandTotalTouched && manualGrandTotal !== '') {
       setManualGrandTotal('')
     }
-  }, [computedGrandTotalWithMandi, manualGrandTotal, manualGrandTotalTouched])
+  }, [computedGrandTotal, manualGrandTotal, manualGrandTotalTouched])
 
   const handleAdvanceChange = (value: string) => {
     const normalized = toNonNegative(value)
@@ -726,6 +745,7 @@ export default function SalesEntryPage() {
 
   const resetCurrentItemForm = useCallback(() => {
     setCurrentItem(createEmptyCurrentItem())
+    setManualWeightOverride(false)
     setEditingItemId(null)
   }, [])
 
@@ -766,13 +786,15 @@ export default function SalesEntryPage() {
             const billItemAmount = Array.isArray(bill.salesItems)
               ? bill.salesItems.reduce((sum, entry) => sum + Math.max(0, Number(entry.amount || 0)), 0)
               : 0
+            const billGrandTotal = Math.max(0, Number(bill.totalAmount || 0))
+            const percentageDisplayBase = billGrandTotal > 0 ? billGrandTotal : billItemAmount
 
             return bill.additionalCharges.map((charge) => {
               const chargeType = String(charge.chargeType || '')
               const storedAmount = Math.max(0, Number(charge.amount || 0))
               const displayAmount =
-                isPercentageChargeType(chargeType) && billItemAmount > 0
-                  ? (storedAmount * 100) / billItemAmount
+                isPercentageChargeType(chargeType) && percentageDisplayBase > 0
+                  ? (storedAmount * 100) / percentageDisplayBase
                   : storedAmount
 
               return {
@@ -820,7 +842,8 @@ export default function SalesEntryPage() {
             gstRate: Math.max(0, Number(item.gstRateSnapshot || mappedMaster?.gstRate || 0)),
             gstAmount: Math.max(0, Number(item.gstAmount || 0)),
             lineTotal: Math.max(0, Number(item.lineTotal || item.amount || 0)),
-            discount: 0
+            discount: 0,
+            manualWeightOverride: false
           }
         })
       : []
@@ -1004,7 +1027,7 @@ export default function SalesEntryPage() {
     // Mandi calculations: Weight in kg, then convert to Qt (100kg = 1Qt)
     const totalWeightKg = noOfBags * weightPerBag
     const autoTotalWeightQt = totalWeightKg / 100
-    const totalWeightQt = currentItem.totalWeightQt ? manualTotalWeightQt : autoTotalWeightQt
+    const totalWeightQt = manualWeightOverride || currentItem.totalWeightQt ? manualTotalWeightQt : autoTotalWeightQt
 
     if (currentItem.pricingMode === 'amount') {
       const effectiveRate = totalWeightQt > 0 ? enteredAmount / totalWeightQt : 0
@@ -1031,8 +1054,8 @@ export default function SalesEntryPage() {
       alert('No. of Bags is required')
       return
     }
-    if (!currentItem.weightPerBag) {
-      alert('Weight / Bag is required')
+    if (!currentItem.weightPerBag && !currentItem.totalWeightQt) {
+      alert('Enter Weight / Bag or Total Weight')
       return
     }
     
@@ -1073,7 +1096,8 @@ export default function SalesEntryPage() {
       gstRate: tax.gstRate,
       gstAmount: tax.gstAmount,
       lineTotal: tax.lineTotal,
-      discount: 0 // Default discount to 0
+      discount: 0, // Default discount to 0
+      manualWeightOverride: manualWeightOverride || Boolean(currentItem.totalWeightQt && !currentItem.weightPerBag)
     }
 
     if (!nextItem.productId) {
@@ -1109,12 +1133,14 @@ export default function SalesEntryPage() {
     const matchedSalesItem = salesItems.find((entry) => entry.id === item.salesItemId || entry.productId === item.productId)
     const computedWeightPerBag = item.bags > 0 ? (item.weight * 100) / item.bags : 0
     const nextPricingMode: ItemPricingMode = item.rate > 0 ? 'rate' : 'amount'
+    const hasManualOverride = Boolean(item.manualWeightOverride)
 
     setEditingItemId(item.id)
+    setManualWeightOverride(hasManualOverride)
     setCurrentItem({
       salesItemId: matchedSalesItem?.id || item.salesItemId || '',
       noOfBags: item.bags ? String(item.bags) : '',
-      weightPerBag: computedWeightPerBag > 0 ? computedWeightPerBag.toFixed(2) : '',
+      weightPerBag: hasManualOverride ? '' : computedWeightPerBag > 0 ? computedWeightPerBag.toFixed(2) : '',
       totalWeightQt: item.weight > 0 ? item.weight.toFixed(2) : '',
       markaNo: item.markaNo || '',
       rate: nextPricingMode === 'rate' ? String(item.rate || '') : '',
@@ -1576,8 +1602,8 @@ export default function SalesEntryPage() {
                       <div>
                         <Label htmlFor="transportName">Transport Name</Label>
                         <div className="space-y-2">
-                          <div className="flex gap-2">
-                            <div className="flex-1">
+                          <div className="flex flex-col gap-2">
+                            <div className="min-w-0">
                               <SearchableSelect
                                 id="transportName"
                                 value={selectedTransportId}
@@ -1588,29 +1614,31 @@ export default function SalesEntryPage() {
                                 emptyText="No transport found."
                               />
                             </div>
-                            {selectedTransportId ? (
+                            <div className="flex flex-wrap gap-2">
+                              {selectedTransportId ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setSelectedTransportId('')
+                                    setTransportName('')
+                                  }}
+                                >
+                                  Clear
+                                </Button>
+                              ) : null}
                               <Button
                                 type="button"
                                 variant="outline"
                                 size="sm"
-                                onClick={() => {
-                                  setSelectedTransportId('')
-                                  setTransportName('')
-                                }}
+                                onClick={handleAddNewTransport}
+                                className="flex items-center gap-1"
                               >
-                                Clear
+                                <Plus className="h-4 w-4" />
+                                Add New
                               </Button>
-                            ) : null}
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={handleAddNewTransport}
-                              className="flex items-center gap-1"
-                            >
-                              <Plus className="h-4 w-4" />
-                              Add New
-                            </Button>
+                            </div>
                           </div>
                           <p className="text-xs text-slate-500">
                             Transport master se select karne par name auto-fill hota hai. Lorry number aap yahan adjust kar sakte hain.
@@ -1698,7 +1726,7 @@ export default function SalesEntryPage() {
                           <p className="text-sm text-slate-500">Update the selected row and save it back into the bill.</p>
                         ) : null}
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-8 gap-4">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-8">
                         <div className="lg:col-span-2">
                           <Label htmlFor="itemProduct">Sales Items</Label>
                           <SearchableSelect
@@ -1739,8 +1767,14 @@ export default function SalesEntryPage() {
                             min="0"
                             step="0.01"
                             value={currentItem.weightPerBag}
-                            onChange={(e) => setCurrentItem({...currentItem, weightPerBag: toNonNegative(e.target.value)})}
-                            placeholder="Enter weight per bag"
+                            onChange={(e) => {
+                              const nextWeightPerBag = toNonNegative(e.target.value)
+                              setCurrentItem({...currentItem, weightPerBag: nextWeightPerBag})
+                              if (nextWeightPerBag) {
+                                setManualWeightOverride(false)
+                              }
+                            }}
+                            placeholder={manualWeightOverride ? 'NA (manual total weight)' : 'Enter weight per bag'}
                           />
                         </div>
                         <div>
@@ -1786,10 +1820,15 @@ export default function SalesEntryPage() {
                             min="0"
                             step="0.01"
                             value={displayedTotalWeightQt}
-                            onChange={(e) => setCurrentItem({
-                              ...currentItem,
-                              totalWeightQt: toNonNegative(e.target.value)
-                            })}
+                            onChange={(e) => {
+                              const nextTotalWeightQt = toNonNegative(e.target.value)
+                              setCurrentItem({
+                                ...currentItem,
+                                totalWeightQt: nextTotalWeightQt,
+                                weightPerBag: nextTotalWeightQt ? '' : currentItem.weightPerBag
+                              })
+                              setManualWeightOverride(Boolean(nextTotalWeightQt))
+                            }}
                             placeholder="Auto from bags & weight"
                           />
                           <p className="mt-1 text-xs text-slate-500">
@@ -1950,7 +1989,7 @@ export default function SalesEntryPage() {
                               />
                               {isPercentageChargeType(bucket.chargeType) ? (
                                 <p className="mt-1 text-xs text-slate-500">
-                                  Auto-calculated on item subtotal (₹{totalAmount.toFixed(2)}).
+                                  Auto-calculated on grand base (₹{percentageChargeBaseAmount.toFixed(2)}).
                                 </p>
                               ) : null}
                             </div>
@@ -2062,7 +2101,7 @@ export default function SalesEntryPage() {
                         </div>
                         <div className="flex items-center justify-between border-t border-slate-200 pt-2 font-semibold text-slate-900">
                           <span>Calculated total</span>
-                          <span>₹{computedGrandTotalWithMandi.toFixed(2)}</span>
+                          <span>₹{computedGrandTotal.toFixed(2)}</span>
                         </div>
                       </div>
                       {mandiChargePreview.lines.length > 0 ? (
@@ -2094,7 +2133,7 @@ export default function SalesEntryPage() {
                           setManualGrandTotal(nextValue)
                           setManualGrandTotalTouched(nextValue !== '')
                         }}
-                        placeholder={computedGrandTotalWithMandi.toFixed(2)}
+                        placeholder={computedGrandTotal.toFixed(2)}
                         className="mt-2"
                       />
                       <p className="mt-2 text-xs text-slate-500">

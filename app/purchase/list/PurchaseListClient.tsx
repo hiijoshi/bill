@@ -121,33 +121,6 @@ interface RawRegularPurchaseBill {
   purchaseItems?: RawPurchaseItem[]
 }
 
-interface RawRegularPurchaseReportBill {
-  id?: unknown
-  billNo?: unknown
-  billDate?: unknown
-  totalAmount?: unknown
-  paidAmount?: unknown
-  balanceAmount?: unknown
-  status?: unknown
-  farmerNameSnapshot?: unknown
-  farmerAddressSnapshot?: unknown
-  farmerContactSnapshot?: unknown
-  krashakAnubandhSnapshot?: unknown
-  farmer?: {
-    name?: unknown
-    address?: unknown
-    phone1?: unknown
-    krashakAnubandhNumber?: unknown
-    ifscCode?: unknown
-    accountNo?: unknown
-  } | null
-  purchaseItems?: Array<{
-    qty?: unknown
-    rate?: unknown
-    hammali?: unknown
-  }>
-}
-
 interface RawSpecialPurchaseBill {
   id?: unknown
   supplierInvoiceNo?: unknown
@@ -233,15 +206,6 @@ function getRegularFarmerAddress(bill: RegularPurchaseBill): string {
 
 function getRegularAnubandh(bill: RegularPurchaseBill): string {
   return String(bill.krashakAnubandhSnapshot || bill.farmer?.krashakAnubandhNumber || '')
-}
-
-function formatMandiDate(value: string): string {
-  const date = new Date(value)
-  if (!Number.isFinite(date.getTime())) return ''
-  const day = date.getDate()
-  const month = date.getMonth() + 1
-  const year = String(date.getFullYear()).slice(-2)
-  return `${day}/${month}/${year}`
 }
 
 function getBillMarka(bill: PurchaseBill): string {
@@ -865,105 +829,6 @@ export default function PurchaseListClient({
     downloadTextFile(`purchase-list-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv;charset=utf-8;')
   }
 
-  const exportToMandiCsv = async () => {
-    if (!companyId) {
-      alert('Company not selected')
-      return
-    }
-
-    try {
-      const response = await fetch(
-        `/api/purchase-bills?companyId=${encodeURIComponent(companyId)}&includeCancelled=true&view=report`
-      )
-
-      if (response.status === 401) {
-        router.push('/login')
-        return
-      }
-
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { error?: string }
-        alert(payload.error || 'Failed to prepare mandi CSV.')
-        return
-      }
-
-      const reportRows = (await response.json().catch(() => [])) as RawRegularPurchaseReportBill[]
-      const rows = Array.isArray(reportRows) ? reportRows : []
-
-      const header = [
-        'Seller_Name',
-        'Seller_Address',
-        'SellerMob',
-        'Anubandh_No',
-        'Anubandh_Date',
-        'Bhugtan_No',
-        'Bhugtan_Date',
-        'Auction_Rate',
-        'Actual_Weight',
-        'Total_Hammali_Toul',
-        'Farmer_Payment',
-        'Payment_Mode',
-        'CashAmount',
-        'Cash_Payment_Date',
-        'Online_Pay_Amount',
-        'Online_Payment_Date',
-        'IFSC_Code',
-        'Farmer_BankAccount',
-        'UTR',
-        'ASFlag'
-      ]
-
-      const dataRows = rows.map((bill) => {
-        const billDate = String(bill?.billDate || '')
-        const totalAmount = clampNonNegative(Number(bill?.totalAmount || 0))
-        const paidAmount = clampNonNegative(Number(bill?.paidAmount || 0))
-        const status = String(bill?.status || '').trim().toLowerCase()
-        const lineItems = Array.isArray(bill?.purchaseItems) ? bill.purchaseItems : []
-        const totalWeight = lineItems.reduce((sum, item) => sum + clampNonNegative(Number(item?.qty || 0)), 0)
-        const totalHammali = lineItems.reduce((sum, item) => sum + clampNonNegative(Number(item?.hammali || 0)), 0)
-        const weightedRateBase = lineItems.reduce((sum, item) => sum + clampNonNegative(Number(item?.qty || 0)), 0)
-        const weightedRateTotal = lineItems.reduce(
-          (sum, item) =>
-            sum + clampNonNegative(Number(item?.qty || 0)) * clampNonNegative(Number(item?.rate || 0)),
-          0
-        )
-        const weightedRate = weightedRateBase > 0 ? weightedRateTotal / weightedRateBase : 0
-        const paymentMode = paidAmount > 0 ? 'C' : ''
-        const cashPaymentDate = paidAmount > 0 ? formatMandiDate(billDate) : ''
-        const asFlag = status === 'cancelled' ? 'C' : 'A'
-
-        return [
-          String(bill?.farmerNameSnapshot || bill?.farmer?.name || ''),
-          String(bill?.farmerAddressSnapshot || bill?.farmer?.address || ''),
-          String(bill?.farmerContactSnapshot || bill?.farmer?.phone1 || ''),
-          String(bill?.krashakAnubandhSnapshot || bill?.farmer?.krashakAnubandhNumber || ''),
-          formatMandiDate(billDate),
-          String(bill?.billNo || ''),
-          formatMandiDate(billDate),
-          weightedRate > 0 ? weightedRate.toFixed(2) : '0',
-          totalWeight > 0 ? totalWeight.toFixed(3) : '0',
-          totalHammali > 0 ? totalHammali.toFixed(2) : '0',
-          totalAmount > 0 ? totalAmount.toFixed(2) : '0',
-          paymentMode,
-          paidAmount > 0 ? paidAmount.toFixed(2) : '0',
-          cashPaymentDate,
-          '0',
-          '',
-          String(bill?.farmer?.ifscCode || ''),
-          String(bill?.farmer?.accountNo || ''),
-          '',
-          asFlag
-        ]
-      })
-
-      const csv = [header, ...dataRows].map((row) => row.map(csvEscape).join(',')).join('\n')
-      downloadTextFile(`purchase-mandi-format-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv;charset=utf-8;')
-    } catch (error) {
-      console.error('Error preparing mandi csv:', error)
-      alert(error instanceof Error ? error.message : 'Failed to prepare mandi CSV')
-    }
-  }
-
   const exportToPdf = () => {
     if (visibleBills.length === 0) {
       alert('No purchase bills to export')
@@ -1184,10 +1049,6 @@ export default function PurchaseListClient({
               <Button variant="outline" onClick={exportToExcel}>
                 <Download className="w-4 h-4 mr-2" />
                 Excel
-              </Button>
-              <Button variant="outline" onClick={() => void exportToMandiCsv()}>
-                <Download className="w-4 h-4 mr-2" />
-                Mandi CSV
               </Button>
               <Button variant="outline" onClick={exportToPdf}>
                 <FileText className="w-4 h-4 mr-2" />

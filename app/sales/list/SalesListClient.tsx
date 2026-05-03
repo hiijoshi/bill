@@ -289,8 +289,7 @@ function getBillAverageRate(bill: SalesBill): number {
   if (totalWeight <= 0) {
     return bill.salesItems.length > 0 ? Number(bill.salesItems[0].rate || 0) : 0
   }
-  const weighted = bill.salesItems.reduce((sum, item) => sum + Number(item.amount || 0), 0)
-  return weighted / totalWeight
+  return Number(bill.totalAmount || 0) / totalWeight
 }
 
 function isZeroRateBill(bill: SalesBill): boolean {

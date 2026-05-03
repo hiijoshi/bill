@@ -1248,6 +1248,76 @@ export default function ReportDashboard({
     URL.revokeObjectURL(url)
   }
 
+  const downloadPurchaseMandiCsv = () => {
+    if (reportType !== 'purchase') return
+
+    if (filteredRows.length === 0) {
+      setErrorMessage('No rows available to export. Generate report first.')
+      return
+    }
+
+    const header = [
+      'Seller_Name',
+      'Seller_Address',
+      'SellerMob',
+      'Anubandh_No',
+      'Anubandh_Date',
+      'Bhugtan_No',
+      'Bhugtan_Date',
+      'Auction_Rate',
+      'Actual_Weight',
+      'Total_Hammali_Toul',
+      'Farmer_Payment',
+      'Payment_Mode',
+      'CashAmount',
+      'Cash_Payment_Date',
+      'Online_Pay_Amount',
+      'Online_Payment_Date',
+      'IFSC_Code',
+      'Farmer_BankAccount',
+      'UTR',
+      'ASFlag'
+    ]
+
+    const rows = filteredRows.map((row) => [
+      String(row.Seller_Name || ''),
+      String(row.Seller_Address || ''),
+      String(row.SellerMob || ''),
+      String(row.Anubandh_No || ''),
+      String(row.Anubandh_Date || ''),
+      String(row.Bhugtan_No || ''),
+      String(row.Bhugtan_Date || ''),
+      Number(row.Auction_Rate || 0).toFixed(2),
+      Number(row.Actual_Weight || 0).toFixed(3),
+      Number(row.Total_Hammali_Toul || 0).toFixed(2),
+      Number(row.Farmer_Payment || 0).toFixed(2),
+      String(row.Payment_Mode || ''),
+      Number(row.CashAmount || 0).toFixed(2),
+      String(row.Cash_Payment_Date || ''),
+      Number(row.Online_Pay_Amount || 0).toFixed(2),
+      String(row.Online_Payment_Date || ''),
+      String(row.IFSC_Code || ''),
+      String(row.Farmer_BankAccount || ''),
+      String(row.UTR || ''),
+      String(row.ASFlag || '')
+    ])
+
+    const csv = [header, ...rows].map((row) => row.map(csvEscape).join(',')).join('\n')
+    const stamp = new Date().toISOString().slice(0, 10)
+    const scopeLabel = selectedCompanyId || 'company'
+    const fileName = `purchase-mandi-format-${scopeLabel}-${stamp}.csv`
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
   const downloadPdf = () => {
     if (filteredRows.length === 0) {
       setErrorMessage('No rows available to export. Generate report first.')
@@ -1430,6 +1500,17 @@ export default function ReportDashboard({
               <Download className="mr-2 h-4 w-4" />
               CSV
             </Button>
+            {reportType === 'purchase' ? (
+              <Button
+                variant="outline"
+                onClick={downloadPurchaseMandiCsv}
+                disabled={filteredRows.length === 0 || loading}
+                className="rounded-2xl border-slate-200 bg-white hover:bg-slate-50"
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Mandi CSV
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               onClick={downloadPdf}
