@@ -87,7 +87,7 @@ export interface AuthUser {
 export interface LoginCredentials {
   userId: string
   password: string
-  // Optional explicit trader scope.
+  // Kept as traderId for API compatibility; interpreted as trader name for authentication scope.
   traderId?: string
 }
 
@@ -217,49 +217,39 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       }
     } as const
 
-    // Authentication scope must be strict Trader ID, not trader name.
-    const resolvedTraderId = traderIdInput
-
-    let exactTraderCandidate = null
-    if (resolvedTraderId) {
-      exactTraderCandidate = await prisma.user.findFirst({
+    let scopedTraderIds: string[] | null = null
+    if (traderIdInput) {
+      const matchedTraders = await prisma.trader.findMany({
         where: {
-          userId: normalizedUserId,
-          traderId: resolvedTraderId,
-          deletedAt: null
+          deletedAt: null,
+          name: traderIdInput
         },
-        select: candidateSelect
+        select: { id: true }
       })
-
-      if (!exactTraderCandidate && resolvedTraderId !== resolvedTraderId.toLowerCase()) {
-        exactTraderCandidate = await prisma.user.findFirst({
-          where: {
-            userId: normalizedUserId,
-            traderId: resolvedTraderId.toLowerCase(),
-            deletedAt: null
-          },
-          select: candidateSelect
-        })
+      scopedTraderIds = Array.from(new Set(matchedTraders.map((entry) => String(entry.id || '').trim()).filter(Boolean)))
+      if (scopedTraderIds.length === 0) {
+        return {
+          success: false,
+          error: 'Invalid credentials'
+        }
       }
     }
 
-    if (traderIdInput && !exactTraderCandidate) {
+    const candidates = await prisma.user.findMany({
+      where: {
+        userId: normalizedUserId,
+        deletedAt: null,
+        ...(scopedTraderIds ? { traderId: { in: scopedTraderIds } } : {})
+      },
+      select: candidateSelect
+    })
+
+    if (traderIdInput && candidates.length === 0) {
       return {
         success: false,
         error: 'Invalid credentials'
       }
     }
-
-    const candidates = exactTraderCandidate
-      ? [exactTraderCandidate]
-      : await prisma.user.findMany({
-          where: {
-            userId: normalizedUserId,
-            deletedAt: null
-          },
-          select: candidateSelect
-        })
-
     if (candidates.length === 0) {
       return {
         success: false,
@@ -299,7 +289,7 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
     if (passwordMatched.length > 1) {
       return {
         success: false,
-        error: 'Multiple accounts found. Please enter exact Trader ID.'
+        error: 'Multiple accounts found. Please enter exact Trader Name.'
       }
     }
 

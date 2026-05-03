@@ -726,7 +726,7 @@ test('Login enforces provided trader scope and blocks soft-deleted users', async
 
   try {
     const withWrongTrader = await authenticateUser({
-      traderId: traderA.id,
+      traderId: traderA.name,
       userId: sharedUserId,
       password
     })
@@ -734,7 +734,7 @@ test('Login enforces provided trader scope and blocks soft-deleted users', async
     assert.equal(withWrongTrader.error, 'Invalid credentials')
 
     const withCorrectTrader = await authenticateUser({
-      traderId: traderB.id,
+      traderId: traderB.name,
       userId: sharedUserId,
       password
     })
@@ -747,7 +747,7 @@ test('Login enforces provided trader scope and blocks soft-deleted users', async
   }
 })
 
-test('Login accepts trader scope only by trader ID (not trader name alias)', async () => {
+test('Login accepts trader scope by trader name only (ID is rejected)', async () => {
   const suffix = Date.now().toString()
   const password = 'StrictTraderId#123'
   const hashedPassword = await bcrypt.hash(password, 12)
@@ -783,16 +783,16 @@ test('Login accepts trader scope only by trader ID (not trader name alias)', asy
       userId,
       password
     })
-    assert.equal(withLegacyName.success, false)
-    assert.equal(withLegacyName.error, 'Invalid credentials')
+    assert.equal(withLegacyName.success, true)
+    assert.equal(withLegacyName.user?.traderId, traderId)
 
     const withCurrentTraderId = await authenticateUser({
       traderId,
       userId,
       password
     })
-    assert.equal(withCurrentTraderId.success, true)
-    assert.equal(withCurrentTraderId.user?.traderId, traderId)
+    assert.equal(withCurrentTraderId.success, false)
+    assert.equal(withCurrentTraderId.error, 'Invalid credentials')
   } finally {
     await prisma.user.deleteMany({ where: { id: user.id } })
     await prisma.company.deleteMany({ where: { id: company.id } })
