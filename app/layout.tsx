@@ -7,7 +7,7 @@ const appSans = Manrope({
   subsets: ['latin'],
   variable: '--font-app-sans',
   display: 'swap',
-  preload: false
+  preload: true
 })
 
 const appMono = IBM_Plex_Mono({

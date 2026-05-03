@@ -1278,11 +1278,37 @@ export default function MainDashboardClient({
       '/purchase/entry',
       '/sales/entry',
       '/payment/dashboard',
-      '/stock/adjustment',
-      '/reports/main'
+      '/stock/adjustment'
     ]
 
-    routes.forEach((route) => router.prefetch(route))
+    const connection = typeof navigator !== 'undefined' ? (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection : undefined
+    if (connection?.saveData) return
+    if (connection?.effectiveType && (connection.effectiveType === 'slow-2g' || connection.effectiveType === '2g')) return
+
+    let cancelled = false
+    const scheduleIdle = (cb: () => void): number => {
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        return window.requestIdleCallback(() => cb(), { timeout: 2500 }) as unknown as number
+      }
+      return globalThis.setTimeout(cb, 800) as unknown as number
+    }
+    const cancelIdle = (handle: number) => {
+      if (typeof window !== 'undefined' && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(handle)
+        return
+      }
+      globalThis.clearTimeout(handle)
+    }
+
+    const idleHandle = scheduleIdle(() => {
+      if (cancelled) return
+      routes.forEach((route) => router.prefetch(route))
+    })
+
+    return () => {
+      cancelled = true
+      cancelIdle(idleHandle)
+    }
   }, [hasDashboardAccess, primaryCompanyId, router])
 
   if (!dashboardAccessResolved) {
@@ -1870,7 +1896,10 @@ export default function MainDashboardClient({
             </div>
           </div>
 
-          <Card className="overflow-hidden rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]">
+          <Card
+            className="overflow-hidden rounded-[1.75rem] border border-black/5 bg-white shadow-[0_24px_60px_-40px_rgba(15,23,42,0.18)]"
+            style={{ contentVisibility: 'auto', containIntrinsicSize: '720px' }}
+          >
             <CardHeader className="border-b border-slate-100 pb-5">
               <CardTitle className="text-2xl tracking-tight text-slate-950">Recent Activity</CardTitle>
               <p className="text-sm text-slate-500">Latest purchase and sales moves across your active companies.</p>
@@ -1913,7 +1942,10 @@ export default function MainDashboardClient({
             </CardContent>
           </Card>
 
-          <section className="space-y-5">
+          <section
+            className="space-y-5"
+            style={{ contentVisibility: 'auto', containIntrinsicSize: '1100px' }}
+          >
             <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Operational Modules</p>
