@@ -217,20 +217,8 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       }
     } as const
 
-    // Check if traderId input is actually a trader name (like H00001)
-    let resolvedTraderId = traderIdInput
-    if (traderIdInput) {
-      const traderByName = await prisma.trader.findFirst({
-        where: {
-          name: traderIdInput,
-          deletedAt: null
-        },
-        select: { id: true }
-      })
-      if (traderByName) {
-        resolvedTraderId = traderByName.id
-      }
-    }
+    // Authentication scope must be strict Trader ID, not trader name.
+    const resolvedTraderId = traderIdInput
 
     let exactTraderCandidate = null
     if (resolvedTraderId) {

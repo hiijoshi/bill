@@ -63,3 +63,5 @@ prisma/prisma/dev.db
 prisma/prisma/dev.db-journal
 var/*.db
 var/*.db-journal
+var/bank-statements/
+var/uploads/

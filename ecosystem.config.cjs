@@ -1,13 +1,13 @@
 const runtimeDir = process.env.MBILL_RUNTIME_DIR || '/opt/bill/current'
-const serverScript = process.env.MBILL_SERVER_SCRIPT || 'server.js'
 
 module.exports = {
   apps: [
     {
       name: 'mbill',
       cwd: runtimeDir,
-      script: serverScript,
-      interpreter: 'node',
+      script: 'npm',
+      args: 'run start:prod',
+      interpreter: 'none',
       exec_mode: 'fork',
       instances: 1,
       autorestart: true,
@@ -21,9 +21,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: 3000,
-        HOSTNAME: '0.0.0.0',
-        MBILL_RUNTIME_DIR: runtimeDir,
-        MBILL_SERVER_SCRIPT: serverScript
+        HOSTNAME: '0.0.0.0'
       }
     }
   ]

@@ -10,7 +10,6 @@
     "copy:pdf-worker": "node scripts/copy-pdf-worker.mjs",
     "prebuild": "npm run copy:pdf-worker && prisma generate",
     "build": "node scripts/build.mjs",
-    "build:standalone": "bash scripts/build-standalone-package.sh",
     "build:analyze": "ANALYZE=true npm run build",
     "postinstall": "prisma generate",
     "start": "next start",

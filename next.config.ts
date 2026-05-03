@@ -35,7 +35,6 @@ if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
 }
 
 const nextConfig: NextConfig = {
-  output: 'standalone',
   allowedDevOrigins: DEFAULT_LOCAL_ALLOWED_HOSTS,
   serverExternalPackages: ['@napi-rs/canvas', 'pdf-parse', 'pdfjs-dist'],
   outputFileTracingIncludes: {
