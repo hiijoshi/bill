@@ -6,14 +6,16 @@ import AppShell from '@/app/AppShell'
 const appSans = Manrope({
   subsets: ['latin'],
   variable: '--font-app-sans',
-  display: 'swap'
+  display: 'swap',
+  preload: false
 })
 
 const appMono = IBM_Plex_Mono({
   subsets: ['latin'],
   weight: ['400', '500'],
   variable: '--font-app-mono',
-  display: 'swap'
+  display: 'swap',
+  preload: false
 })
 
 export const metadata: Metadata = {
