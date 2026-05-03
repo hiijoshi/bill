@@ -19,6 +19,19 @@ export type PlatformProfile = {
   isPhone: boolean
 }
 
+const SSR_SAFE_PROFILE: PlatformProfile = {
+  runtimePlatform: "web",
+  viewport: "desktop",
+  density: "compact",
+  prefersReducedMotion: false,
+  isTouchPrimary: false,
+  isApple: false,
+  isAndroid: false,
+  isDesktop: true,
+  isTablet: false,
+  isPhone: false,
+}
+
 function detectRuntimePlatform(userAgent: string): RuntimePlatform {
   const normalized = userAgent.toLowerCase()
 
@@ -46,18 +59,7 @@ function getDensityMode(width: number, pointerIsCoarse: boolean): DensityMode {
 
 function readPlatformProfile(): PlatformProfile {
   if (typeof window === "undefined") {
-    return {
-      runtimePlatform: "web",
-      viewport: "desktop",
-      density: "compact",
-      prefersReducedMotion: false,
-      isTouchPrimary: false,
-      isApple: false,
-      isAndroid: false,
-      isDesktop: true,
-      isTablet: false,
-      isPhone: false,
-    }
+    return SSR_SAFE_PROFILE
   }
 
   const userAgent = window.navigator.userAgent || ""
@@ -83,7 +85,7 @@ function readPlatformProfile(): PlatformProfile {
 }
 
 export function usePlatformProfile(): PlatformProfile {
-  const [profile, setProfile] = useState<PlatformProfile>(() => readPlatformProfile())
+  const [profile, setProfile] = useState<PlatformProfile>(SSR_SAFE_PROFILE)
 
   useEffect(() => {
     const sync = () => {
