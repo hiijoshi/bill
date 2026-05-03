@@ -291,7 +291,7 @@ function SalesViewPageContent() {
         if (cancelled || isAbortError(error)) return
         console.error('Error fetching sales bill:', error)
         setLoading(false)
-        alert('Error loading sales bill')
+        alert(error instanceof Error ? error.message : 'Error loading sales bill')
         router.back()
       }
     }

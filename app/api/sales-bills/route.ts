@@ -35,6 +35,8 @@ import {
   SALES_BILL_WORKFLOW_STATUS,
 } from '@/lib/sales-split'
 import { buildSalesBillSplitSummary } from '@/lib/sales-split-service'
+import { ensureSalesItemSchema } from '@/lib/sales-item-schema'
+import { isPrismaSchemaMismatchError } from '@/lib/prisma-schema-guard'
 
 const salesItemSchema = z.object({
   productId: z.string().min(1),
@@ -408,6 +410,7 @@ function normalizeTransportBillData(input?: z.infer<typeof transportBillSchema>)
 
 export async function POST(request: NextRequest) {
   try {
+    await ensureSalesItemSchema(prisma)
     const parsed = await parseJsonWithSchema(request, salesCreateSchema)
     if (!parsed.ok) return parsed.response
 
@@ -606,6 +609,12 @@ export async function POST(request: NextRequest) {
     if (error instanceof FinancialYearValidationError) {
       return NextResponse.json({ error: error.message }, { status: error.statusCode })
     }
+    if (isPrismaSchemaMismatchError(error)) {
+      return NextResponse.json(
+        { error: 'Database schema mismatch. Run: npm run prisma:migrate:deploy && npx prisma generate' },
+        { status: 503 }
+      )
+    }
     const message = error instanceof Error ? error.message : 'Internal server error'
     const status = message.includes('not found') || message.includes('required') ? 400 : 500
     return NextResponse.json({ error: message }, { status })
@@ -614,6 +623,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
+    await ensureSalesItemSchema(prisma)
     const { searchParams } = new URL(request.url)
     const requestedCompanyId = normalizeId(searchParams.get('companyId'))
     const billId = normalizeId(searchParams.get('billId'))
@@ -998,12 +1008,19 @@ export async function GET(request: NextRequest) {
     if (error instanceof FinancialYearValidationError) {
       return NextResponse.json({ error: error.message }, { status: error.statusCode })
     }
+    if (isPrismaSchemaMismatchError(error)) {
+      return NextResponse.json(
+        { error: 'Database schema mismatch. Run: npm run prisma:migrate:deploy && npx prisma generate' },
+        { status: 503 }
+      )
+    }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
 export async function PUT(request: NextRequest) {
   try {
+    await ensureSalesItemSchema(prisma)
     const parsed = await parseJsonWithSchema(request, salesUpdateSchema)
     if (!parsed.ok) return parsed.response
 
@@ -1280,6 +1297,12 @@ export async function PUT(request: NextRequest) {
   } catch (error) {
     if (error instanceof FinancialYearValidationError) {
       return NextResponse.json({ error: error.message }, { status: error.statusCode })
+    }
+    if (isPrismaSchemaMismatchError(error)) {
+      return NextResponse.json(
+        { error: 'Database schema mismatch. Run: npm run prisma:migrate:deploy && npx prisma generate' },
+        { status: 503 }
+      )
     }
     const message = error instanceof Error ? error.message : 'Internal server error'
     const status = message.includes('not found') || message.includes('required') ? 400 : 500

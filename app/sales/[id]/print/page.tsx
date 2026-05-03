@@ -4,6 +4,8 @@ import { normalizeAppRole } from '@/lib/api-security'
 import { mapSalesBillToPrintData } from '@/lib/sales-print'
 import { listSalesAdditionalChargesByBillIds } from '@/lib/sales-additional-charge-store'
 import { getSession } from '@/lib/session'
+import { ensureSalesItemSchema } from '@/lib/sales-item-schema'
+import { isPrismaSchemaMismatchError } from '@/lib/prisma-schema-guard'
 import SalesPrintClient from './SalesPrintClient'
 
 type PageProps = {
@@ -56,6 +58,7 @@ async function canViewSalesBill(user: {
 
 export default async function SalesPrintPage({ params }: PageProps) {
   try {
+    await ensureSalesItemSchema(prisma)
     const { id } = await params
 
     const payload = await getSession()
@@ -191,6 +194,13 @@ export default async function SalesPrintPage({ params }: PageProps) {
     )
   } catch (error) {
     console.error('Sales print render failed:', error)
+    if (isPrismaSchemaMismatchError(error)) {
+      return (
+        <div className="p-6 text-red-600">
+          Database schema mismatch. Run: npm run prisma:migrate:deploy && npx prisma generate
+        </div>
+      )
+    }
     return <div className="p-6 text-red-600">Unable to render sales print right now</div>
   }
 }

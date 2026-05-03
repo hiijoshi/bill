@@ -1017,6 +1017,7 @@ export default function SalesEntryPage() {
       }
       console.error('Error fetching data:', error)
       setLoading(false)
+      alert(error instanceof Error ? error.message : 'Failed to load sales bill')
     }
   }, [populateFromExistingBill, router])
 
