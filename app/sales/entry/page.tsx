@@ -873,7 +873,7 @@ export default function SalesEntryPage() {
 
           const markasRes = await fetch(`/api/markas?companyId=${resolvedCompanyId}`)
 
-          if ([partiesRes, transportsRes, salesItemsRes, accountingHeadsRes, markasRes].some((res) => res.status === 401 || res.status === 403)) {
+          if ([partiesRes, transportsRes, salesItemsRes, accountingHeadsRes, markasRes, detailRes].some((res) => res.status === 401 || res.status === 403)) {
             const authError = new Error('Session expired') as Error & { status?: number }
             authError.status = 401
             throw authError
@@ -901,6 +901,10 @@ export default function SalesEntryPage() {
             : []
 
           if (billIdFromQuery) {
+            if (!detailRes.ok && detailRes.status !== 404) {
+              const detailPayload = await detailRes.json().catch(() => ({})) as { error?: string }
+              throw new Error(detailPayload.error || 'Failed to load sales bill')
+            }
             const existingBill = detailRes.ok
               ? await parseApiJson<ExistingSalesBill | null>(detailRes, null, 'Sales bill by id API')
               : null

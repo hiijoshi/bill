@@ -3,7 +3,14 @@ import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { validateStockBeforeSale } from '@/lib/stock-automation'
 import { z } from 'zod'
-import { ensureCompanyAccess, normalizeId, parseBooleanParam, parseJsonWithSchema, requireAuthContext } from '@/lib/api-security'
+import {
+  ensureCompanyAccess,
+  getScopedCompanyIds,
+  normalizeId,
+  parseBooleanParam,
+  parseJsonWithSchema,
+  requireAuthContext
+} from '@/lib/api-security'
 import { buildPaginationMeta, parsePaginationParams } from '@/lib/pagination'
 import { calculateTaxBreakdown, calculateTotalsBreakdown, normalizeNonNegative } from '@/lib/billing-calculations'
 import { getPartyCreditSnapshot } from '@/lib/party-credit'
@@ -608,12 +615,32 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const companyId = normalizeId(searchParams.get('companyId'))
+    const requestedCompanyId = normalizeId(searchParams.get('companyId'))
     const billId = normalizeId(searchParams.get('billId'))
     const last = searchParams.get('last')
     const includeCancelled = parseBooleanParam(searchParams.get('includeCancelled'))
     const view = normalizeSalesBillListView(searchParams.get('view'))
     const splitView = normalizeSalesBillSplitView(searchParams.get('splitView'))
+    let companyId = requestedCompanyId
+
+    if (!companyId && billId) {
+      const authResult = requireAuthContext(request)
+      if (!authResult.ok) return authResult.response
+
+      const scopedCompanyIds = await getScopedCompanyIds(authResult.auth).catch(() => [])
+      if (scopedCompanyIds.length > 0) {
+        const matchedBill = await prisma.salesBill.findFirst({
+          where: {
+            companyId: { in: scopedCompanyIds },
+            OR: [{ id: billId }, { billNo: billId }]
+          },
+          select: {
+            companyId: true
+          }
+        })
+        companyId = normalizeId(matchedBill?.companyId)
+      }
+    }
 
     if (!companyId) {
       return NextResponse.json({ error: 'Company ID is required' }, { status: 400 })
@@ -642,7 +669,7 @@ export async function GET(request: NextRequest) {
     if (billId) {
       const bill = await prisma.salesBill.findFirst({
         where: {
-          id: billId,
+          OR: [{ id: billId }, { billNo: billId }],
           companyId,
           ...(includeCancelled ? {} : { status: { not: 'cancelled' } })
         },

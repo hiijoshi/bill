@@ -14,6 +14,7 @@ import { summarizeSalesAdditionalCharges } from '@/lib/sales-additional-charges'
 
 interface SalesBill {
   id: string
+  companyId: string
   billNo: string
   billDate: string
   party: {
@@ -105,6 +106,7 @@ interface RawTransportBill {
 
 interface RawSalesBill {
   id?: unknown
+  companyId?: unknown
   billNo?: unknown
   billDate?: unknown
   party?: {
@@ -167,6 +169,7 @@ function normalizeSalesBill(raw: RawSalesBill): SalesBill {
 
   return {
     id: String(raw?.id || ''),
+    companyId: String(raw?.companyId || ''),
     billNo: String(raw?.billNo || ''),
     billDate: String(raw?.billDate || ''),
     party: {
@@ -270,7 +273,8 @@ function SalesViewPageContent() {
         const response = await fetch(`/api/sales-bills?companyId=${targetCompanyId}&billId=${billId}&includeCancelled=true`)
         if (cancelled) return
         if (!response.ok) {
-          throw new Error('Sales bill not found')
+          const payload = (await response.json().catch(() => ({}))) as { error?: string }
+          throw new Error(payload.error || 'Sales bill not found')
         }
         const billData = (await response.json()) as RawSalesBill
         if (cancelled) return
@@ -305,8 +309,9 @@ function SalesViewPageContent() {
 
   const handleEdit = () => {
     if (!billId) return
-    const editPath = companyId
-      ? `/sales/entry?billId=${billId}&companyId=${encodeURIComponent(companyId)}`
+    const effectiveCompanyId = companyId || salesBill?.companyId || ''
+    const editPath = effectiveCompanyId
+      ? `/sales/entry?billId=${billId}&companyId=${encodeURIComponent(effectiveCompanyId)}`
       : `/sales/entry?billId=${billId}`
     router.push(editPath)
   }
@@ -314,16 +319,18 @@ function SalesViewPageContent() {
   const handleManageSplit = () => {
     if (!salesBill) return
     const targetBillId = salesBill.splitSummary?.parentBillId || salesBill.parentSalesBill?.id || salesBill.id
-    const editPath = companyId
-      ? `/sales/entry?billId=${targetBillId}&companyId=${encodeURIComponent(companyId)}`
+    const effectiveCompanyId = companyId || salesBill.companyId || ''
+    const editPath = effectiveCompanyId
+      ? `/sales/entry?billId=${targetBillId}&companyId=${encodeURIComponent(effectiveCompanyId)}`
       : `/sales/entry?billId=${targetBillId}`
     router.push(editPath)
   }
 
   const handleOpenParent = () => {
     if (!salesBill?.splitSummary?.parentBillId) return
-    const viewPath = companyId
-      ? `/sales/view?billId=${salesBill.splitSummary.parentBillId}&companyId=${encodeURIComponent(companyId)}`
+    const effectiveCompanyId = companyId || salesBill.companyId || ''
+    const viewPath = effectiveCompanyId
+      ? `/sales/view?billId=${salesBill.splitSummary.parentBillId}&companyId=${encodeURIComponent(effectiveCompanyId)}`
       : `/sales/view?billId=${salesBill.splitSummary.parentBillId}`
     router.push(viewPath)
   }
@@ -364,16 +371,18 @@ function SalesViewPageContent() {
 
   const handlePrint = () => {
     if (!billId) return
-    const printPath = companyId
-      ? `/sales/${billId}/print?type=invoice&companyId=${encodeURIComponent(companyId)}`
+    const effectiveCompanyId = companyId || salesBill?.companyId || ''
+    const printPath = effectiveCompanyId
+      ? `/sales/${billId}/print?type=invoice&companyId=${encodeURIComponent(effectiveCompanyId)}`
       : `/sales/${billId}/print?type=invoice`
     router.push(printPath)
   }
 
   const handleExportPDF = () => {
     if (!billId) return
-    const printPath = companyId
-      ? `/sales/${billId}/print?type=invoice&autoprint=1&companyId=${encodeURIComponent(companyId)}`
+    const effectiveCompanyId = companyId || salesBill?.companyId || ''
+    const printPath = effectiveCompanyId
+      ? `/sales/${billId}/print?type=invoice&autoprint=1&companyId=${encodeURIComponent(effectiveCompanyId)}`
       : `/sales/${billId}/print?type=invoice&autoprint=1`
     window.open(printPath, '_blank', 'noopener,noreferrer')
   }

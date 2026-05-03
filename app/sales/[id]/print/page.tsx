@@ -55,137 +55,142 @@ async function canViewSalesBill(user: {
 }
 
 export default async function SalesPrintPage({ params }: PageProps) {
-  const { id } = await params
+  try {
+    const { id } = await params
 
-  const payload = await getSession()
-  if (!payload?.userId || !payload?.traderId) {
-    return <div className="p-6 text-red-600">Authentication required</div>
-  }
-
-  const user = await prisma.user.findFirst({
-    where: {
-      userId: payload.userId,
-      traderId: payload.traderId,
-      deletedAt: null
-    },
-    select: {
-      id: true,
-      traderId: true,
-      role: true,
-      companyId: true,
-      locked: true,
-      trader: {
-        select: {
-          id: true,
-          locked: true,
-          deletedAt: true
-        }
-      },
-      company: {
-        select: {
-          id: true,
-          locked: true,
-          deletedAt: true
-        }
-      }
+    const payload = await getSession()
+    if (!payload?.userId || !payload?.traderId) {
+      return <div className="p-6 text-red-600">Authentication required</div>
     }
-  })
 
-  if (!user) {
-    return <div className="p-6 text-red-600">Invalid session user</div>
-  }
-
-  if (user.locked || user.trader?.locked || user.trader?.deletedAt) {
-    return <div className="p-6 text-red-600">Account is locked or inactive</div>
-  }
-
-  const bill = await prisma.salesBill.findFirst({
-    where: {
-      id
-    },
-    include: {
-      parentSalesBill: {
-        select: {
-          id: true,
-          billNo: true
-        }
+    const user = await prisma.user.findFirst({
+      where: {
+        userId: payload.userId,
+        traderId: payload.traderId,
+        deletedAt: null
       },
-      childSalesBills: {
-        select: {
-          id: true,
-          billNo: true,
-          totalAmount: true,
-          status: true,
-          splitPartLabel: true,
-          splitSuffix: true
+      select: {
+        id: true,
+        traderId: true,
+        role: true,
+        companyId: true,
+        locked: true,
+        trader: {
+          select: {
+            id: true,
+            locked: true,
+            deletedAt: true
+          }
         },
-        orderBy: {
-          splitSequence: 'asc'
-        }
-      },
-      company: {
-        select: {
-          id: true,
-          name: true,
-          address: true,
-          phone: true,
-          mandiAccountNumber: true,
-          traderId: true,
-          banks: {
-            where: {
-              isActive: true
-            },
-            select: {
-              name: true,
-              branch: true,
-              ifscCode: true,
-              accountNumber: true
-            },
-            orderBy: [
-              { name: 'asc' },
-              { createdAt: 'asc' }
-            ],
-            take: 1
+        company: {
+          select: {
+            id: true,
+            locked: true,
+            deletedAt: true
           }
         }
-      },
-      party: true,
-      salesItems: {
-        include: {
-          product: true
-        }
-      },
-      transportBills: true
+      }
+    })
+
+    if (!user) {
+      return <div className="p-6 text-red-600">Invalid session user</div>
     }
-  })
 
-  if (!bill) {
-    return <div className="p-6 text-red-600">Sales bill not found</div>
+    if (user.locked || user.trader?.locked || user.trader?.deletedAt) {
+      return <div className="p-6 text-red-600">Account is locked or inactive</div>
+    }
+
+    const bill = await prisma.salesBill.findFirst({
+      where: {
+        OR: [{ id }, { billNo: id }]
+      },
+      include: {
+        parentSalesBill: {
+          select: {
+            id: true,
+            billNo: true
+          }
+        },
+        childSalesBills: {
+          select: {
+            id: true,
+            billNo: true,
+            totalAmount: true,
+            status: true,
+            splitPartLabel: true,
+            splitSuffix: true
+          },
+          orderBy: {
+            splitSequence: 'asc'
+          }
+        },
+        company: {
+          select: {
+            id: true,
+            name: true,
+            address: true,
+            phone: true,
+            mandiAccountNumber: true,
+            traderId: true,
+            banks: {
+              where: {
+                isActive: true
+              },
+              select: {
+                name: true,
+                branch: true,
+                ifscCode: true,
+                accountNumber: true
+              },
+              orderBy: [
+                { name: 'asc' },
+                { createdAt: 'asc' }
+              ],
+              take: 1
+            }
+          }
+        },
+        party: true,
+        salesItems: {
+          include: {
+            product: true
+          }
+        },
+        transportBills: true
+      }
+    })
+
+    if (!bill || !bill.company?.traderId) {
+      return <div className="p-6 text-red-600">Sales bill not found</div>
+    }
+
+    const allowed = await canViewSalesBill(
+      {
+        id: user.id,
+        traderId: user.traderId,
+        role: user.role,
+        companyId: user.companyId
+      },
+      bill.companyId,
+      bill.company.traderId
+    )
+
+    if (!allowed) {
+      return <div className="p-6 text-red-600">Insufficient privileges</div>
+    }
+
+    const additionalChargesMap = await listSalesAdditionalChargesByBillIds(prisma, [bill.id])
+    const printData = mapSalesBillToPrintData({
+      ...bill,
+      additionalCharges: additionalChargesMap.get(bill.id) || [],
+    })
+    return (
+      <Suspense fallback={<div className="p-6">Loading print preview...</div>}>
+        <SalesPrintClient printData={printData} />
+      </Suspense>
+    )
+  } catch (error) {
+    console.error('Sales print render failed:', error)
+    return <div className="p-6 text-red-600">Unable to render sales print right now</div>
   }
-
-  const allowed = await canViewSalesBill(
-    {
-      id: user.id,
-      traderId: user.traderId,
-      role: user.role,
-      companyId: user.companyId
-    },
-    bill.companyId,
-    bill.company.traderId
-  )
-
-  if (!allowed) {
-    return <div className="p-6 text-red-600">Insufficient privileges</div>
-  }
-
-  const additionalChargesMap = await listSalesAdditionalChargesByBillIds(prisma, [bill.id])
-  const printData = mapSalesBillToPrintData({
-    ...bill,
-    additionalCharges: additionalChargesMap.get(bill.id) || [],
-  })
-  return (
-    <Suspense fallback={<div className="p-6">Loading print preview...</div>}>
-      <SalesPrintClient printData={printData} />
-    </Suspense>
-  )
 }
