@@ -1418,30 +1418,30 @@ export default function MainDashboardClient({
     <DashboardLayout companyId={primaryCompanyId} headerActions={headerActions} initialData={initialLayoutData}>
       <div className="relative min-h-full bg-[#f5f5f7]">
         <RefreshOverlay refreshing={loading && hasDashboardData} label="Refreshing dashboard" subtle />
-        <div className="mx-auto max-w-7xl space-y-8 p-6 md:p-8">
-          <section className="grid gap-6 xl:grid-cols-[1.45fr_0.85fr]">
-            <div className="rounded-[2rem] border border-black/5 bg-white p-8 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.22)]">
+        <div className="mx-auto max-w-[1680px] space-y-8 p-5 md:p-6">
+          <section className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
+            <div className="rounded-[1.6rem] border border-black/5 bg-white p-6 shadow-[0_24px_60px_-40px_rgba(15,23,42,0.22)]">
               <p className="text-sm font-medium text-slate-500">Dashboard</p>
-              <h1 className="mt-3 text-4xl font-semibold tracking-tight text-slate-950 md:text-[3.2rem]">
+              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950 md:text-4xl">
                 Business Overview
               </h1>
-              <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600 md:text-lg">
+              <p className="mt-3 max-w-2xl text-base leading-7 text-slate-600">
                 A clear view of purchase, sales, stock and payments across the companies you manage.
               </p>
 
-              <div className="mt-6 flex flex-wrap gap-3">
-                <Badge className="rounded-full border border-slate-200 bg-slate-50 px-4 py-1.5 text-slate-700 hover:bg-slate-50">
+              <div className="mt-5 flex flex-wrap gap-2.5">
+                <Badge className="rounded-full border border-slate-200 bg-slate-50 px-3.5 py-1 text-slate-700 hover:bg-slate-50">
                   {selectedCompanyIds.length} {selectedCompanyIds.length === 1 ? 'company' : 'companies'}
                 </Badge>
-                <Badge className="rounded-full border border-slate-200 bg-slate-50 px-4 py-1.5 text-slate-700 hover:bg-slate-50">
+                <Badge className="rounded-full border border-slate-200 bg-slate-50 px-3.5 py-1 text-slate-700 hover:bg-slate-50">
                   Primary: {primaryCompanyName}
                 </Badge>
-                <Badge className="rounded-full border border-slate-200 bg-slate-50 px-4 py-1.5 text-slate-700 hover:bg-slate-50">
+                <Badge className="rounded-full border border-slate-200 bg-slate-50 px-3.5 py-1 text-slate-700 hover:bg-slate-50">
                   {fetchFailures.length === 0 ? 'All sources connected' : `${fetchFailures.length} source warnings`}
                 </Badge>
               </div>
 
-              <div className="mt-8 grid gap-3 sm:grid-cols-3">
+              <div className="mt-6 grid gap-3 sm:grid-cols-3">
                 {executiveIndicators.map((item) => (
                   <div key={item.label} className={`rounded-[1.35rem] border p-4 ${item.tone}`}>
                     <div className="flex items-center justify-between gap-3">
@@ -1450,16 +1450,16 @@ export default function MainDashboardClient({
                       </span>
                       <span className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">{item.label}</span>
                     </div>
-                    <p className="mt-6 text-3xl font-semibold tracking-tight text-slate-950">{item.value}</p>
+                    <p className="mt-5 text-2xl font-semibold tracking-tight text-slate-950">{item.value}</p>
                     <p className="mt-2 text-sm text-slate-500">{item.hint}</p>
                   </div>
                 ))}
               </div>
 
-              <div className="mt-8 flex flex-wrap gap-3">
+              <div className="mt-6 flex flex-wrap gap-3">
                 <Button
                   onClick={handleExportBackup}
-                  className="h-11 rounded-2xl bg-slate-950 px-5 text-sm font-medium text-white transition-colors hover:bg-slate-800"
+                  className="h-10 rounded-2xl bg-slate-950 px-5 text-sm font-medium text-white transition-colors hover:bg-slate-800"
                 >
                   <Download className="mr-2 h-4 w-4" />
                   Export Backup
@@ -1468,7 +1468,7 @@ export default function MainDashboardClient({
                   type="button"
                   variant="outline"
                   onClick={() => document.getElementById('notification-center')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                  className="h-11 rounded-2xl border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  className="h-10 rounded-2xl border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 hover:bg-slate-50"
                 >
                   <Bell className="mr-2 h-4 w-4" />
                   View Alerts
@@ -1476,18 +1476,18 @@ export default function MainDashboardClient({
               </div>
             </div>
 
-            <div className="rounded-[2rem] border border-slate-900 bg-[#101113] p-6 text-white shadow-[0_28px_80px_-44px_rgba(15,23,42,0.48)]">
+            <div className="rounded-[1.6rem] border border-slate-900 bg-[#101113] p-5 text-white shadow-[0_28px_80px_-44px_rgba(15,23,42,0.48)]">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Live Snapshot</p>
-                  <h2 className="mt-3 text-2xl font-semibold tracking-tight text-white">Today</h2>
+                  <h2 className="mt-2 text-xl font-semibold tracking-tight text-white">Today</h2>
                 </div>
                 <span className="rounded-full border border-white/10 px-3 py-1 text-xs font-medium text-slate-300">
                   Updated live
                 </span>
               </div>
 
-              <div className="mt-8 space-y-5">
+              <div className="mt-6 space-y-5">
                 <div className="border-b border-white/10 pb-4">
                   <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Top company</p>
                   <div className="mt-2 flex items-end justify-between gap-3">
