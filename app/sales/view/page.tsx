@@ -270,7 +270,14 @@ function SalesViewPageContent() {
 
     const fetchSalesBill = async (targetCompanyId: string) => {
       try {
-        const response = await fetch(`/api/sales-bills?companyId=${targetCompanyId}&billId=${billId}&includeCancelled=true`)
+        const params = new URLSearchParams({
+          billId: String(billId || ''),
+          includeCancelled: 'true'
+        })
+        if (targetCompanyId) {
+          params.set('companyId', targetCompanyId)
+        }
+        const response = await fetch(`/api/sales-bills?${params.toString()}`)
         if (cancelled) return
         if (!response.ok) {
           const payload = (await response.json().catch(() => ({}))) as { error?: string }
@@ -292,15 +299,17 @@ function SalesViewPageContent() {
     ;(async () => {
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
       if (cancelled) return
-      if (!billId || !resolvedCompanyId) {
+      if (!billId) {
         setLoading(false)
-        alert('Missing bill ID or company selection')
+        alert('Missing bill ID')
         router.back()
         return
       }
-      setCompanyId(resolvedCompanyId)
-      stripCompanyParamsFromUrl()
-      await fetchSalesBill(resolvedCompanyId)
+      setCompanyId(resolvedCompanyId || '')
+      if (resolvedCompanyId) {
+        stripCompanyParamsFromUrl()
+      }
+      await fetchSalesBill(resolvedCompanyId || '')
     })()
     return () => {
       cancelled = true
@@ -350,7 +359,7 @@ function SalesViewPageContent() {
           },
           body: JSON.stringify({
             billId,
-            companyId
+            companyId: companyId || salesBill?.companyId || undefined
           })
         })
 
@@ -545,8 +554,9 @@ function SalesViewPageContent() {
                               variant="outline"
                               className="mt-2"
                               onClick={() => {
-                                const childPath = companyId
-                                  ? `/sales/view?billId=${child.id}&companyId=${encodeURIComponent(companyId)}`
+                                const effectiveCompanyId = companyId || salesBill.companyId || ''
+                                const childPath = effectiveCompanyId
+                                  ? `/sales/view?billId=${child.id}&companyId=${encodeURIComponent(effectiveCompanyId)}`
                                   : `/sales/view?billId=${child.id}`
                                 router.push(childPath)
                               }}

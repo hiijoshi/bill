@@ -142,6 +142,7 @@ const createPermanentAdditionalChargeBuckets = (): SalesAdditionalChargeBucket[]
 
 interface ExistingSalesBill {
   id: string
+  companyId?: string
   billNo: string
   billDate: string
   subTotalAmount?: number
@@ -867,34 +868,51 @@ export default function SalesEntryPage() {
 
   const fetchData = useCallback(async (forceFresh = false) => {
     try {
+      const billIdFromQuery = new URLSearchParams(window.location.search).get('billId')?.trim() || ''
       const resolvedCompanyId = await resolveCompanyId(window.location.search)
+      let effectiveCompanyId = resolvedCompanyId?.trim() || ''
 
-      if (!resolvedCompanyId) {
+      if (!effectiveCompanyId && billIdFromQuery) {
+        const billLookupRes = await fetch(`/api/sales-bills?billId=${encodeURIComponent(billIdFromQuery)}&includeCancelled=true`)
+        if (billLookupRes.status === 401 || billLookupRes.status === 403) {
+          const authError = new Error('Session expired') as Error & { status?: number }
+          authError.status = 401
+          throw authError
+        }
+        if (billLookupRes.ok) {
+          const billLookup = await parseApiJson<ExistingSalesBill | null>(billLookupRes, null, 'Sales bill fallback lookup API')
+          effectiveCompanyId = String(billLookup?.companyId || '').trim()
+        } else if (billLookupRes.status !== 404) {
+          const payload = await billLookupRes.json().catch(() => ({})) as { error?: string }
+          throw new Error(payload.error || 'Failed to resolve bill company')
+        }
+      }
+
+      if (!effectiveCompanyId) {
         alert('Company not selected')
         router.push('/main/profile')
         return
       }
-      setCompanyId(resolvedCompanyId)
+      setCompanyId(effectiveCompanyId)
 
-      const billIdFromQuery = new URLSearchParams(window.location.search).get('billId')?.trim() || ''
       if (!billIdFromQuery) {
         stripCompanyParamsFromUrl()
       }
 
       const payload = await loadClientCachedValue<SalesEntryCachePayload>(
-        `sales-entry:${resolvedCompanyId}:${billIdFromQuery || 'new'}`,
+        `sales-entry:${effectiveCompanyId}:${billIdFromQuery || 'new'}`,
         async () => {
           const [partiesRes, transportsRes, salesItemsRes, accountingHeadsRes, detailRes] = await Promise.all([
-            fetch(`/api/parties?companyId=${resolvedCompanyId}`),
-            fetch(`/api/transports?companyId=${resolvedCompanyId}`),
-            fetch(`/api/sales-item-masters?companyId=${resolvedCompanyId}`),
-            fetch(`/api/accounting-heads?companyId=${resolvedCompanyId}`),
+            fetch(`/api/parties?companyId=${effectiveCompanyId}`),
+            fetch(`/api/transports?companyId=${effectiveCompanyId}`),
+            fetch(`/api/sales-item-masters?companyId=${effectiveCompanyId}`),
+            fetch(`/api/accounting-heads?companyId=${effectiveCompanyId}`),
             billIdFromQuery
-              ? fetch(`/api/sales-bills?companyId=${resolvedCompanyId}&billId=${billIdFromQuery}`)
-              : fetch(`/api/sales-bills?companyId=${resolvedCompanyId}&last=true`)
+              ? fetch(`/api/sales-bills?companyId=${effectiveCompanyId}&billId=${billIdFromQuery}`)
+              : fetch(`/api/sales-bills?companyId=${effectiveCompanyId}&last=true`)
           ])
 
-          const markasRes = await fetch(`/api/markas?companyId=${resolvedCompanyId}`)
+          const markasRes = await fetch(`/api/markas?companyId=${effectiveCompanyId}`)
 
           if ([partiesRes, transportsRes, salesItemsRes, accountingHeadsRes, markasRes, detailRes].some((res) => res.status === 401 || res.status === 403)) {
             const authError = new Error('Session expired') as Error & { status?: number }

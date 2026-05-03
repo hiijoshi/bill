@@ -271,11 +271,8 @@ export async function DELETE(
       return NextResponse.json({ error: 'Invalid trader ID' }, { status: 400 })
     }
     return NextResponse.json(
-      {
-        error:
-          'Direct trader deletion is disabled. Use trader subscription closure workflow: create backup, mark deletion pending, then confirm final deletion.'
-      },
-      { status: 409 }
+      { error: 'Method not allowed. Trader deletion is disabled by policy.' },
+      { status: 405 }
     )
   } catch (error) {
     const apiError = normalizePrismaApiError(error, 'Failed to delete trader')

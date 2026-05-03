@@ -1347,7 +1347,7 @@ export default function SuperAdminCrudPage() {
               ) : null}
 
               <div className="flex justify-end gap-2 border-t pt-4">
-                {modal.mode === 'edit' ? (
+                {modal.mode === 'edit' && modal.section !== 'traders' ? (
                   <Button type="button" variant="destructive" onClick={deleteModalRecord} disabled={saving}>
                     Delete
                   </Button>
