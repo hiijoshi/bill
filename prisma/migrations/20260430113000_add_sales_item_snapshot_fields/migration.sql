@@ -1,3 +1,2 @@
-ALTER TABLE "SalesItem"
-ADD COLUMN IF NOT EXISTS "salesItemName" TEXT,
-ADD COLUMN IF NOT EXISTS "markaNo" TEXT;
+ALTER TABLE "SalesItem" ADD COLUMN "salesItemName" TEXT;
+ALTER TABLE "SalesItem" ADD COLUMN "markaNo" TEXT;
