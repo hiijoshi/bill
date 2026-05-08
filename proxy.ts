@@ -6,8 +6,6 @@ import { AUTH_CONTEXT_HEADER, encodeRequestAuthContext, normalizeAppRole, type R
 import { hasSessionStateDrift, loadAuthGuardState } from '@/lib/auth-guard-state'
 import { sanitizeCompanyId } from '@/lib/company-id'
 import { getCompanyCookieNameCandidates, getSessionCookieNameCandidates } from '@/lib/session-cookies'
-import { isSupabaseConfigured } from '@/lib/supabase/client'
-import { getSupabaseClaimsFromRequest, hasSupabaseAppContext } from '@/lib/supabase/auth-bridge'
 
 const mutatingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const ENABLE_RATE_LIMIT = process.env.DISABLE_RATE_LIMIT !== 'true'
@@ -185,40 +183,6 @@ type MiddlewareAuthResolution = {
   applyCookies?: <T>(response: NextResponse<T>) => NextResponse<T>
 }
 
-async function resolveSupabaseAuthContext(request: NextRequest): Promise<MiddlewareAuthResolution | null> {
-  if (!isSupabaseConfigured()) {
-    return null
-  }
-
-  const supabaseContext = await getSupabaseClaimsFromRequest(request)
-  if (!supabaseContext || !hasSupabaseAppContext(supabaseContext.claims)) {
-    return null
-  }
-
-  const scopeSource = getScopeSource(request)
-  const defaultCompanyId =
-    typeof supabaseContext.claims.default_company_id === 'string' &&
-    supabaseContext.claims.default_company_id.trim().length > 0
-      ? supabaseContext.claims.default_company_id.trim()
-      : null
-  const auth: RequestAuthContext = {
-    userId:
-      (typeof supabaseContext.claims.user_code === 'string' && supabaseContext.claims.user_code.trim()) ||
-      supabaseContext.claims.user_db_id,
-    traderId: supabaseContext.claims.trader_id,
-    role: normalizeAppRole(supabaseContext.claims.app_role),
-    companyId: getCookieCompanyId(request, scopeSource) || defaultCompanyId,
-    companyIds: normalizeCompanyIdList((supabaseContext.claims as { company_ids?: unknown }).company_ids),
-    userDbId: supabaseContext.claims.user_db_id,
-    sessionIssuedAt: typeof supabaseContext.claims.iat === 'number' ? supabaseContext.claims.iat : null
-  }
-
-  return {
-    auth,
-    applyCookies: supabaseContext.applyCookies
-  }
-}
-
 function resolveLegacyAuthContext(
   request: NextRequest,
   namespace: 'app' | 'super_admin'
@@ -257,11 +221,6 @@ async function resolveRequestAuthContext(
   request: NextRequest,
   namespace: 'app' | 'super_admin'
 ): Promise<MiddlewareAuthResolution | null> {
-  const supabaseAuth = await resolveSupabaseAuthContext(request)
-  if (supabaseAuth) {
-    return supabaseAuth
-  }
-
   return resolveLegacyAuthContext(request, namespace)
 }
 

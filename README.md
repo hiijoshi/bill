@@ -32,8 +32,7 @@ The backend is built with:
 - Route Handlers under `app/api/**`
 - TypeScript
 - Prisma ORM
-- SQLite for local development
-- Turso/libSQL for shared or production deployments
+- SQLite for local development and server-local production storage
 - JWT access and refresh token sessions stored in secure cookies
 - Zod validation for request payloads
 
@@ -63,8 +62,8 @@ If your senior asks for an **AI API key curl test**, that test will be for an ex
 Key backend locations:
 
 - [app/api](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/app/api): all HTTP API route handlers
-- [lib/config.ts](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/lib/config.ts): environment validation and runtime mode selection
-- [lib/prisma.ts](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/lib/prisma.ts): Prisma client and Turso adapter setup
+- [lib/config.ts](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/lib/config.ts): environment validation
+- [lib/prisma.ts](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/lib/prisma.ts): Prisma client setup
 - [lib/auth.ts](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/lib/auth.ts): credential authentication logic
 - [lib/api-security.ts](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/lib/api-security.ts): auth helpers, role checks, company scoping
 - [prisma/schema.prisma](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/prisma/schema.prisma): database schema
@@ -102,12 +101,10 @@ REFRESH_SECRET="replace-with-a-different-long-random-secret-at-least-32-chars"
 ALLOWED_ORIGINS="http://localhost:3000"
 ```
 
-Production/shared database env:
+Production server-local database env:
 
 ```env
-TURSO_DATABASE_URL="libsql://your-database.turso.io"
-TURSO_AUTH_TOKEN="your-turso-auth-token"
-USE_TURSO="true"
+DATABASE_URL="file:/absolute/path/to/prisma/dev.db"
 JWT_SECRET="replace-with-a-long-random-secret-at-least-32-chars"
 REFRESH_SECRET="replace-with-a-different-long-random-secret-at-least-32-chars"
 ALLOWED_ORIGINS="https://your-domain.com"
@@ -115,10 +112,9 @@ ALLOWED_ORIGINS="https://your-domain.com"
 
 Important rules from the code:
 
-- Either `DATABASE_URL` or `TURSO_DATABASE_URL` must exist
-- If Turso runtime is used, `TURSO_AUTH_TOKEN` is required
+- `DATABASE_URL` must exist
 - In production, `ALLOWED_ORIGINS` is required
-- Supabase config is optional, but if enabled, all related env values must be present
+- Supabase cloud auth bridge is disabled in this setup
 
 Use [`.env.example`](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/.env.example) as the base template.
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Clock3, Download, LifeBuoy, Lock, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Clock3, Download, Lock, RefreshCw, ShieldCheck } from 'lucide-react'
 
 import { MetricRail, ModuleChrome } from '@/components/business/module-chrome'
 import { Badge } from '@/components/ui/badge'
@@ -204,7 +204,7 @@ export default function SubscriptionOverview({
   }, [current])
 
   const runAction = useCallback(
-    async (action: 'request_backup' | 'request_closure' | 'cancel_closure_request') => {
+    async (action: 'request_closure' | 'cancel_closure_request') => {
       setActionLoading(true)
       setActionError(null)
 
@@ -276,18 +276,6 @@ export default function SubscriptionOverview({
         }
         actions={
           <>
-            {current?.dataLifecycle?.allowBackupRequest ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="rounded-xl"
-                onClick={() => void runAction('request_backup')}
-                disabled={loading || actionLoading}
-              >
-                <LifeBuoy className="mr-2 h-4 w-4" />
-                {actionLoading ? 'Please wait...' : 'Request Backup'}
-              </Button>
-            ) : null}
             {current?.dataLifecycle?.allowClosureRequest ? (
               <Button
                 variant="outline"

@@ -1,4 +1,4 @@
-const SEEDED_COMPANY_ADDRESS_PLACEHOLDER = 'seeded company for turso testing'
+const SEEDED_COMPANY_ADDRESS_PLACEHOLDER = 'seeded company for testing'
 
 export function sanitizePrintCompanyAddress(value: unknown): string {
   const address = String(value || '').trim()
@@ -8,4 +8,3 @@ export function sanitizePrintCompanyAddress(value: unknown): string {
   }
   return address
 }
-

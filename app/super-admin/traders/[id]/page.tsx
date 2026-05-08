@@ -12,6 +12,7 @@ import { Loader2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useClientFinancialYear } from '@/lib/use-client-financial-year'
+import { authHeadersScoped } from '@/lib/csrf'
 
 type TraderDetail = {
   id: string
@@ -36,6 +37,7 @@ export default function SuperAdminTraderDetailPage() {
   const [saving, setSaving] = useState(false)
   const [financialYearStart, setFinancialYearStart] = useState('')
   const [financialYearBusyId, setFinancialYearBusyId] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const {
     payload: financialYearPayload,
@@ -85,7 +87,7 @@ export default function SuperAdminTraderDetailPage() {
     try {
       const response = await fetch(`/api/super-admin/traders/${trader.id}/lock`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeadersScoped('super_admin'),
         body: JSON.stringify({ locked: !trader.locked })
       })
       const payload = await response.json().catch(() => ({}))
@@ -95,6 +97,31 @@ export default function SuperAdminTraderDetailPage() {
       setError(err instanceof Error ? err.message : 'Failed to update lock state')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const deleteTrader = async () => {
+    if (!trader) return
+    const shouldDelete = window.confirm(
+      `Delete trader "${trader.name}" permanently?\n\nThis removes all trader companies, users, subscriptions, and data.`
+    )
+    if (!shouldDelete) return
+
+    setDeleting(true)
+    setError(null)
+    try {
+      const response = await fetch(`/api/super-admin/traders/${trader.id}`, {
+        method: 'DELETE',
+        headers: authHeadersScoped('super_admin')
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(payload.error || 'Failed to delete trader')
+      }
+      window.location.href = '/super-admin/traders'
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete trader')
+      setDeleting(false)
     }
   }
 
@@ -199,6 +226,9 @@ export default function SuperAdminTraderDetailPage() {
                   </Button>
                   <Button onClick={toggleLock} disabled={saving}>
                     {saving ? 'Saving...' : trader.locked ? 'Unlock Trader' : 'Lock Trader'}
+                  </Button>
+                  <Button variant="destructive" onClick={() => void deleteTrader()} disabled={deleting}>
+                    {deleting ? 'Deleting...' : 'Delete Trader'}
                   </Button>
                 </div>
               </CardContent>

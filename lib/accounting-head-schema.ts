@@ -6,14 +6,9 @@ let schemaReady = false
 let schemaPromise: Promise<void> | null = null
 
 function isSqliteLikeDatabase(): boolean {
-  const tursoUrl = String(process.env.TURSO_DATABASE_URL || '').trim()
   const databaseUrl = String(process.env.DATABASE_URL || '').trim().toLowerCase()
 
-  return Boolean(
-    tursoUrl ||
-    databaseUrl.startsWith('file:') ||
-    databaseUrl.startsWith('libsql:')
-  )
+  return Boolean(databaseUrl.startsWith('file:'))
 }
 
 function isAlreadyAppliedError(error: unknown): boolean {

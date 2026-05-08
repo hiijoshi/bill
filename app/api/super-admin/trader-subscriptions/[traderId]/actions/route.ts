@@ -33,9 +33,6 @@ import {
 } from '@/lib/subscription-mutations'
 import {
   clearTraderClosureRequest,
-  confirmTraderFinalDeletion,
-  createTraderDataBackup,
-  markTraderDeletionPending,
   requestTraderClosure,
   restoreTraderActiveAccess,
   setTraderLifecycleReadOnlyState,
@@ -69,14 +66,11 @@ const actionSchema = z
       'cancel',
       'suspend',
       'activate',
-      'request_backup',
       'mark_read_only',
       'restore_access',
       'request_closure',
       'clear_closure_request',
-      'update_retention',
-      'mark_deletion_pending',
-      'confirm_final_deletion'
+      'update_retention'
     ]),
     subscriptionId: z.string().trim().min(1).optional().nullable(),
     planId: z.string().trim().min(1).optional().nullable(),
@@ -107,7 +101,7 @@ type ActionResult = {
   action: string
   subscriptionId?: string | null
   backupId?: string | null
-  resourceType?: 'TRADER_SUBSCRIPTION' | 'TRADER_DATA_LIFECYCLE' | 'TRADER_DATA_BACKUP' | 'TRADER'
+  resourceType?: 'TRADER_SUBSCRIPTION' | 'TRADER_DATA_LIFECYCLE' | 'TRADER'
   resourceId?: string | null
   affectedUsers?: Array<{ id: string; traderId: string; userId: string }>
   affectedCompanyIds?: string[]
@@ -231,24 +225,7 @@ export async function POST(
     const actorId = authResult.auth.userDbId || authResult.auth.userId
     let result: ActionResult
 
-    if (input.action === 'request_backup') {
-      const backup = await createTraderDataBackup({
-        traderId: trader.id,
-        actor: {
-          userId: actorId,
-          role: authResult.auth.role,
-          requestSource: 'super_admin'
-        },
-        notes: input.notes || null
-      })
-
-      result = {
-        action: input.action,
-        backupId: backup.id,
-        resourceType: 'TRADER_DATA_BACKUP',
-        resourceId: backup.id
-      }
-    } else if (input.action === 'request_closure') {
+    if (input.action === 'request_closure') {
       await prisma.$transaction(async (tx) => {
         await requestTraderClosure(tx, {
           traderId: trader.id,
@@ -325,49 +302,6 @@ export async function POST(
         action: input.action,
         resourceType: 'TRADER_DATA_LIFECYCLE',
         resourceId: trader.id
-      }
-    } else if (input.action === 'mark_deletion_pending') {
-      if (!input.backupId) {
-        throw new TraderRetentionError('Backup ID is required to mark deletion pending', 400)
-      }
-
-      await markTraderDeletionPending({
-        traderId: trader.id,
-        actorId,
-        backupId: input.backupId,
-        retentionDays: input.retentionDays ?? null,
-        notes: input.notes || null
-      })
-
-      result = {
-        action: input.action,
-        backupId: input.backupId,
-        resourceType: 'TRADER_DATA_LIFECYCLE',
-        resourceId: trader.id
-      }
-    } else if (input.action === 'confirm_final_deletion') {
-      if (!input.confirmDeletion) {
-        throw new TraderRetentionError('Final deletion confirmation is required', 400)
-      }
-
-      if (!input.backupId) {
-        throw new TraderRetentionError('Backup ID is required for final deletion', 400)
-      }
-
-      const deletionResult = await confirmTraderFinalDeletion({
-        traderId: trader.id,
-        backupId: input.backupId,
-        actorId,
-        notes: input.notes || null
-      })
-
-      result = {
-        action: input.action,
-        backupId: input.backupId,
-        resourceType: 'TRADER',
-        resourceId: trader.id,
-        affectedUsers: deletionResult.affectedUsers,
-        affectedCompanyIds: deletionResult.affectedCompanyIds
       }
     } else {
       result = await prisma.$transaction(async (tx) => {
@@ -696,7 +630,7 @@ export async function POST(
         id: actorId,
         role: authResult.auth.role
       },
-      action: result.action === 'confirm_final_deletion' ? 'DELETE' : 'UPDATE',
+      action: 'UPDATE',
       resourceType: result.resourceType || 'TRADER_SUBSCRIPTION',
       resourceId: result.resourceId || trader.id,
       scope: {

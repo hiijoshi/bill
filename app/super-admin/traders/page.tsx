@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { CreditCard, Edit, Eye, Plus } from 'lucide-react'
+import { CreditCard, Edit, Eye, Plus, Trash2 } from 'lucide-react'
 
 import SuperAdminShell from '@/app/super-admin/components/SuperAdminShell'
 import { authHeadersScoped } from '@/lib/csrf'
@@ -111,6 +111,7 @@ export default function SuperAdminTradersPage() {
   const [loading, setLoading] = useState(true)
   const [schemaReady, setSchemaReady] = useState(true)
   const [schemaWarning, setSchemaWarning] = useState<string | null>(null)
+  const [deletingTraderId, setDeletingTraderId] = useState<string | null>(null)
 
   const selectedPlan = useMemo(
     () => plans.find((plan) => plan.id === form.planId) || null,
@@ -276,6 +277,38 @@ export default function SuperAdminTradersPage() {
       amount: '',
       currency: 'INR'
     })
+  }
+
+  const deleteTrader = async (trader: TraderRow) => {
+    if (deletingTraderId) return
+
+    const shouldDelete = window.confirm(
+      `Delete trader "${trader.name}" permanently?\n\nThis removes all trader companies, users, subscriptions, and data.`
+    )
+    if (!shouldDelete) return
+
+    setDeletingTraderId(trader.id)
+    setError(null)
+
+    try {
+      const response = await fetch(`/api/super-admin/traders/${trader.id}`, {
+        method: 'DELETE',
+        headers: authHeadersScoped('super_admin')
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(payload.error || 'Failed to delete trader')
+      }
+
+      if (editId === trader.id) {
+        resetForm()
+      }
+      await load()
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete trader')
+    } finally {
+      setDeletingTraderId(null)
+    }
   }
 
   return (
@@ -551,6 +584,15 @@ export default function SuperAdminTradersPage() {
                                 <CreditCard className="h-4 w-4" />
                                 Subscription
                               </Link>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => void deleteTrader(trader)}
+                              disabled={deletingTraderId === trader.id || deletingTraderId !== null}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              {deletingTraderId === trader.id ? 'Deleting...' : 'Delete'}
                             </Button>
                           </div>
                         </TableCell>

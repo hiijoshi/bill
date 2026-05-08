@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { resolveRoutePermission } from '@/lib/permissions'
-import { resolveSupabaseAppSession } from '@/lib/supabase/app-session'
 import { getCompanySubscriptionAccess, getSubscriptionAccessMessage, isModuleEnabledForEntitlement } from '@/lib/subscription-core'
 import { getTraderDataAccessMessage, getTraderDataLifecycleSummary } from '@/lib/trader-retention'
 import { sanitizeCompanyId } from '@/lib/company-id'
@@ -322,24 +321,7 @@ export async function hasCompanyAccess(
 ): Promise<boolean> {
   if (!companyId) return false
 
-  if (request) {
-    const supabaseAccess = await withRequestScopedCache(
-      auth,
-      `supabase-company-access:${companyId}`,
-      async () => {
-        const supabaseSession = await resolveSupabaseAppSession(request, companyId)
-        if (!supabaseSession) {
-          return null
-        }
-
-        return supabaseSession.companies.some((company) => company.id === companyId && !company.locked)
-      }
-    )
-
-    if (typeof supabaseAccess === 'boolean') {
-      return supabaseAccess
-    }
-  }
+  void request
 
   const scopedCompanyIds = await getScopedCompanyIds(auth, companyId)
   return scopedCompanyIds.includes(companyId)

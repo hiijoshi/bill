@@ -7,6 +7,7 @@ import { getAuditRequestMeta, writeAuditLog } from '@/lib/audit-logging'
 import { normalizeTraderLimitInput } from '@/lib/trader-limits'
 import { normalizePrismaApiError } from '@/lib/prisma-errors'
 import { markCompanyLiveUpdates, markSuperAdminLiveUpdate, markUserSessionLiveUpdates } from '@/lib/live-update-state'
+import { deleteTraderPermanently, TraderRetentionError } from '@/lib/trader-backups'
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1, 'Trader ID is required') })
 
@@ -270,11 +271,61 @@ export async function DELETE(
     if (!parsedParams.success) {
       return NextResponse.json({ error: 'Invalid trader ID' }, { status: 400 })
     }
-    return NextResponse.json(
-      { error: 'Method not allowed. Trader deletion is disabled by policy.' },
-      { status: 405 }
-    )
+
+    const traderId = parsedParams.data.id
+    const existingTrader = await prisma.trader.findFirst({
+      where: { id: traderId, deletedAt: null },
+      select: { id: true, name: true, locked: true, deletedAt: true, createdAt: true, updatedAt: true }
+    })
+
+    if (!existingTrader) {
+      return NextResponse.json({ error: 'Trader not found' }, { status: 404 })
+    }
+
+    const actorId = authResult.auth.userDbId || authResult.auth.userId
+    const deletionResult = await deleteTraderPermanently({
+      traderId,
+      actorId,
+      notes: 'Deleted directly from super admin trader management'
+    })
+
+    await writeAuditLog({
+      actor: {
+        id: actorId,
+        role: authResult.auth.role
+      },
+      action: 'DELETE',
+      resourceType: 'TRADER',
+      resourceId: traderId,
+      scope: { traderId },
+      before: existingTrader,
+      after: {
+        deletedAt: deletionResult.deletedAt.toISOString()
+      },
+      requestMeta: getAuditRequestMeta(request)
+    })
+
+    markSuperAdminLiveUpdate()
+    if (deletionResult.affectedCompanyIds.length > 0) {
+      markCompanyLiveUpdates(deletionResult.affectedCompanyIds)
+    }
+    if (deletionResult.affectedUsers.length > 0) {
+      markUserSessionLiveUpdates(deletionResult.affectedUsers)
+      deletionResult.affectedUsers.forEach((user) => {
+        invalidateAuthGuardStateForUser(user)
+      })
+    }
+
+    return NextResponse.json({
+      success: true,
+      id: traderId,
+      deletedAt: deletionResult.deletedAt.toISOString()
+    })
   } catch (error) {
+    if (error instanceof TraderRetentionError) {
+      return NextResponse.json({ error: error.message }, { status: error.status })
+    }
+
     const apiError = normalizePrismaApiError(error, 'Failed to delete trader')
     return NextResponse.json({ error: apiError.message }, { status: apiError.status })
   }

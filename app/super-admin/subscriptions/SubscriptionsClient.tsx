@@ -27,14 +27,11 @@ type ActionFormState = {
     | 'cancel'
     | 'suspend'
     | 'activate'
-    | 'request_backup'
     | 'mark_read_only'
     | 'restore_access'
     | 'request_closure'
     | 'clear_closure_request'
     | 'update_retention'
-    | 'mark_deletion_pending'
-    | 'confirm_final_deletion'
   planId: string
   backupId: string
   startDate: string
@@ -317,21 +314,6 @@ export default function SuperAdminTraderSubscriptionsClient({
       trialDays: current.action === 'assign_trial' && selectedPlan.defaultTrialDays ? String(selectedPlan.defaultTrialDays) : current.trialDays
     }))
   }, [selectedPlan])
-
-  useEffect(() => {
-    const readyBackupId =
-      selectedTraderDetail?.dataLifecycle?.latestReadyBackup?.id ||
-      selectedTraderDetail?.backups?.find((backup) => backup.status === 'ready')?.id ||
-      ''
-    if (!readyBackupId) return
-    if (form.backupId) return
-    if (form.action !== 'mark_deletion_pending' && form.action !== 'confirm_final_deletion') return
-
-    setForm((current) => ({
-      ...current,
-      backupId: readyBackupId
-    }))
-  }, [form.action, form.backupId, selectedTraderDetail])
 
   const submitAction = async () => {
     if (!selectedTraderId) return
@@ -755,14 +737,11 @@ export default function SuperAdminTraderSubscriptionsClient({
                     <option value="cancel">Cancel</option>
                     <option value="suspend">Suspend</option>
                     <option value="activate">Activate / Resume</option>
-                    <option value="request_backup">Generate Backup</option>
                     <option value="mark_read_only">Mark Read Only</option>
                     <option value="restore_access">Restore Access</option>
                     <option value="request_closure">Request Closure Review</option>
                     <option value="clear_closure_request">Cancel Closure Request</option>
                     <option value="update_retention">Update Retention</option>
-                    <option value="mark_deletion_pending">Mark Deletion Pending</option>
-                    <option value="confirm_final_deletion">Confirm Final Delete</option>
                   </select>
                 </label>
 
@@ -831,7 +810,7 @@ export default function SuperAdminTraderSubscriptionsClient({
                   </div>
                 ) : null}
 
-                {(form.action === 'mark_read_only' || form.action === 'update_retention' || form.action === 'mark_deletion_pending') ? (
+                {(form.action === 'mark_read_only' || form.action === 'update_retention') ? (
                   <div className="grid gap-3">
                     {form.action === 'mark_read_only' ? (
                       <label className="text-sm">
@@ -860,27 +839,6 @@ export default function SuperAdminTraderSubscriptionsClient({
                       onChange={(event) => setForm((current) => ({ ...current, retentionDays: event.target.value }))}
                     />
                   </div>
-                ) : null}
-
-                {(form.action === 'mark_deletion_pending' || form.action === 'confirm_final_deletion') ? (
-                  <label className="text-sm">
-                    <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Ready Backup</span>
-                    <select
-                      name="subscription-backup"
-                      className="h-10 w-full rounded-md border border-slate-200 px-3 text-sm"
-                      value={form.backupId}
-                      onChange={(event) => setForm((current) => ({ ...current, backupId: event.target.value }))}
-                    >
-                      <option value="">Select backup</option>
-                      {(selectedTraderDetail?.backups || [])
-                        .filter((backup) => backup.status === 'ready')
-                        .map((backup) => (
-                          <option key={backup.id} value={backup.id}>
-                            {backup.fileName || `${backup.format}.json`} ({formatDate(backup.exportedAt || backup.failedAt || backup.createdAt)})
-                          </option>
-                        ))}
-                    </select>
-                  </label>
                 ) : null}
 
                 {(form.action === 'assign_paid' || form.action === 'renew_paid' || form.action === 'convert_to_paid') ? (
@@ -923,17 +881,6 @@ export default function SuperAdminTraderSubscriptionsClient({
                       onChange={() => setForm((current) => ({ ...current, replaceExisting: !current.replaceExisting }))}
                     />
                     Replace existing non-terminal subscription
-                  </label>
-                ) : null}
-
-                {form.action === 'confirm_final_deletion' ? (
-                  <label className="flex items-center gap-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                    <input
-                      type="checkbox"
-                      checked={form.confirmDeletion}
-                      onChange={() => setForm((current) => ({ ...current, confirmDeletion: !current.confirmDeletion }))}
-                    />
-                    I confirm final deletion after verified backup.
                   </label>
                 ) : null}
 

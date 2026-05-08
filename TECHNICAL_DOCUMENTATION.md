@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project is a multi-tenant mandi ERP built on Next.js App Router. The active production data path is Prisma with the libSQL adapter for Turso. Local development can still use SQLite for convenience, but production should be treated as Turso-only.
+This project is a multi-tenant mandi ERP built on Next.js App Router. The application now runs on server-local SQLite only (Prisma + `DATABASE_URL`).
 
 The tenant model is:
 
@@ -34,32 +34,15 @@ The core business areas are:
 
 - Next.js route handlers
 - Prisma Client
-- Turso/libSQL in production through `@prisma/adapter-libsql`
-- SQLite only for local development
+- SQLite for development and production deployments where the app server stores local DB files
 
 ### Authentication
 
 - Database-backed user authentication
 - JWT access + refresh tokens
-- Optional Supabase auth bridge, enabled only when all Supabase env variables are configured
+- Local database-backed authentication only
 
 ## Database Strategy
-
-### Production
-
-Use:
-
-- `TURSO_DATABASE_URL`
-- `TURSO_AUTH_TOKEN`
-- `USE_TURSO=true`
-
-Deploy schema changes with:
-
-```bash
-npm run prisma:migrate:deploy
-```
-
-### Local Development
 
 Use:
 
@@ -84,14 +67,13 @@ npm run prisma:migrate:baseline
 
 - All secrets must come from environment variables.
 - `ALLOWED_ORIGINS` is required in production.
-- If any Supabase env variable is set, the full Supabase config must be present.
-- Vercel builds use a temporary SQLite path only for Prisma client generation; request-time data access should still go to Turso in production.
+- Cloud auth/database bridge variables are not used.
 
 ## Important Files
 
-- [config.ts](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/lib/config.ts): env validation and runtime mode detection
-- [prisma.ts](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/lib/prisma.ts): Prisma + Turso adapter initialization
-- [build.mjs](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/scripts/build.mjs): Vercel-safe build entrypoint
+- [config.ts](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/lib/config.ts): env validation
+- [prisma.ts](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/lib/prisma.ts): local Prisma client initialization
+- [build.mjs](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/scripts/build.mjs): build entrypoint
 - [schema.prisma](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/prisma/schema.prisma): canonical Prisma schema
 - [route.ts](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/app/api/auth/route.ts): main login flow
 - [import/route.ts](/Users/himanshujoshi/Desktop/Project/billing-app/Mbill/app/api/payments/bank-statement/import/route.ts): heavy batch payment import path
@@ -122,10 +104,10 @@ Key production-safe optimizations already applied:
 
 ## Production Checklist
 
-1. Set the real Turso production environment variables in Vercel.
-2. Set long random `JWT_SECRET` and `REFRESH_SECRET`.
+1. Set long random `JWT_SECRET` and `REFRESH_SECRET`.
+2. Set `DATABASE_URL` to a writable server-local SQLite file path.
 3. Set `ALLOWED_ORIGINS` to the public app URL list.
-4. Run `npm run prisma:migrate:deploy` against Turso.
+4. Run `npm run prisma:migrate:deploy`.
 5. Run `npm run build`.
 6. Verify login, company switching, dashboard, purchase, sales, payment, reports, and superadmin flows on the deployed URL.
 

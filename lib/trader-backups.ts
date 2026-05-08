@@ -1042,6 +1042,66 @@ export async function confirmTraderFinalDeletion(params: {
     throw new TraderRetentionError('Trader must be marked for deletion before final delete', 409)
   }
 
+  return executeTraderHardDeletion({
+    traderId: params.traderId,
+    actorId: params.actorId,
+    notes: params.notes,
+    lifecycleSummary,
+    latestBackup: backup
+  })
+}
+
+export async function deleteTraderPermanently(params: {
+  traderId: string
+  actorId: string
+  notes?: string | null
+}) {
+  const trader = await prisma.trader.findFirst({
+    where: {
+      id: params.traderId
+    },
+    select: {
+      id: true,
+      deletedAt: true
+    }
+  })
+
+  if (!trader) {
+    throw new TraderRetentionError('Trader not found', 404)
+  }
+
+  if (trader.id === 'system') {
+    throw new TraderRetentionError('Cannot delete system trader', 403)
+  }
+
+  if (trader.deletedAt) {
+    throw new TraderRetentionError('Trader data was already deleted', 409)
+  }
+
+  const lifecycleSummary = await getTraderDataLifecycleSummary(prisma, params.traderId, new Date(), {
+    traderDeletedAt: trader.deletedAt
+  })
+
+  return executeTraderHardDeletion({
+    traderId: params.traderId,
+    actorId: params.actorId,
+    notes: params.notes,
+    lifecycleSummary,
+    latestBackup: null
+  })
+}
+
+async function executeTraderHardDeletion(params: {
+  traderId: string
+  actorId: string
+  notes?: string | null
+  lifecycleSummary: Awaited<ReturnType<typeof getTraderDataLifecycleSummary>>
+  latestBackup: {
+    id: string
+    exportedAt: Date | null
+    createdAt: Date
+  } | null
+}) {
   const [affectedUsers, affectedCompanyIds] = await Promise.all([
     prisma.user.findMany({
       where: {
@@ -1098,9 +1158,9 @@ export async function confirmTraderFinalDeletion(params: {
       },
       data: {
         state: 'deleted',
-        readOnlySince: lifecycleSummary.readOnlySince ? new Date(lifecycleSummary.readOnlySince) : now,
-        latestReadyBackupId: backup.id,
-        latestReadyBackupAt: backup.exportedAt || backup.createdAt,
+        readOnlySince: params.lifecycleSummary?.readOnlySince ? new Date(params.lifecycleSummary.readOnlySince) : now,
+        latestReadyBackupId: params.latestBackup?.id || null,
+        latestReadyBackupAt: params.latestBackup ? params.latestBackup.exportedAt || params.latestBackup.createdAt : null,
         deletionApprovedAt: now,
         deletionApprovedByUserId: params.actorId,
         deletionExecutedAt: now,

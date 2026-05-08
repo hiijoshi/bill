@@ -22,7 +22,14 @@ export default function MandiTradePage() {
     alert(type === 'demo' ? 'Thank you for booking a demo! Our team will contact you shortly.' : 'Thank you for your message! We\'ll get back to you soon.');
     (e.target as HTMLFormElement).reset();
   };
-
+const colorMap = {
+  blue: "bg-blue-50 text-blue-600",
+  green: "bg-green-50 text-green-600",
+  purple: "bg-purple-50 text-purple-600",
+  orange: "bg-orange-50 text-orange-600",
+  cyan: "bg-cyan-50 text-cyan-600",
+  red: "bg-red-50 text-red-600"
+};
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50">
       <style jsx global>{`
@@ -284,42 +291,7 @@ export default function MandiTradePage() {
         </div>
       </section>
 
-      {/* Team Section */}
-      <section id="about" className="py-20 bg-slate-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-3xl mx-auto mb-16 fade-in">
-            <span className="tag-badge bg-blue-50 text-blue-600 px-4 py-2 rounded-full font-semibold">Our Team</span>
-            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-slate-800 mt-6 mb-4">Meet the People Behind MandiTrade</h2>
-            <p className="text-lg text-gray-600">A passionate team dedicated to empowering mandi traders with technology.</p>
-          </div>
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
-            {[
-              { name: 'Vikram Singh', role: 'CEO & Founder', img: 32, gradient: 'from-blue-100 to-blue-200' },
-              { name: 'Ananya Desai', role: 'CTO', img: 44, gradient: 'from-purple-100 to-purple-200' },
-              { name: 'Rahul Mehta', role: 'Head of Product', img: 53, gradient: 'from-green-100 to-green-200' },
-              { name: 'Sneha Reddy', role: 'Head of Sales', img: 47, gradient: 'from-orange-100 to-orange-200' }
-            ].map((member, i) => (
-              <div key={i} className="card-hover bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-sm fade-in">
-                <div className={`aspect-square bg-gradient-to-br ${member.gradient} flex items-center justify-center`}>
-                  <img src={`https://i.pravatar.cc/150?img=${member.img}`} alt={member.name} className="w-32 h-32 rounded-full object-cover border-4 border-white shadow-lg" />
-                </div>
-                <div className="p-6 text-center">
-                  <h3 className="font-bold text-slate-800 text-lg">{member.name}</h3>
-                  <p className="text-blue-600 text-sm font-medium mb-4">{member.role}</p>
-                  <div className="flex items-center justify-center space-x-3">
-                    <a href="#" className="w-9 h-9 bg-slate-100 rounded-full flex items-center justify-center hover:bg-blue-600 hover:text-white transition-all">
-                      <i className="fab fa-linkedin-in text-sm"></i>
-                    </a>
-                    <a href="#" className="w-9 h-9 bg-slate-100 rounded-full flex items-center justify-center hover:bg-blue-600 hover:text-white transition-all">
-                      <i className="fab fa-twitter text-sm"></i>
-                    </a>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+     
 
       {/* Book a Demo Section */}
       <section id="book-demo" className="py-20 bg-gradient-to-br from-slate-800 to-slate-900 relative overflow-hidden">
@@ -377,62 +349,88 @@ export default function MandiTradePage() {
         </div>
       </section>
 
-      {/* Pricing Section */}
       <section id="pricing" className="py-20 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-3xl mx-auto mb-16 fade-in">
-            <span className="tag-badge bg-blue-50 text-blue-600 px-4 py-2 rounded-full font-semibold">Pricing</span>
-            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-slate-800 mt-6 mb-4">Simple, Transparent Pricing</h2>
-            <p className="text-lg text-gray-600">Choose the plan that fits your business needs. No hidden fees.</p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-            {[
-              { name: 'Starter', price: '₹999', desc: 'Perfect for small traders', features: ['1 Company', 'Basic Stock Tracking', 'Payment Management', 'Email Support'], disabled: ['Advanced Reports'], popular: false, dark: false },
-              { name: 'Professional', price: '₹2,499', desc: 'For growing businesses', features: ['Up to 3 Companies', 'Advanced Stock Analytics', 'Complete Payment Suite', 'Priority Support', 'Advanced Reports & Export'], disabled: [], popular: true, dark: true },
-              { name: 'Enterprise', price: 'Custom', desc: 'For large operations', features: ['Unlimited Companies', 'Custom Integrations', 'Dedicated Account Manager', '24/7 Phone Support', 'On-premise Deployment'], disabled: [], popular: false, dark: false }
-            ].map((plan, i) => (
-              <div key={i} className={`card-hover rounded-2xl p-8 shadow-xl relative fade-in ${plan.dark ? 'bg-slate-800 transform scale-105' : 'bg-white border border-slate-200 shadow-sm'} ${plan.popular ? 'transform scale-105' : ''}`}>
-                {plan.popular && (
-                  <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
-                    <span className="bg-blue-600 text-white text-sm font-bold px-4 py-1 rounded-full">Most Popular</span>
-                  </div>
-                )}
-                <div className="mb-6">
-                  <h3 className={`text-xl font-bold mb-2 ${plan.dark ? 'text-white' : 'text-slate-800'}`}>{plan.name}</h3>
-                  <p className={`text-sm ${plan.dark ? 'text-gray-400' : 'text-gray-500'}`}>{plan.desc}</p>
-                </div>
-                <div className="mb-6">
-                  <span className={`text-4xl font-bold ${plan.dark ? 'text-white' : 'text-slate-800'}`}>{plan.price}</span>
-                  {plan.price !== 'Custom' && <span className={plan.dark ? 'text-gray-400' : 'text-gray-500'}>/month</span>}
-                </div>
-                <ul className="space-y-3 mb-8">
-                  {plan.features.map((feature, j) => (
-                    <li key={j} className="flex items-center space-x-3">
-                      <i className={`fas fa-check ${plan.dark ? 'text-blue-400' : 'text-green-500'}`}></i>
-                      <span className={plan.dark ? 'text-gray-300' : 'text-gray-600'}>{feature}</span>
-                    </li>
-                  ))}
-                  {plan.disabled.map((feature, j) => (
-                    <li key={j} className="flex items-center space-x-3 text-gray-400">
-                      <i className="fas fa-times"></i>
-                      <span>{feature}</span>
-                    </li>
-                  ))}
-                </ul>
-                {plan.price === 'Custom' ? (
-                  <a href={CONTACT_SECTION_HREF} className={`block w-full px-6 py-3 rounded-xl text-center font-semibold transition-all ${plan.dark ? 'btn-glow bg-blue-600 hover:bg-blue-700 text-white shadow-lg' : 'bg-slate-100 hover:bg-gray-200 text-slate-800'}`}>
-                    Contact Sales
-                  </a>
-                ) : (
-                  <Link href={LOGIN_HREF} className={`block w-full px-6 py-3 rounded-xl text-center font-semibold transition-all ${plan.dark ? 'btn-glow bg-blue-600 hover:bg-blue-700 text-white shadow-lg' : 'bg-slate-100 hover:bg-gray-200 text-slate-800'}`}>
-                    Get Started
-                  </Link>
-                )}
-              </div>
-            ))}
-          </div>
+  <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+    {/* Header */}
+    <div className="text-center max-w-3xl mx-auto mb-16 fade-in">
+      <span className="tag-badge bg-blue-50 text-blue-600 px-4 py-2 rounded-full font-semibold">
+        Pricing
+      </span>
+      <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-slate-800 mt-6 mb-4">
+        Simple, Transparent Pricing
+      </h2>
+      <p className="text-lg text-gray-600">
+        Start with a base plan and expand anytime with addons.
+      </p>
+    </div>
+
+    {/* Base Plan */}
+    <div className="max-w-md mx-auto mb-16">
+      <div className="relative bg-slate-800 text-white rounded-2xl p-8 shadow-xl text-center">
+        <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
+          <span className="bg-blue-600 text-white text-sm font-bold px-4 py-1 rounded-full">
+            Most Popular
+          </span>
         </div>
-      </section>
+
+        <h3 className="text-2xl font-bold mb-2">Yearly Starter</h3>
+        <p className="text-gray-400 mb-6">Perfect for individual traders</p>
+
+        <div className="mb-6">
+          <span className="text-4xl font-bold">₹11,999</span>
+          <span className="text-gray-400">/year</span>
+        </div>
+
+        <ul className="space-y-3 mb-8 text-left">
+          <li>✔ Full Feature Access</li>
+          <li>✔ 1 Company</li>
+          <li>✔ 2 User</li>
+        </ul>
+
+        <a
+          href="https://calendly.com/yashrajmalhotraindustries-acc1/30min?back=1"
+          className="block w-full px-6 py-3 rounded-xl font-semibold bg-blue-600 hover:bg-blue-700 text-white"
+        >
+          Get Started
+        </a>
+      </div>
+    </div>
+
+    {/* Addons */}
+    <div>
+      <h3 className="text-2xl font-bold text-center text-slate-800 mb-10">
+        Addons (Requires Base Plan)
+      </h3>
+
+      <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
+        {[
+          { name: "Add on Plan", price: "₹8989", desc: "Add a new company + user" },
+          { name: "Extra User", price: "₹4499", desc: "Add users to existing companies" },
+          { name: "Company Only", price: "₹3399", desc: "Add company without user" }
+        ].map((plan, i) => (
+          <div key={i} className="bg-white border border-slate-200 rounded-2xl p-8 shadow-sm card-hover">
+            <h3 className="text-xl font-bold text-slate-800 mb-2">{plan.name}</h3>
+            <p className="text-sm text-gray-500 mb-6">{plan.desc}</p>
+
+            <div className="mb-6">
+              <span className="text-3xl font-bold text-slate-800">{plan.price}</span>
+              <span className="text-gray-500">/year</span>
+            </div>
+
+            <a
+              href="https://calendly.com/yashrajmalhotraindustries-acc1/30min?back=1"
+              className="block w-full px-6 py-3 rounded-xl font-semibold bg-slate-100 hover:bg-gray-200 text-slate-800 text-center"
+            >
+              Add to Plan
+            </a>
+          </div>
+        ))}
+      </div>
+    </div>
+
+  </div>
+</section>
 
       {/* Contact Section */}
       <section id="contact" className="py-20 bg-slate-50">

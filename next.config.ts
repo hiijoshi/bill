@@ -24,16 +24,6 @@ const ALLOWED_ACTION_HOSTS = Array.from(
 
 const CONNECT_SRC_VALUES = ["'self'"]
 
-if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
-  try {
-    const supabaseOrigin = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).origin
-    CONNECT_SRC_VALUES.push(supabaseOrigin)
-    CONNECT_SRC_VALUES.push(supabaseOrigin.replace(/^http/, 'ws'))
-  } catch {
-    CONNECT_SRC_VALUES.push('https://*.supabase.co', 'https://*.supabase.com', 'wss://*.supabase.co')
-  }
-}
-
 const nextConfig: NextConfig = {
   allowedDevOrigins: DEFAULT_LOCAL_ALLOWED_HOSTS,
   serverExternalPackages: ['@napi-rs/canvas', 'pdf-parse', 'pdfjs-dist'],

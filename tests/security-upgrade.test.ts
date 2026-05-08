@@ -1,6 +1,5 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { rm } from 'node:fs/promises'
 import { NextRequest } from 'next/server'
 import bcrypt from 'bcryptjs'
 import { prisma } from '../lib/prisma'
@@ -423,7 +422,7 @@ test('Expired subscription allows reads but blocks writes in read-only mode', as
   }
 })
 
-test('Final deletion requires ready backup and deletion-pending confirmation', async () => {
+test('Backup-gated deletion actions are no longer available in subscription action API', async () => {
   const suffix = Date.now().toString()
   const trader = await prisma.trader.create({ data: { name: `closure-trader-${suffix}` } })
   const company = await prisma.company.create({ data: { name: `closure-company-${suffix}`, traderId: trader.id } })
@@ -437,78 +436,24 @@ test('Final deletion requires ready backup and deletion-pending confirmation', a
     }
   })
 
-  let backupStoragePath: string | null = null
-
   try {
-    const missingBackupResponse = await callTraderSubscriptionAction(trader.id, {
-      action: 'confirm_final_deletion',
+    const confirmActionResponse = await callTraderSubscriptionAction(trader.id, {
+      action: 'unsupported_delete_action',
       backupId: 'missing-backup',
       confirmDeletion: true
     })
-    assert.equal(missingBackupResponse.status, 404)
+    assert.equal(confirmActionResponse.status, 400)
+    const confirmPayload = await confirmActionResponse.json()
+    assert.match(String(confirmPayload?.error || ''), /validation failed/i)
 
-    const createBackupResponse = await callTraderSubscriptionAction(trader.id, {
-      action: 'request_backup',
-      notes: 'Prepare final export'
+    const pendingActionResponse = await callTraderSubscriptionAction(trader.id, {
+      action: 'unsupported_pending_action',
+      backupId: 'unused'
     })
-    assert.equal(createBackupResponse.status, 200)
-    const createBackupPayload = await createBackupResponse.json()
-    const createdBackupId = String(createBackupPayload?.backups?.[0]?.id || '')
-    assert.ok(createdBackupId)
-
-    const createdBackup = await prisma.traderDataBackup.findUnique({
-      where: { id: createdBackupId }
-    })
-    assert.ok(createdBackup)
-    assert.equal(createdBackup?.status, 'ready')
-    backupStoragePath = createdBackup?.storagePath || null
-
-    const beforePendingResponse = await callTraderSubscriptionAction(trader.id, {
-      action: 'confirm_final_deletion',
-      backupId: createdBackupId,
-      confirmDeletion: true
-    })
-    assert.equal(beforePendingResponse.status, 409)
-
-    const pendingResponse = await callTraderSubscriptionAction(trader.id, {
-      action: 'mark_deletion_pending',
-      backupId: createdBackupId,
-      retentionDays: 30,
-      notes: 'Backup verified'
-    })
-    assert.equal(pendingResponse.status, 200)
-
-    const lifecycle = await prisma.traderDataLifecycle.findUnique({
-      where: { traderId: trader.id }
-    })
-    assert.equal(lifecycle?.state, 'deletion_pending')
-
-    const finalDeleteResponse = await callTraderSubscriptionAction(trader.id, {
-      action: 'confirm_final_deletion',
-      backupId: createdBackupId,
-      confirmDeletion: true,
-      notes: 'Approved for final delete'
-    })
-    assert.equal(finalDeleteResponse.status, 200)
-
-    const [deletedTrader, remainingCompanies, remainingUsers, persistedBackup, finalLifecycle] = await Promise.all([
-      prisma.trader.findUnique({ where: { id: trader.id } }),
-      prisma.company.count({ where: { traderId: trader.id } }),
-      prisma.user.count({ where: { traderId: trader.id } }),
-      prisma.traderDataBackup.findUnique({ where: { id: createdBackupId } }),
-      prisma.traderDataLifecycle.findUnique({ where: { traderId: trader.id } })
-    ])
-
-    assert.ok(deletedTrader?.deletedAt)
-    assert.equal(deletedTrader?.locked, true)
-    assert.equal(remainingCompanies, 0)
-    assert.equal(remainingUsers, 0)
-    assert.equal(persistedBackup?.status, 'ready')
-    assert.equal(finalLifecycle?.state, 'deleted')
+    assert.equal(pendingActionResponse.status, 400)
+    const pendingPayload = await pendingActionResponse.json()
+    assert.match(String(pendingPayload?.error || ''), /validation failed/i)
   } finally {
-    if (backupStoragePath) {
-      await rm(backupStoragePath, { force: true }).catch(() => undefined)
-    }
     await prisma.traderDataBackup.deleteMany({ where: { traderId: trader.id } })
     await prisma.traderDataLifecycle.deleteMany({ where: { traderId: trader.id } })
     await prisma.subscriptionPayment.deleteMany({ where: { traderId: trader.id } })

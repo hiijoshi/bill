@@ -19,16 +19,14 @@
     "prisma:dbpush": "prisma db push",
     "prisma:migrate:deploy": "node scripts/prisma-migrate-deploy.mjs",
     "prisma:migrate:baseline": "node scripts/prisma-migrate-baseline.mjs",
+    "db:import:dump": "node scripts/import-sqlite-dump.mjs",
     "test:security": "tsx --test tests/security-upgrade.test.ts",
-    "turso:setup-test-data": "tsx scripts/setup-turso-test-data.ts",
     "bootstrap:super-admin": "tsx scripts/bootstrap-super-admin.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@libsql/client": "^0.8.0",
-    "@prisma/adapter-libsql": "^5.22.0",
     "@prisma/client": "^5.22.0",
     "@radix-ui/react-collapsible": "^1.1.12",
     "@radix-ui/react-dialog": "^1.1.15",
@@ -36,8 +34,6 @@
     "@radix-ui/react-progress": "^1.1.8",
     "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/react-slot": "^1.2.4",
-    "@supabase/ssr": "^0.9.0",
-    "@supabase/supabase-js": "^2.99.3",
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.10",
     "bcryptjs": "^3.0.3",
