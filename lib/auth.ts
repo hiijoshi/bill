@@ -87,7 +87,7 @@ export interface AuthUser {
 export interface LoginCredentials {
   userId: string
   password: string
-  // Kept as traderId for API compatibility; interpreted as trader name for authentication scope.
+  // Kept as traderId for API compatibility; interpreted as trader ID or trader name for authentication scope.
   traderId?: string
 }
 
@@ -222,7 +222,10 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
       const matchedTraders = await prisma.trader.findMany({
         where: {
           deletedAt: null,
-          name: traderIdInput
+          OR: [
+            { id: traderIdInput },
+            { name: traderIdInput }
+          ]
         },
         select: { id: true }
       })
@@ -289,7 +292,7 @@ export async function authenticateUser(credentials: LoginCredentials): Promise<A
     if (passwordMatched.length > 1) {
       return {
         success: false,
-        error: 'Multiple accounts found. Please enter exact Trader Name.'
+        error: 'Multiple accounts found. Please enter exact Trader Name or Trader ID.'
       }
     }
 

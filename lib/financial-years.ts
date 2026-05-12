@@ -94,6 +94,38 @@ function isFinancialYearSchemaMismatch(error: unknown): boolean {
   return isPrismaSchemaMismatchError(error, ['FinancialYear'])
 }
 
+function isFinancialYearDataConversionError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as { code?: string; meta?: { modelName?: string } }
+  return candidate.code === 'P2023' && String(candidate.meta?.modelName || '') === 'FinancialYear'
+}
+
+async function normalizeLegacyFinancialYearDateValues(client: DbClient, traderId: string): Promise<void> {
+  await client.$executeRaw`
+    UPDATE "FinancialYear"
+    SET
+      "startDate" = CASE
+        WHEN length("startDate") = 10 THEN "startDate" || 'T00:00:00.000Z'
+        ELSE "startDate"
+      END,
+      "endDate" = CASE
+        WHEN length("endDate") = 10 THEN "endDate" || 'T00:00:00.000Z'
+        ELSE "endDate"
+      END,
+      "createdAt" = CASE
+        WHEN length("createdAt") = 19 AND instr("createdAt", 'T') = 0
+          THEN replace("createdAt", ' ', 'T') || '.000Z'
+        ELSE "createdAt"
+      END,
+      "updatedAt" = CASE
+        WHEN length("updatedAt") = 19 AND instr("updatedAt", 'T') = 0
+          THEN replace("updatedAt", ' ', 'T') || '.000Z'
+        ELSE "updatedAt"
+      END
+    WHERE "traderId" = ${traderId}
+  `
+}
+
 export function normalizeFinancialYearStatus(value: unknown): FinancialYearStatus {
   const normalized = String(value || '').trim().toLowerCase()
   if (normalized === 'closed' || normalized === 'locked') {
@@ -509,6 +541,7 @@ async function loadFinancialYearsForTrader(
   traderId: string,
   options?: {
     bootstrapIfMissing?: boolean
+    allowLegacyDateRepair?: boolean
   }
 ): Promise<FinancialYearLoadResult> {
   const normalizedTraderId = normalizeId(traderId)
@@ -540,6 +573,15 @@ async function loadFinancialYearsForTrader(
       schemaAvailable: true
     }
   } catch (error) {
+    if ((options?.allowLegacyDateRepair ?? true) && isFinancialYearDataConversionError(error)) {
+      await normalizeLegacyFinancialYearDateValues(client, normalizedTraderId)
+      clearFinancialYearCaches(normalizedTraderId)
+      return loadFinancialYearsForTrader(client, normalizedTraderId, {
+        bootstrapIfMissing: false,
+        allowLegacyDateRepair: false
+      })
+    }
+
     if (isFinancialYearSchemaMismatch(error)) {
       return {
         financialYears: [],
@@ -600,7 +642,12 @@ export async function getFinancialYearDateFilter(args: {
   const context = await getFinancialYearContext(args)
   const explicitDateFrom = parseDateInputAtBoundary(args.request.nextUrl.searchParams.get(dateFromParamName))
   const explicitDateTo = parseDateInputAtBoundary(args.request.nextUrl.searchParams.get(dateToParamName), true)
-  const shouldDefaultToFinancialYear = args.defaultToFinancialYear !== false
+  // Default to all-time unless financial year was explicitly selected via query/cookie
+  // or the caller explicitly opts in.
+  const shouldDefaultToFinancialYear =
+    args.defaultToFinancialYear === true ||
+    context.selectionSource === 'query' ||
+    context.selectionSource === 'cookie'
 
   return {
     ...context,
