@@ -50,6 +50,7 @@ type ReportType = 'main' | 'purchase' | 'sales'
 type StatusFilter = 'all' | 'paid' | 'partial' | 'unpaid'
 type ModeFilter = 'all' | 'cash' | 'online' | 'bank' | 'mixed' | 'none'
 type ModeBucket = Exclude<ModeFilter, 'all'>
+type PurchasePartyFilter = 'all' | 'farmer' | 'supplier'
 
 interface CompanyRecord {
   id: string
@@ -898,6 +899,7 @@ export default function ReportDashboard({
   const [dateTo, setDateTo] = useState(initialDateTo)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [paymentModeFilter, setPaymentModeFilter] = useState<ModeFilter>('all')
+  const [purchasePartyFilter, setPurchasePartyFilter] = useState<PurchasePartyFilter>('all')
   const [bankFilter, setBankFilter] = useState('all')
   const [searchTerm, setSearchTerm] = useState('')
   const [headerSearchTerm, setHeaderSearchTerm] = useState('')
@@ -1102,6 +1104,11 @@ export default function ReportDashboard({
     const query = searchTerm.trim().toLowerCase()
 
     return generatedRows.filter((row) => {
+      if (reportType === 'purchase' && purchasePartyFilter !== 'all') {
+        const rowPartyType = String(row.Party_Type || '').trim().toLowerCase()
+        if (rowPartyType !== purchasePartyFilter) return false
+      }
+
       if (statusFilter !== 'all' && row._status !== statusFilter) return false
 
       if (paymentModeFilter !== 'all') {
@@ -1130,7 +1137,7 @@ export default function ReportDashboard({
         String(row.Company_Name).toLowerCase().includes(query)
       )
     })
-  }, [generatedRows, statusFilter, paymentModeFilter, bankFilter, searchTerm])
+  }, [bankFilter, generatedRows, paymentModeFilter, purchasePartyFilter, reportType, searchTerm, statusFilter])
 
   const tableEmptyMessage = useMemo(() => {
     if (loading) return 'Generating report...'
@@ -1256,6 +1263,12 @@ export default function ReportDashboard({
       return
     }
 
+    const farmerOnlyRows = filteredRows.filter((row) => String(row.Party_Type || '').trim().toLowerCase() === 'farmer')
+    if (farmerOnlyRows.length === 0) {
+      setErrorMessage('Mandi CSV only exports regular farmer purchase bills. No farmer rows match current filters.')
+      return
+    }
+
     const header = [
       'Seller_Name',
       'Seller_Address',
@@ -1279,7 +1292,7 @@ export default function ReportDashboard({
       'ASFlag'
     ]
 
-    const rows = filteredRows.map((row) => [
+    const rows = farmerOnlyRows.map((row) => [
       String(row.Seller_Name || ''),
       String(row.Seller_Address || ''),
       String(row.SellerMob || ''),
@@ -1340,6 +1353,7 @@ export default function ReportDashboard({
   const clearOptionalFilters = () => {
     setStatusFilter('all')
     setPaymentModeFilter('all')
+    setPurchasePartyFilter('all')
     setBankFilter('all')
     setSearchTerm('')
   }
@@ -1353,7 +1367,7 @@ export default function ReportDashboard({
 
   const reportDescription =
     reportType === 'purchase'
-      ? 'See mandi-format purchase register data with farmer or supplier details, anubandh or reference values, bhugtan breakup, hammali, and pending payment tracking.'
+      ? 'See mandi-format purchase register data with farmer and supplier details. Mandi CSV export includes farmer purchase bills only.'
       : reportType === 'sales'
         ? 'See total sales, received amount, pending amount, and collection details.'
         : 'See purchase, sales, paid, received, and pending amounts in one place.'
@@ -1605,6 +1619,22 @@ export default function ReportDashboard({
                 </SelectContent>
               </Select>
             </div>
+
+            {reportType === 'purchase' ? (
+              <div className="space-y-2">
+                <Label>Purchase Type</Label>
+                <Select value={purchasePartyFilter} onValueChange={(value) => setPurchasePartyFilter(value as PurchasePartyFilter)}>
+                  <SelectTrigger className="rounded-2xl border-slate-200 bg-white">
+                    <SelectValue placeholder="All purchase types" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Purchases</SelectItem>
+                    <SelectItem value="farmer">Regular Purchase (Farmers)</SelectItem>
+                    <SelectItem value="supplier">Special Purchase (Suppliers)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
 
             <div className="space-y-2">
               <Label>Bank</Label>

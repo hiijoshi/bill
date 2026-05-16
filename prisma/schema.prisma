@@ -825,6 +825,7 @@ model MandiType {
   name        String
   description String?
   isActive    Boolean  @default(true)
+  defaultHammaliPerBag Float @default(7)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

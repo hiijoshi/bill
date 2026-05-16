@@ -62,6 +62,7 @@ interface FarmerOption {
 interface MandiType {
   id: string
   name: string
+  defaultHammaliPerBag?: number | null
 }
 
 interface AccountingHeadCharge {
@@ -95,6 +96,7 @@ export default function PurchaseEntryPage() {
 
   // Form state
   const [billDate, setBillDate] = useState('')
+  const [selectedFarmerId, setSelectedFarmerId] = useState('')
   const [farmerName, setFarmerName] = useState('')
   const [selectedMandiType, setSelectedMandiType] = useState('')
   const [farmerAddress, setFarmerAddress] = useState('')
@@ -109,7 +111,6 @@ export default function PurchaseEntryPage() {
   const [weight, setWeight] = useState('')
   const [rate, setRate] = useState('')
   const [payableAmount, setPayableAmount] = useState('')
-  const [manualTotalAmount, setManualTotalAmount] = useState('')
   const [paidAmount, setPaidAmount] = useState('')
   const [balance, setBalance] = useState('')
   const [paidAmountError, setPaidAmountError] = useState('')
@@ -150,9 +151,8 @@ export default function PurchaseEntryPage() {
       totalWeight: parseFloat(weight) || 0,
       totalBags: parseFloat(noOfBags) || 0
     })
-    const calculatedTotal = roundCurrency(tax.lineTotal + mandiChargePreview.totalChargeAmount)
-    return manualTotalAmount !== '' ? roundCurrency(parseFloat(manualTotalAmount) || 0) : calculatedTotal
-  }, [accountingHeads, manualTotalAmount, noOfBags, payableAmount, products, selectedMandiType, selectedProduct, weight])
+    return roundCurrency(tax.lineTotal + mandiChargePreview.totalChargeAmount)
+  }, [accountingHeads, noOfBags, payableAmount, products, selectedMandiType, selectedProduct, weight])
 
   const handlePaidAmountChange = (value: string) => {
     const normalized = toNonNegative(value)
@@ -314,27 +314,31 @@ export default function PurchaseEntryPage() {
   }, [fetchData])
 
   useEffect(() => {
-    const normalizedName = farmerName.trim().toLowerCase()
-    if (!normalizedName) return
-
-    const matchedFarmer = farmers.find((farmer) => String(farmer.name || '').trim().toLowerCase() === normalizedName)
+    if (!selectedFarmerId) return
+    const matchedFarmer = farmers.find((farmer) => farmer.id === selectedFarmerId)
     if (!matchedFarmer) return
-
+    setFarmerName(String(matchedFarmer.name || ''))
     setFarmerAddress(String(matchedFarmer.address || ''))
     setFarmerContact(String(matchedFarmer.phone1 || ''))
     setKrashakAnubandhNumber(String(matchedFarmer.krashakAnubandhNumber || ''))
     setSelectedMandiType(String(matchedFarmer.mandiTypeId || ''))
-  }, [farmerName, farmers])
+  }, [farmers, selectedFarmerId])
+
+  const selectedMandiTypeHammaliRate = useMemo(() => {
+    const mandiType = mandiTypes.find((row) => row.id === selectedMandiType)
+    const parsedRate = Number(mandiType?.defaultHammaliPerBag ?? 7)
+    return Number.isFinite(parsedRate) && parsedRate >= 0 ? parsedRate : 7
+  }, [mandiTypes, selectedMandiType])
 
   // Calculate hammali when noOfBags changes
   useEffect(() => {
     if (noOfBags) {
       const bags = parseFloat(noOfBags) || 0
-      setHammali((bags * 7).toString())
+      setHammali((bags * selectedMandiTypeHammaliRate).toString())
     } else {
       setHammali('')
     }
-  }, [noOfBags])
+  }, [noOfBags, selectedMandiTypeHammaliRate])
 
   // Calculate payable amount when weight or rate changes
   useEffect(() => {
@@ -432,6 +436,7 @@ export default function PurchaseEntryPage() {
         billNumber,
         billDate,
         farmerName,
+        farmerId: selectedFarmerId || null,
         mandiTypeId: selectedMandiType || null,
         farmerAddress,
         farmerContact,
@@ -530,7 +535,6 @@ export default function PurchaseEntryPage() {
     totalWeight: parseFloat(weight) || 0,
     totalBags: parseFloat(noOfBags) || 0
   })
-  const computedTotalWithMandi = roundCurrency(taxPreview.lineTotal + mandiChargePreview.totalChargeAmount)
   const finalTotalAmount = getCurrentFinalTotalValue()
 
   return (
@@ -573,11 +577,47 @@ export default function PurchaseEntryPage() {
 
                   {/* Farmer Name */}
                   <div>
+                    <Label htmlFor="existingFarmerSelect">Existing Farmer (Optional)</Label>
+                    <Select
+                      value={selectedFarmerId || '__new__'}
+                      onValueChange={(value) => {
+                        if (value === '__new__') {
+                          setSelectedFarmerId('')
+                          return
+                        }
+                        setSelectedFarmerId(value)
+                      }}
+                    >
+                      <SelectTrigger id="existingFarmerSelect">
+                        <SelectValue placeholder="Select existing farmer" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__new__">New Farmer / Manual Name</SelectItem>
+                        {farmers.map((farmer) => (
+                          <SelectItem key={farmer.id} value={farmer.id}>
+                            {farmer.name} {farmer.phone1 ? `(${farmer.phone1})` : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Farmer Name */}
+                  <div>
                     <Label htmlFor="farmerName">Farmer Name</Label>
                     <Input
                       id="farmerName"
                       value={farmerName}
-                      onChange={(e) => setFarmerName(e.target.value)}
+                      onChange={(e) => {
+                        const nextName = e.target.value
+                        setFarmerName(nextName)
+                        if (selectedFarmerId) {
+                          const selectedFarmer = farmers.find((farmer) => farmer.id === selectedFarmerId)
+                          if (!selectedFarmer || String(selectedFarmer.name || '') !== nextName) {
+                            setSelectedFarmerId('')
+                          }
+                        }
+                      }}
                       placeholder="Enter farmer name"
                       required
                     />
@@ -598,6 +638,9 @@ export default function PurchaseEntryPage() {
                         ))}
                       </SelectContent>
                     </Select>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Hammali rate: ₹{selectedMandiTypeHammaliRate.toFixed(2)} per bag
+                    </p>
                   </div>
 
                   {/* Farmer Address */}
@@ -791,19 +834,14 @@ export default function PurchaseEntryPage() {
                   </div>
 
                   <div>
-                    <Label htmlFor="manualTotalAmount">Final Invoice Total</Label>
+                    <Label htmlFor="finalTotalAmount">Final Invoice Total</Label>
                     <Input
-                      id="manualTotalAmount"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={manualTotalAmount}
-                      onChange={(e) => setManualTotalAmount(toNonNegative(e.target.value))}
-                      placeholder={computedTotalWithMandi.toFixed(2)}
+                      id="finalTotalAmount"
+                      value={finalTotalAmount.toFixed(2)}
+                      readOnly
+                      className="bg-gray-100"
+                      placeholder="Calculated automatically"
                     />
-                    <p className="mt-1 text-xs text-slate-500">
-                      Leave blank to keep the GST + mandi-charge calculated total. Enter a value only when the final bill total needs a manual override.
-                    </p>
                   </div>
 
                   {/* Paid Amount */}
@@ -889,9 +927,6 @@ export default function PurchaseEntryPage() {
                   </p>
                   <Button type="button" variant="outline" onClick={() => router.back()}>
                     Cancel
-                  </Button>
-                  <Button type="button" variant="outline" onClick={() => setManualTotalAmount('')} disabled={manualTotalAmount === ''}>
-                    Reset Total
                   </Button>
                   <Button type="button" variant="outline" disabled={submitting} onClick={() => void submitPurchase(true)}>
                     Save & Print

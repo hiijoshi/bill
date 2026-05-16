@@ -31,6 +31,7 @@ const purchaseCreateSchema = z.object({
   billNumber: z.union([z.string(), z.number()]).optional(),
   billNo: z.union([z.string(), z.number()]).optional(),
   billDate: z.string().min(1),
+  farmerId: z.string().optional().nullable(),
   farmerName: z.string().min(1),
   mandiTypeId: z.string().optional().nullable(),
   farmerAddress: z.string().optional(),
@@ -207,6 +208,7 @@ export async function POST(request: NextRequest) {
       billNumber,
       billNo,
       billDate,
+      farmerId,
       farmerName,
       farmerAddress,
       farmerContact,
@@ -260,6 +262,11 @@ export async function POST(request: NextRequest) {
     const parsedWeight = parseRequiredNonNegative(weight, 'Weight')
     if (parsedWeight instanceof NextResponse) return parsedWeight
 
+    const normalizedFarmerName = String(farmerName || '').trim()
+    if (!normalizedFarmerName) {
+      return NextResponse.json({ error: 'Farmer name is required' }, { status: 400 })
+    }
+
     const parsedRate = parseRequiredNonNegative(rate, 'Rate')
     if (parsedRate instanceof NextResponse) return parsedRate
 
@@ -294,24 +301,19 @@ export async function POST(request: NextRequest) {
         throw new Error('Product not found')
       }
 
-      let farmer = await tx.farmer.findFirst({
-        where: {
-          companyId,
-          name: farmerName
-        }
-      })
+      const normalizedFarmerId = normalizeOptionalId(farmerId)
+      let farmer = null as Awaited<ReturnType<typeof tx.farmer.findFirst>>
 
-      if (!farmer) {
-        farmer = await tx.farmer.create({
-          data: {
-            companyId,
-            name: farmerName,
-            address: farmerAddress || null,
-            phone1: farmerPhone,
-            krashakAnubandhNumber: krashakAnubandhNumber || null
+      if (normalizedFarmerId) {
+        farmer = await tx.farmer.findFirst({
+          where: {
+            id: normalizedFarmerId,
+            companyId
           }
         })
-      } else {
+        if (!farmer) {
+          throw new Error('Selected farmer was not found for this company')
+        }
         farmer = await tx.farmer.update({
           where: { id: farmer.id },
           data: {
@@ -320,6 +322,44 @@ export async function POST(request: NextRequest) {
             krashakAnubandhNumber: krashakAnubandhNumber || farmer.krashakAnubandhNumber
           }
         })
+      } else {
+        const matchedFarmers = await tx.farmer.findMany({
+          where: {
+            companyId,
+            name: normalizedFarmerName
+          },
+          take: 2
+        })
+
+        if (matchedFarmers.length > 1) {
+          throw new Error('Multiple farmers found with this name. Please select an existing farmer from the list.')
+        }
+
+        const matchedFarmer = matchedFarmers[0]
+        if (!matchedFarmer) {
+          farmer = await tx.farmer.create({
+            data: {
+              companyId,
+              name: normalizedFarmerName,
+              address: farmerAddress || null,
+              phone1: farmerPhone,
+              krashakAnubandhNumber: krashakAnubandhNumber || null
+            }
+          })
+        } else {
+          farmer = await tx.farmer.update({
+            where: { id: matchedFarmer.id },
+            data: {
+              address: farmerAddress || matchedFarmer.address,
+              phone1: farmerPhone || matchedFarmer.phone1,
+              krashakAnubandhNumber: krashakAnubandhNumber || matchedFarmer.krashakAnubandhNumber
+            }
+          })
+        }
+      }
+
+      if (!farmer) {
+        throw new Error('Failed to resolve farmer')
       }
 
       if (hasMandiTypeField) {
@@ -357,7 +397,7 @@ export async function POST(request: NextRequest) {
           billNo: normalizedBillNumber,
           billDate: normalizedBillDate,
           farmerId: farmer.id,
-          farmerNameSnapshot: farmerName,
+          farmerNameSnapshot: normalizedFarmerName,
           farmerAddressSnapshot: farmerAddress || null,
           farmerContactSnapshot: farmerPhone || null,
           krashakAnubandhSnapshot: krashakAnubandhNumber || null,
@@ -441,6 +481,8 @@ export async function POST(request: NextRequest) {
       message.includes('cannot exceed') ||
       message.includes('cannot be less than') ||
       message.includes('recorded payment history') ||
+      message.includes('Multiple farmers found') ||
+      message.includes('Selected farmer was not found') ||
       message.includes('cancelled')
         ? 400
         : message.includes('not found')
@@ -742,6 +784,7 @@ export async function PUT(request: NextRequest) {
       billNumber,
       billNo,
       billDate,
+      farmerId,
       farmerName,
       farmerAddress,
       farmerContact,
@@ -794,6 +837,11 @@ export async function PUT(request: NextRequest) {
 
     const parsedWeight = parseRequiredNonNegative(weight, 'Weight')
     if (parsedWeight instanceof NextResponse) return parsedWeight
+
+    const normalizedFarmerName = String(farmerName || '').trim()
+    if (!normalizedFarmerName) {
+      return NextResponse.json({ error: 'Farmer name is required' }, { status: 400 })
+    }
 
     const parsedRate = parseRequiredNonNegative(rate, 'Rate')
     if (parsedRate instanceof NextResponse) return parsedRate
@@ -853,24 +901,19 @@ export async function PUT(request: NextRequest) {
         throw new Error('Product not found')
       }
 
-      let farmer = await tx.farmer.findFirst({
-        where: {
-          companyId,
-          name: farmerName
-        }
-      })
+      const normalizedFarmerId = normalizeOptionalId(farmerId)
+      let farmer = null as Awaited<ReturnType<typeof tx.farmer.findFirst>>
 
-      if (!farmer) {
-        farmer = await tx.farmer.create({
-          data: {
-            companyId,
-            name: farmerName,
-            address: farmerAddress || null,
-            phone1: farmerPhone,
-            krashakAnubandhNumber: krashakAnubandhNumber || null
+      if (normalizedFarmerId) {
+        farmer = await tx.farmer.findFirst({
+          where: {
+            id: normalizedFarmerId,
+            companyId
           }
         })
-      } else {
+        if (!farmer) {
+          throw new Error('Selected farmer was not found for this company')
+        }
         farmer = await tx.farmer.update({
           where: { id: farmer.id },
           data: {
@@ -879,6 +922,44 @@ export async function PUT(request: NextRequest) {
             krashakAnubandhNumber: krashakAnubandhNumber || farmer.krashakAnubandhNumber
           }
         })
+      } else {
+        const matchedFarmers = await tx.farmer.findMany({
+          where: {
+            companyId,
+            name: normalizedFarmerName
+          },
+          take: 2
+        })
+
+        if (matchedFarmers.length > 1) {
+          throw new Error('Multiple farmers found with this name. Please select an existing farmer from the list.')
+        }
+
+        const matchedFarmer = matchedFarmers[0]
+        if (!matchedFarmer) {
+          farmer = await tx.farmer.create({
+            data: {
+              companyId,
+              name: normalizedFarmerName,
+              address: farmerAddress || null,
+              phone1: farmerPhone,
+              krashakAnubandhNumber: krashakAnubandhNumber || null
+            }
+          })
+        } else {
+          farmer = await tx.farmer.update({
+            where: { id: matchedFarmer.id },
+            data: {
+              address: farmerAddress || matchedFarmer.address,
+              phone1: farmerPhone || matchedFarmer.phone1,
+              krashakAnubandhNumber: krashakAnubandhNumber || matchedFarmer.krashakAnubandhNumber
+            }
+          })
+        }
+      }
+
+      if (!farmer) {
+        throw new Error('Failed to resolve farmer')
       }
 
       if (hasMandiTypeField) {
@@ -928,7 +1009,7 @@ export async function PUT(request: NextRequest) {
           billNo: normalizedBillNumber,
           billDate: normalizedBillDate,
           farmerId: farmer.id,
-          farmerNameSnapshot: farmerName,
+          farmerNameSnapshot: normalizedFarmerName,
           farmerAddressSnapshot: farmerAddress || null,
           farmerContactSnapshot: farmerPhone || null,
           krashakAnubandhSnapshot: krashakAnubandhNumber || null,
@@ -1053,7 +1134,9 @@ export async function PUT(request: NextRequest) {
     const status =
       message.includes('cannot exceed') ||
       message.includes('cannot be less than') ||
-      message.includes('recorded payment history')
+      message.includes('recorded payment history') ||
+      message.includes('Multiple farmers found') ||
+      message.includes('Selected farmer was not found')
         ? 400
         : message.includes('not found')
           ? 404

@@ -18,6 +18,7 @@ type MandiTypeRow = {
   name: string
   description?: string | null
   isActive: boolean
+  defaultHammaliPerBag?: number | null
   linkedPartyCount?: number
   linkedFarmerCount?: number
   linkedAccountingHeadCount?: number
@@ -49,7 +50,8 @@ export default function MandiTypeMasterPage() {
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    isActive: true
+    isActive: true,
+    defaultHammaliPerBag: '7'
   })
 
   const fetchPermissions = useCallback(async (resolvedCompanyId: string) => {
@@ -134,13 +136,13 @@ export default function MandiTypeMasterPage() {
   }, [fetchPermissions, fetchRows])
 
   const resetForm = () => {
-    setFormData({ name: '', description: '', isActive: true })
+    setFormData({ name: '', description: '', isActive: true, defaultHammaliPerBag: '7' })
     setEditingRow(null)
     setIsFormOpen(false)
   }
 
   const openCreate = () => {
-    setFormData({ name: '', description: '', isActive: true })
+    setFormData({ name: '', description: '', isActive: true, defaultHammaliPerBag: '7' })
     setEditingRow(null)
     setIsFormOpen(true)
   }
@@ -216,7 +218,8 @@ export default function MandiTypeMasterPage() {
     setFormData({
       name: row.name,
       description: row.description || '',
-      isActive: row.isActive !== false
+      isActive: row.isActive !== false,
+      defaultHammaliPerBag: String(Number(row.defaultHammaliPerBag ?? 7))
     })
     setIsFormOpen(true)
   }
@@ -322,6 +325,20 @@ export default function MandiTypeMasterPage() {
                         placeholder="Optional notes about this mandi rule group"
                       />
                     </div>
+                    <div>
+                      <Label htmlFor="mandiTypeHammali">Default Hammali / Bag (₹)</Label>
+                      <Input
+                        id="mandiTypeHammali"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={formData.defaultHammaliPerBag}
+                        onChange={(event) =>
+                          setFormData((current) => ({ ...current, defaultHammaliPerBag: event.target.value }))
+                        }
+                        placeholder="7"
+                      />
+                    </div>
                   </div>
 
                   <label className="flex items-center gap-2 text-sm font-medium text-slate-700" htmlFor="mandiTypeIsActive">
@@ -367,6 +384,7 @@ export default function MandiTypeMasterPage() {
                       <TableHead>Name</TableHead>
                       <TableHead>Description</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Hammali / Bag</TableHead>
                       <TableHead>Linked Usage</TableHead>
                       <TableHead>Updated</TableHead>
                       <TableHead>Actions</TableHead>
@@ -375,13 +393,13 @@ export default function MandiTypeMasterPage() {
                   <TableBody>
                     {!canRead ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="text-center text-slate-500">
+                        <TableCell colSpan={7} className="text-center text-slate-500">
                           No access to view mandi types.
                         </TableCell>
                       </TableRow>
                     ) : filteredRows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="text-center text-slate-500">
+                        <TableCell colSpan={7} className="text-center text-slate-500">
                           No mandi types found.
                         </TableCell>
                       </TableRow>
@@ -391,6 +409,7 @@ export default function MandiTypeMasterPage() {
                           <TableCell className="font-medium">{row.name}</TableCell>
                           <TableCell>{row.description || '-'}</TableCell>
                           <TableCell>{row.isActive ? 'Active' : 'Inactive'}</TableCell>
+                          <TableCell>₹{Number(row.defaultHammaliPerBag ?? 7).toFixed(2)}</TableCell>
                           <TableCell>{formatLinkageSummary(row)}</TableCell>
                           <TableCell>{new Date(row.updatedAt).toLocaleDateString()}</TableCell>
                           <TableCell>

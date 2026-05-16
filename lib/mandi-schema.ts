@@ -24,6 +24,7 @@ async function applyMandiSchema(prisma: MandiSchemaClient) {
         "name" TEXT NOT NULL,
         "description" TEXT,
         "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "defaultHammaliPerBag" REAL NOT NULL DEFAULT 7,
         "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY ("companyId") REFERENCES "Company" ("id") ON DELETE CASCADE ON UPDATE CASCADE
@@ -128,6 +129,17 @@ async function applyMandiSchema(prisma: MandiSchemaClient) {
 
   for (const statement of statements) {
     await prisma.$executeRawUnsafe(statement)
+  }
+
+  try {
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE "MandiType" ADD COLUMN "defaultHammaliPerBag" REAL NOT NULL DEFAULT 7'
+    )
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : ''
+    if (!message.includes('duplicate column name')) {
+      throw error
+    }
   }
 }
 

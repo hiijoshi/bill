@@ -46,14 +46,25 @@ function getCompanyIdFromAuthenticatedRequest(request: NextRequest): string {
 const postSchema = z.object({
   name: z.string().trim().min(1).optional(),
   description: z.string().optional().nullable(),
-  isActive: z.boolean().optional()
+  isActive: z.boolean().optional(),
+  defaultHammaliPerBag: z.union([z.number(), z.string()]).optional().nullable()
 }).strict()
 
 const putSchema = z.object({
   name: z.string().trim().min(1),
   description: z.string().optional().nullable(),
-  isActive: z.boolean().optional()
+  isActive: z.boolean().optional(),
+  defaultHammaliPerBag: z.union([z.number(), z.string()]).optional().nullable()
 }).strict()
+
+function parseDefaultHammaliPerBag(raw: unknown): number {
+  if (raw === undefined || raw === null || raw === '') return 7
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error('Default hammali per bag must be a non-negative number')
+  }
+  return parsed
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -90,7 +101,8 @@ export async function GET(request: NextRequest) {
       })
     )
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
+    const message = error instanceof Error ? error.message : 'Internal server error'
+    return NextResponse.json({ error: message }, { status: message.includes('must be a non-negative number') ? 400 : 500 })
   }
 }
 
@@ -127,12 +139,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Mandi type name already exists' }, { status: 400 })
     }
 
+    const defaultHammaliPerBag = parseDefaultHammaliPerBag(parsed.data.defaultHammaliPerBag)
+
     const mandiType = await prisma.mandiType.create({
       data: {
         companyId,
         name,
         description: description || null,
-        isActive: parsed.data.isActive !== false
+        isActive: parsed.data.isActive !== false,
+        defaultHammaliPerBag
       }
     })
 
@@ -142,7 +157,8 @@ export async function POST(request: NextRequest) {
       mandiType
     })
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
+    const message = error instanceof Error ? error.message : 'Internal server error'
+    return NextResponse.json({ error: message }, { status: message.includes('must be a non-negative number') ? 400 : 500 })
   }
 }
 
@@ -179,12 +195,15 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Mandi type name already exists' }, { status: 400 })
     }
 
+    const defaultHammaliPerBag = parseDefaultHammaliPerBag(parsed.data.defaultHammaliPerBag)
+
     const updated = await prisma.mandiType.updateMany({
       where: { id, companyId },
       data: {
         name: parsed.data.name.trim(),
         description: cleanString(parsed.data.description) || null,
-        isActive: parsed.data.isActive !== false
+        isActive: parsed.data.isActive !== false,
+        defaultHammaliPerBag
       }
     })
 

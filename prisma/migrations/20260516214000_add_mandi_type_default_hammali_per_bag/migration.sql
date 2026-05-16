@@ -1,0 +1,1 @@
+ALTER TABLE "MandiType" ADD COLUMN "defaultHammaliPerBag" REAL NOT NULL DEFAULT 7;
