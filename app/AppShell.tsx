@@ -44,6 +44,7 @@ export default function AppShell({
       const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))
       return match ? decodeURIComponent(match[1]) : null
     }
+    const refreshInFlight = new Map<'app' | 'super_admin', Promise<boolean>>()
 
     const shouldInjectCompanyId = (pathname: string): boolean => {
       if (!pathname.startsWith('/api/')) return false
@@ -75,15 +76,33 @@ export default function AppShell({
     }
 
     const refreshToken = async (useSuperAdminSession: boolean) => {
-      try {
-        const response = await fetch(useSuperAdminSession ? '/api/super-admin/refresh' : '/api/auth/refresh', {
-          method: 'POST'
-        })
-        if (response.ok) {
-          window.dispatchEvent(new Event('sessionRefreshed'))
-          return true
+      const key: 'app' | 'super_admin' = useSuperAdminSession ? 'super_admin' : 'app'
+      const pending = refreshInFlight.get(key)
+      if (pending) {
+        return pending
+      }
+
+      const attempt = (async () => {
+        try {
+          const response = await fetch(useSuperAdminSession ? '/api/super-admin/refresh' : '/api/auth/refresh', {
+            method: 'POST'
+          })
+          if (response.ok) {
+            window.dispatchEvent(new Event('sessionRefreshed'))
+            return true
+          }
+          return false
+        } catch {
+          return false
+        } finally {
+          refreshInFlight.delete(key)
         }
-        return false
+      })()
+
+      refreshInFlight.set(key, attempt)
+
+      try {
+        return await attempt
       } catch {
         return false
       }

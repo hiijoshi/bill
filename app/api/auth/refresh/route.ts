@@ -10,16 +10,33 @@ import { isSupabaseConfigured } from '@/lib/supabase/client'
 import { getSupabaseClaimsFromRequest, hasSupabaseAppContext } from '@/lib/supabase/auth-bridge'
 
 const refreshRateLimit = new Map<string, { count: number; resetTime: number }>()
-const ENABLE_REFRESH_RATE_LIMIT = env.NODE_ENV === 'production'
+const ENABLE_REFRESH_RATE_LIMIT = (() => {
+  const configured = env.AUTH_REFRESH_RATE_LIMIT_ENABLED
+  if (configured === undefined) return env.NODE_ENV === 'production'
+  const normalized = configured.trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  return env.NODE_ENV === 'production'
+})()
+const AUTH_REFRESH_RATE_LIMIT_WINDOW_MS = (() => {
+  const parsed = Number.parseInt(String(env.AUTH_REFRESH_RATE_LIMIT_WINDOW_MS || ''), 10)
+  if (!Number.isFinite(parsed)) return 5 * 60 * 1000
+  return Math.max(60_000, Math.min(60 * 60 * 1000, parsed))
+})()
+const AUTH_REFRESH_RATE_LIMIT_MAX_REQUESTS = (() => {
+  const parsed = Number.parseInt(String(env.AUTH_REFRESH_RATE_LIMIT_MAX_REQUESTS || ''), 10)
+  if (!Number.isFinite(parsed)) return 240
+  return Math.max(10, Math.min(5000, parsed))
+})()
 
 function isRefreshAllowed(ip: string): { allowed: boolean; retryAfter?: number } {
   const now = Date.now()
   let entry = refreshRateLimit.get(ip)
   if (!entry || now > entry.resetTime) {
-    entry = { count: 0, resetTime: now + 5 * 60 * 1000 }
+    entry = { count: 0, resetTime: now + AUTH_REFRESH_RATE_LIMIT_WINDOW_MS }
     refreshRateLimit.set(ip, entry)
   }
-  if (entry.count >= 30) {
+  if (entry.count >= AUTH_REFRESH_RATE_LIMIT_MAX_REQUESTS) {
     return { allowed: false, retryAfter: Math.ceil((entry.resetTime - now) / 1000) }
   }
   entry.count += 1

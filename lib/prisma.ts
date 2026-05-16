@@ -7,7 +7,7 @@ const globalForPrisma = globalThis as unknown as {
 }
 
 function createPrismaClient() {
-  return new PrismaClient({
+  const client = new PrismaClient({
     datasourceUrl: env.DATABASE_URL,
     log: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
     transactionOptions: {
@@ -15,6 +15,14 @@ function createPrismaClient() {
       timeout: 10000
     }
   })
+
+  // SQLite tuning for better multi-user behavior on smaller servers.
+  if ((env.DATABASE_URL || '').startsWith('file:')) {
+    void client.$queryRawUnsafe('PRAGMA busy_timeout = 5000').catch(() => {})
+    void client.$queryRawUnsafe('PRAGMA foreign_keys = ON').catch(() => {})
+  }
+
+  return client
 }
 
 export const prisma = globalForPrisma.prisma ?? createPrismaClient()

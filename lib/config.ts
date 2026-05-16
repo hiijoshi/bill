@@ -43,7 +43,16 @@ const envSchema = z.object({
   LOG_SERVICE_URL: z.string().optional(),
   LOG_SERVICE_TOKEN: z.string().optional(),
   SUPER_ADMIN_REMOTE_ACCESS: z.string().optional(),
-  REDIS_URL: z.string().optional()
+  REDIS_URL: z.string().optional(),
+  AUTH_BRUTE_FORCE_ENABLED: z.string().optional(),
+  AUTH_LOGIN_RATE_LIMIT_ENABLED: z.string().optional(),
+  AUTH_LOGIN_RATE_LIMIT_WINDOW_MS: z.string().optional(),
+  AUTH_LOGIN_RATE_LIMIT_MAX_REQUESTS: z.string().optional(),
+  AUTH_ACCOUNT_LOCKOUT_ENABLED: z.string().optional(),
+  AUTH_ACCOUNT_LOCKOUT_MAX_ATTEMPTS: z.string().optional(),
+  AUTH_REFRESH_RATE_LIMIT_ENABLED: z.string().optional(),
+  AUTH_REFRESH_RATE_LIMIT_WINDOW_MS: z.string().optional(),
+  AUTH_REFRESH_RATE_LIMIT_MAX_REQUESTS: z.string().optional()
 }).superRefine((value, ctx) => {
   const databaseUrl = normalizeString(value.DATABASE_URL)
   const allowedOrigins = normalizeString(value.ALLOWED_ORIGINS)

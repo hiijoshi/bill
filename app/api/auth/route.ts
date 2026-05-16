@@ -22,6 +22,27 @@ const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
 const accountLockoutStore = new Map<string, { count: number; lockedUntil: number }>()
 const isDev = env.NODE_ENV === 'development'
 
+function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback
+  const normalized = String(value).trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  return fallback
+}
+
+function parsePositiveIntEnv(value: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(String(value || ''), 10)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(min, Math.min(max, parsed))
+}
+
+const ENABLE_BRUTE_FORCE_PROTECTION = parseBooleanEnv(env.AUTH_BRUTE_FORCE_ENABLED, !isDev)
+const ENABLE_LOGIN_RATE_LIMIT = parseBooleanEnv(env.AUTH_LOGIN_RATE_LIMIT_ENABLED, !isDev)
+const LOGIN_RATE_LIMIT_WINDOW_MS = parsePositiveIntEnv(env.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000, 60_000, 60 * 60 * 1000)
+const LOGIN_RATE_LIMIT_MAX_REQUESTS = parsePositiveIntEnv(env.AUTH_LOGIN_RATE_LIMIT_MAX_REQUESTS, 60, 5, 2000)
+const ENABLE_ACCOUNT_LOCKOUT = parseBooleanEnv(env.AUTH_ACCOUNT_LOCKOUT_ENABLED, !isDev)
+const ACCOUNT_LOCKOUT_MAX_ATTEMPTS = parsePositiveIntEnv(env.AUTH_ACCOUNT_LOCKOUT_MAX_ATTEMPTS, 12, 3, 200)
+
 async function checkRateLimit(identifier: string, windowMs: number, maxRequests: number) {
   const now = Date.now()
   
@@ -156,7 +177,7 @@ export async function POST(request: NextRequest) {
   const userAgent = request.headers.get('user-agent') || 'unknown'
 
   // Enhanced brute force protection
-  const bruteForceCheck = isDev
+  const bruteForceCheck = !ENABLE_BRUTE_FORCE_PROTECTION
     ? { blocked: false, attemptCount: 0, reason: '', retryAfter: 0 }
     : checkBruteForce(request)
   if (bruteForceCheck.blocked) {
@@ -186,9 +207,9 @@ export async function POST(request: NextRequest) {
   // Rate limiting
   const identifier = ipAddress
   
-  const rateLimitResult = isDev
+  const rateLimitResult = !ENABLE_LOGIN_RATE_LIMIT
     ? { blocked: false, resetIn: 0 }
-    : await checkRateLimit(identifier, 15 * 60 * 1000, 8) // 8 requests per 15 minutes
+    : await checkRateLimit(identifier, LOGIN_RATE_LIMIT_WINDOW_MS, LOGIN_RATE_LIMIT_MAX_REQUESTS)
   
   if (rateLimitResult.blocked) {
     await auditLogger.logSecurityEvent(
@@ -249,7 +270,7 @@ export async function POST(request: NextRequest) {
 
     const accountKey = `${(traderId || '').toLowerCase()}:${userId.toLowerCase()}`
     const now = Date.now()
-    const accountState = isDev ? null : accountLockoutStore.get(accountKey)
+    const accountState = ENABLE_ACCOUNT_LOCKOUT ? accountLockoutStore.get(accountKey) : null
     if (accountState && accountState.lockedUntil > now) {
       const retryAfter = Math.ceil((accountState.lockedUntil - now) / 1000)
       return NextResponse.json(
@@ -317,11 +338,11 @@ export async function POST(request: NextRequest) {
         authResult.error
       )
       
-      if (!isDev) {
+      if (ENABLE_ACCOUNT_LOCKOUT) {
         const failed = accountLockoutStore.get(accountKey) || { count: 0, lockedUntil: 0 }
         failed.count += 1
-        if (failed.count >= 8) {
-          const minutes = Math.min(30, 2 ** Math.min(failed.count - 8, 4))
+        if (failed.count >= ACCOUNT_LOCKOUT_MAX_ATTEMPTS) {
+          const minutes = Math.min(30, 2 ** Math.min(failed.count - ACCOUNT_LOCKOUT_MAX_ATTEMPTS, 4))
           failed.lockedUntil = Date.now() + minutes * 60 * 1000
         }
         accountLockoutStore.set(accountKey, failed)
@@ -448,7 +469,7 @@ export async function POST(request: NextRequest) {
         userAgent
       )
 
-      if (!isDev) {
+      if (ENABLE_ACCOUNT_LOCKOUT) {
         accountLockoutStore.delete(accountKey)
       }
 
@@ -469,7 +490,7 @@ export async function POST(request: NextRequest) {
       userAgent
     )
 
-    if (!isDev) {
+    if (ENABLE_ACCOUNT_LOCKOUT) {
       accountLockoutStore.delete(accountKey)
     }
 
