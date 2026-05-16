@@ -1,7 +1,7 @@
 'use client'
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { Building2, CalendarRange, Layers3, LogOut, Menu, ShieldCheck, User } from 'lucide-react'
 import Sidebar from './Sidebar'
 import HeaderAccountPanel from '@/components/account/HeaderAccountPanel'
@@ -93,6 +93,7 @@ export default function DashboardLayout({
   })
   const { profile, container, shellPadding, topBarHeight } = usePlatformClasses()
   const router = useRouter()
+  const pathname = usePathname()
 
   const loadShellContext = useCallback(async (force = false) => {
     try {
@@ -320,6 +321,65 @@ export default function DashboardLayout({
   }, [profile])
   const densityLabel = profile.density === 'compact' ? 'Compact' : 'Comfort'
 
+  const buildCompanyScopedPath = useCallback((targetPath: string) => {
+    const normalizedCompanyId = String(resolvedCompanyId || '').trim()
+    if (!normalizedCompanyId) return targetPath
+    const separator = targetPath.includes('?') ? '&' : '?'
+    return `${targetPath}${separator}companyId=${encodeURIComponent(normalizedCompanyId)}`
+  }, [resolvedCompanyId])
+
+  const shouldIgnoreGlobalShortcut = useCallback(() => {
+    const normalizedPath = String(pathname || '').toLowerCase()
+    return (
+      normalizedPath.startsWith('/purchase/entry') ||
+      normalizedPath.startsWith('/purchase/special-entry') ||
+      normalizedPath.startsWith('/sales/entry') ||
+      normalizedPath.startsWith('/purchase/edit') ||
+      normalizedPath.startsWith('/sales/edit')
+    )
+  }, [pathname])
+
+  useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false
+      const tagName = target.tagName.toLowerCase()
+      if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return true
+      if (target.isContentEditable) return true
+      return Boolean(target.closest('[contenteditable="true"], [role="textbox"]'))
+    }
+
+    const handleGlobalShortcuts = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
+      if (!(event.ctrlKey || event.metaKey)) return
+      if (event.altKey) return
+      if (isEditableTarget(event.target)) return
+      if (shouldIgnoreGlobalShortcut()) return
+
+      const key = event.key.toLowerCase()
+      if (key === 'p' && !event.shiftKey) {
+        event.preventDefault()
+        router.push(buildCompanyScopedPath('/purchase/entry'))
+        return
+      }
+
+      if (key === 's' && event.shiftKey) {
+        event.preventDefault()
+        router.push(buildCompanyScopedPath('/purchase/special-entry'))
+        return
+      }
+
+      if (key === 's' && !event.shiftKey) {
+        event.preventDefault()
+        router.push(buildCompanyScopedPath('/sales/entry'))
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalShortcuts)
+    return () => {
+      window.removeEventListener('keydown', handleGlobalShortcuts)
+    }
+  }, [buildCompanyScopedPath, router, shouldIgnoreGlobalShortcut])
+
   const handleFinancialYearSwitch = async (nextFinancialYearId: string | null) => {
     const normalizedId = String(nextFinancialYearId || '').trim() || null
     const currentFinancialYearId = String(financialYear?.id || '').trim() || null
@@ -507,6 +567,15 @@ export default function DashboardLayout({
           <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
             <div className={`${container} py-4 md:py-5`}>
               {children}
+            </div>
+            <div className={`${container} pb-4`}>
+              <div className="rounded-2xl border border-white/60 bg-white/65 px-4 py-2 text-xs text-slate-600 shadow-sm">
+                <span className="font-medium text-slate-700">Shortcuts:</span>{' '}
+                <span className="ml-1">Ctrl / Cmd + P = Purchase Entry</span>{' '}
+                <span className="ml-2">Ctrl / Cmd + Shift + S = Special Purchase Entry</span>{' '}
+                <span className="ml-2">Ctrl / Cmd + S = Sales Entry</span>{' '}
+                <span className="ml-2 text-slate-500">(Disabled while typing)</span>
+              </div>
             </div>
           </main>
         </div>
