@@ -124,12 +124,15 @@ export async function GET(request: NextRequest) {
     })
     const openingCutoff = financialYearFilter.dateFrom
     const asOfDate = financialYearFilter.dateTo
+    const requestedType = searchParams.get('type')
+    const partyTypeFilter = requestedType === 'buyer' || requestedType === 'farmer' ? requestedType : undefined
 
     const pagination = parsePaginationParams(searchParams, { defaultPageSize: 50, maxPageSize: 200 })
 
     // Create cache key that includes all parameters affecting the result
     const cacheKey = makeServerCacheKey('parties', [
       companyId,
+      partyTypeFilter || 'all',
       openingCutoff?.toISOString(),
       asOfDate?.toISOString(),
       pagination.search,
@@ -138,9 +141,13 @@ export async function GET(request: NextRequest) {
       pagination.enabled
     ])
 
-    return getOrSetServerCache(cacheKey, PARTIES_CACHE_TTL_MS, async () => {
+    const cachedPayload = await getOrSetServerCache<{
+      data: Array<Record<string, unknown>>
+      meta?: ReturnType<typeof buildPaginationMeta>
+    }>(cacheKey, PARTIES_CACHE_TTL_MS, async () => {
       const where = {
         companyId,
+        ...(partyTypeFilter ? { type: partyTypeFilter } : {}),
         ...(pagination.search
           ? {
               OR: [
@@ -343,14 +350,22 @@ export async function GET(request: NextRequest) {
       })
 
       if (pagination.enabled) {
-        return NextResponse.json({
+        return {
           data: enrichedParties,
           meta: buildPaginationMeta(total, pagination)
-        })
+        }
       }
 
-      return NextResponse.json(enrichedParties)
+      return {
+        data: enrichedParties
+      }
     })
+
+    if (pagination.enabled) {
+      return NextResponse.json(cachedPayload)
+    }
+
+    return NextResponse.json(cachedPayload.data)
   } catch (error) {
     if (error instanceof FinancialYearValidationError) {
       return NextResponse.json({ error: error.message }, { status: error.statusCode })

@@ -51,6 +51,17 @@ type ProfileSettingsProps = {
   pageTitle?: string
   breadcrumbRoot?: string
   description?: string
+  enableTwoFactorControls?: boolean
+  twoFactorEndpoint?: string
+}
+
+type TwoFactorStatusPayload = {
+  twoFactorEnabled: boolean
+  hasSecret: boolean
+  qrCode: string | null
+  otpauthUrl: string | null
+  requiresVerification?: boolean
+  message?: string
 }
 
 const sharedInputClassName =
@@ -253,6 +264,8 @@ export default function ProfileSettings({
   pageTitle = 'Profile Settings',
   breadcrumbRoot = 'Dashboard',
   description = 'Manage your business identity, workspace details, and password security from one professional settings page.',
+  enableTwoFactorControls = false,
+  twoFactorEndpoint = '/api/super-admin/profile/2fa'
 }: ProfileSettingsProps) {
   const initialNameParts = splitName(initialUser?.name || null)
   const [user, setUser] = useState<SelfProfileUser | null>(initialUser)
@@ -267,6 +280,10 @@ export default function ProfileSettings({
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isSavingProfile, setIsSavingProfile] = useState(false)
   const [isSavingPassword, setIsSavingPassword] = useState(false)
+  const [twoFactorStatus, setTwoFactorStatus] = useState<TwoFactorStatusPayload | null>(null)
+  const [isLoadingTwoFactor, setIsLoadingTwoFactor] = useState(false)
+  const [isSavingTwoFactor, setIsSavingTwoFactor] = useState(false)
+  const [twoFactorToken, setTwoFactorToken] = useState('')
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
   const [rememberAvatarPreview, setRememberAvatarPreview] = useState(false)
   const avatarInputRef = useRef<HTMLInputElement | null>(null)
@@ -385,6 +402,14 @@ export default function ProfileSettings({
   const unsavedCount = Number(hasProfileChanges) + Number(hasPasswordChanges)
   const email = user ? deriveEmail(user.userId) : ''
   const roleLabel = formatRole(user?.role || null)
+  const isSuperAdmin = (user?.role || '').toLowerCase() === 'super_admin'
+  const canManageTwoFactor = enableTwoFactorControls && isSuperAdmin
+  const isTwoFactorPending = Boolean(twoFactorStatus?.hasSecret && !twoFactorStatus?.twoFactorEnabled)
+  const twoFactorStateLabel = twoFactorStatus?.twoFactorEnabled
+    ? 'ON'
+    : isTwoFactorPending
+      ? 'SETUP'
+      : 'OFF'
   const department = deriveDepartment(user)
   const jobTitle = deriveJobTitle(user)
   const profileCompletion = useMemo(() => {
@@ -408,6 +433,33 @@ export default function ProfileSettings({
       : user?.traderName
         ? `${user.traderName} multi-company access`
         : 'Workspace access not assigned'
+
+  const loadTwoFactorStatus = useCallback(async () => {
+    if (!canManageTwoFactor) return
+
+    setIsLoadingTwoFactor(true)
+    try {
+      const response = await fetch(twoFactorEndpoint, { cache: 'no-store' })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Unable to load 2FA settings')
+      }
+      setTwoFactorStatus(payload as TwoFactorStatusPayload)
+    } catch (twoFactorError) {
+      showToast(
+        'error',
+        'Unable to load 2FA settings',
+        twoFactorError instanceof Error ? twoFactorError.message : 'Please try again.'
+      )
+    } finally {
+      setIsLoadingTwoFactor(false)
+    }
+  }, [canManageTwoFactor, showToast, twoFactorEndpoint])
+
+  useEffect(() => {
+    if (!canManageTwoFactor) return
+    void loadTwoFactorStatus()
+  }, [canManageTwoFactor, loadTwoFactorStatus])
 
   const handleRememberAvatarPreviewChange = (checked: boolean) => {
     const userId = String(user?.userId || '').trim()
@@ -575,6 +627,76 @@ export default function ProfileSettings({
       )
     } finally {
       setIsSavingPassword(false)
+    }
+  }
+
+  const handleToggleTwoFactor = async (checked: boolean) => {
+    if (!canManageTwoFactor) return
+
+    setIsSavingTwoFactor(true)
+    try {
+      const response = await fetch(twoFactorEndpoint, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ enabled: checked })
+      })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Failed to update 2FA setting')
+      }
+
+      const typedPayload = payload as TwoFactorStatusPayload
+      setTwoFactorStatus(typedPayload)
+      if (!checked) {
+        setTwoFactorToken('')
+      }
+
+      showToast('success', checked ? '2FA setup ready' : '2FA turned off', typedPayload.message || undefined)
+    } catch (toggleError) {
+      showToast(
+        'error',
+        '2FA update failed',
+        toggleError instanceof Error ? toggleError.message : 'Please try again.'
+      )
+    } finally {
+      setIsSavingTwoFactor(false)
+    }
+  }
+
+  const handleVerifyTwoFactor = async () => {
+    if (!canManageTwoFactor) return
+    if (!/^\d{6}$/.test(twoFactorToken)) {
+      showToast('error', 'Invalid OTP', 'Enter a valid 6-digit authenticator code.')
+      return
+    }
+
+    setIsSavingTwoFactor(true)
+    try {
+      const response = await fetch(twoFactorEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ token: twoFactorToken })
+      })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Failed to verify OTP')
+      }
+
+      setTwoFactorStatus(payload as TwoFactorStatusPayload)
+      setTwoFactorToken('')
+      showToast('success', '2FA enabled', (payload as TwoFactorStatusPayload).message || 'Super Admin 2FA is now active.')
+    } catch (verifyError) {
+      showToast(
+        'error',
+        'OTP verification failed',
+        verifyError instanceof Error ? verifyError.message : 'Please try again.'
+      )
+    } finally {
+      setIsSavingTwoFactor(false)
     }
   }
 
@@ -1021,6 +1143,92 @@ export default function ProfileSettings({
             </div>
           </CardContent>
         </Card>
+
+        {canManageTwoFactor ? (
+          <Card className="rounded-[28px] border-slate-200 bg-white shadow-[0_18px_60px_-36px_rgba(15,23,42,0.32)]">
+            <CardHeader className="border-b border-slate-100">
+              <CardTitle className="flex items-center gap-3 text-xl text-slate-950">
+                <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
+                  <Shield className="h-5 w-5" />
+                </span>
+                Google Authenticator (2FA)
+              </CardTitle>
+              <CardDescription className="text-sm text-slate-600">
+                Turn 2FA on/off for Super Admin. QR and OTP fields appear only during active setup.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5 pt-6">
+              <div className="flex flex-col gap-4 rounded-[24px] border border-slate-200 bg-slate-50/70 p-4 md:flex-row md:items-center md:justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-slate-900">Two-factor authentication status</p>
+                  <p className="text-sm leading-6 text-slate-600">
+                    {twoFactorStatus?.twoFactorEnabled
+                      ? '2FA is active for this superadmin account.'
+                      : isTwoFactorPending
+                        ? 'Setup is in progress. Verify OTP to complete activation.'
+                        : '2FA is currently OFF. Turn ON to start setup.'}
+                  </p>
+                </div>
+                <label className="inline-flex cursor-pointer items-center gap-3">
+                  <input
+                    type="checkbox"
+                    className="peer sr-only"
+                    checked={Boolean(twoFactorStatus?.twoFactorEnabled)}
+                    disabled={isLoadingTwoFactor || isSavingTwoFactor}
+                    onChange={(event) => void handleToggleTwoFactor(event.target.checked)}
+                  />
+                  <span className="relative h-6 w-11 rounded-full bg-slate-300 transition-all duration-200 ease-out peer-focus-visible:ring-4 peer-focus-visible:ring-slate-300/60 peer-checked:bg-emerald-600 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-transform after:duration-200 after:ease-out peer-checked:after:translate-x-5" />
+                  <span className="min-w-[3.5rem] text-sm font-semibold tracking-wide text-slate-800">
+                    {isSavingTwoFactor ? 'WAIT' : twoFactorStateLabel}
+                  </span>
+                </label>
+              </div>
+
+              {isLoadingTwoFactor ? (
+                <p className="text-sm text-slate-500">Loading 2FA settings...</p>
+              ) : null}
+
+              {twoFactorStatus?.hasSecret && twoFactorStatus?.qrCode ? (
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={twoFactorStatus.qrCode} alt="2FA QR code" className="h-44 w-44 rounded-lg border border-slate-100" />
+                    <div className="min-w-0 space-y-2">
+                      <p className="text-sm font-medium text-slate-900">Authenticator QR</p>
+                      <p className="text-xs leading-5 text-slate-600">
+                        Scan this QR in Google Authenticator. This stays visible here for future ON/OFF operations.
+                      </p>
+                      {twoFactorStatus.otpauthUrl ? (
+                        <p className="break-all text-[11px] text-slate-500">{twoFactorStatus.otpauthUrl}</p>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {twoFactorStatus?.hasSecret && !twoFactorStatus.twoFactorEnabled ? (
+                <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
+                  <ProfileField
+                    label="OTP Verification Code"
+                    type="text"
+                    value={twoFactorToken}
+                    onChange={(value) => setTwoFactorToken(value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="Enter 6-digit code"
+                    icon={KeyRound}
+                  />
+                  <Button
+                    type="button"
+                    className="h-12 rounded-2xl bg-slate-950 px-5 text-white hover:bg-slate-900"
+                    onClick={() => void handleVerifyTwoFactor()}
+                    disabled={isSavingTwoFactor || !twoFactorStatus.hasSecret}
+                  >
+                    {isSavingTwoFactor ? 'Verifying...' : 'Verify & Enable'}
+                  </Button>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
     </>
   )

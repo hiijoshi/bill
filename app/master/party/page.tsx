@@ -14,7 +14,6 @@ import MasterCsvTemplateHint from '@/components/master/MasterCsvTemplateHint'
 import { Plus, Edit, Trash2, Upload, Users } from 'lucide-react'
 import { APP_COMPANY_CHANGED_EVENT, resolveCompanyId } from '@/lib/company-context'
 import { useRouter } from 'next/navigation'
-import { getClientCache, setClientCache } from '@/lib/client-fetch-cache'
 import { isAbortError } from '@/lib/http'
 import { getFinancialYearDateRangeInput } from '@/lib/client-financial-years'
 import { useClientFinancialYear } from '@/lib/use-client-financial-year'
@@ -124,9 +123,8 @@ export default function PartyMasterPage() {
     })
   }, [financialYearStartValue])
 
-  const applyParties = useCallback((rows: Party[], cacheKey: string) => {
+  const applyParties = useCallback((rows: Party[]) => {
     setParties(rows)
-    setClientCache(cacheKey, { data: rows })
   }, [])
 
   const visibleMandiTypes = useMemo(
@@ -152,18 +150,15 @@ export default function PartyMasterPage() {
 
   const fetchParties = useCallback(async (id = companyId) => {
     if (!id) return
-    const cacheKey = `master-parties:${id}`
-    const cached = getClientCache<{ data?: Party[] }>(cacheKey, 30_000)
-    if (cached && Array.isArray(cached.data) && cached.data.length > 0) {
-      const buyerParties = cached.data.filter((party) => party?.type === 'buyer')
-      applyParties(buyerParties, cacheKey)
-      setLoading(false)
-    }
-
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
+        const controller = new AbortController()
+        const timeout = window.setTimeout(() => controller.abort(), 12_000)
         try {
-          const response = await fetch(`/api/parties?companyId=${id}`, { cache: 'no-store' })
+          const response = await fetch(`/api/parties?companyId=${id}&type=buyer`, {
+            cache: 'no-store',
+            signal: controller.signal
+          })
           const payload = (await response.json().catch(() => ({}))) as PartyResponsePayload
           const rows = Array.isArray(payload)
             ? payload
@@ -172,8 +167,8 @@ export default function PartyMasterPage() {
               : []
 
           if (response.ok) {
-            const buyerParties = rows.filter((party) => party?.type === 'buyer')
-            applyParties(buyerParties, cacheKey)
+            applyParties(rows.filter((party) => party?.type === 'buyer'))
+            setMessage(null)
             return
           }
 
@@ -194,13 +189,8 @@ export default function PartyMasterPage() {
             text:
               typeof body.error === 'string' && body.error.trim()
                 ? body.error
-                : cached?.data?.length
-                  ? 'Party list is taking longer than expected. Showing the last loaded data.'
-                  : 'Failed to load parties'
+                : 'Failed to load parties'
           })
-          if (!cached?.data?.length) {
-            setParties([])
-          }
           return
         } catch (error) {
           if (isAbortError(error) && attempt === 0) {
@@ -210,25 +200,19 @@ export default function PartyMasterPage() {
           if (isAbortError(error)) {
             setMessage({
               type: 'error',
-              text: cached?.data?.length
-                ? 'Party list is taking longer than expected. Showing the last loaded data.'
-                : 'Party list took too long to load. Please refresh once.'
+              text: 'Party list took too long to load. Please refresh once.'
             })
-            if (!cached?.data?.length) {
-              setParties([])
-            }
             return
           }
           throw error
+        } finally {
+          window.clearTimeout(timeout)
         }
       }
     } catch (error) {
       if (isAbortError(error)) return
       console.error('Error fetching parties:', error)
       setMessage({ type: 'error', text: 'Failed to load parties' })
-      if (!cached?.data?.length) {
-        setParties([])
-      }
     } finally {
       setLoading(false)
     }

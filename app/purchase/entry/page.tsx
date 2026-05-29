@@ -29,7 +29,6 @@ type PurchaseEntryCachePayload = {
   products: Product[]
   lastBillNumber: number
   units: UserUnit[]
-  farmers: FarmerOption[]
   mandiTypes: MandiType[]
   accountingHeads: AccountingHeadCharge[]
   markas: MarkaOption[]
@@ -47,16 +46,6 @@ interface UserUnit {
   symbol: string
   kgEquivalent: number
   isUniversal: boolean
-}
-
-interface FarmerOption {
-  id: string
-  name: string
-  address?: string | null
-  phone1?: string | null
-  krashakAnubandhNumber?: string | null
-  mandiTypeId?: string | null
-  mandiTypeName?: string | null
 }
 
 interface MandiType {
@@ -87,7 +76,6 @@ export default function PurchaseEntryPage() {
   const [companyId, setCompanyId] = useState('')
   const [products, setProducts] = useState<Product[]>([])
   const [userUnits, setUserUnits] = useState<UserUnit[]>([])
-  const [farmers, setFarmers] = useState<FarmerOption[]>([])
   const [mandiTypes, setMandiTypes] = useState<MandiType[]>([])
   const [accountingHeads, setAccountingHeads] = useState<AccountingHeadCharge[]>([])
   const [markas, setMarkas] = useState<MarkaOption[]>([])
@@ -96,7 +84,6 @@ export default function PurchaseEntryPage() {
 
   // Form state
   const [billDate, setBillDate] = useState('')
-  const [selectedFarmerId, setSelectedFarmerId] = useState('')
   const [farmerName, setFarmerName] = useState('')
   const [selectedMandiType, setSelectedMandiType] = useState('')
   const [farmerAddress, setFarmerAddress] = useState('')
@@ -194,11 +181,10 @@ export default function PurchaseEntryPage() {
       const payload = await loadClientCachedValue<PurchaseEntryCachePayload>(
         `purchase-entry:${companyId}`,
         async () => {
-          const [productsRes, billsRes, unitsRes, farmersRes, mandiTypesRes, accountingHeadsRes, markasRes] = await Promise.all([
+          const [productsRes, billsRes, unitsRes, mandiTypesRes, accountingHeadsRes, markasRes] = await Promise.all([
             fetch(`/api/products?companyId=${companyId}`),
             fetch(`/api/purchase-bills?companyId=${companyId}&last=true`),
             fetch(`/api/units?companyId=${companyId}`),
-            fetch(`/api/farmers?companyId=${companyId}`),
             fetch(`/api/mandi-types?companyId=${companyId}`),
             fetch(`/api/accounting-heads?companyId=${companyId}`),
             fetch(`/api/markas?companyId=${companyId}`)
@@ -224,7 +210,6 @@ export default function PurchaseEntryPage() {
           const productsPayload = productsRes.ok ? await productsRes.json().catch(() => []) : []
           const billsData = billsRes.ok ? await billsRes.json().catch(() => ({ lastBillNumber: 0 })) : { lastBillNumber: 0 }
           const unitsPayload = unitsRes.ok ? await unitsRes.json().catch(() => ({})) : []
-          const farmersPayload = farmersRes.ok ? await farmersRes.json().catch(() => []) : []
           const mandiTypesPayload = mandiTypesRes.ok ? await mandiTypesRes.json().catch(() => []) : []
           const accountingHeadsPayload = accountingHeadsRes.ok ? await accountingHeadsRes.json().catch(() => []) : []
           const markasPayload = markasRes.ok ? await markasRes.json().catch(() => []) : []
@@ -246,7 +231,6 @@ export default function PurchaseEntryPage() {
             products: Array.isArray(products) ? products : [],
             lastBillNumber: Number(billsData.lastBillNumber || 0),
             units: Array.isArray(units) ? units : [],
-            farmers: Array.isArray(farmersPayload) ? farmersPayload : [],
             mandiTypes: Array.isArray(mandiTypesPayload) ? mandiTypesPayload : [],
             accountingHeads: Array.isArray(accountingHeadsPayload) ? accountingHeadsPayload : [],
             markas: Array.isArray(markasPayload)
@@ -282,7 +266,6 @@ export default function PurchaseEntryPage() {
       const defaultUnit = payload.units.find((unit) => unit.symbol === 'qt') || payload.units[0]
       setSelectedUserUnit((current) => current || defaultUnit?.id || '')
 
-      setFarmers(payload.farmers)
       setMandiTypes(payload.mandiTypes)
       setAccountingHeads(payload.accountingHeads)
       setMarkas(payload.markas)
@@ -313,16 +296,8 @@ export default function PurchaseEntryPage() {
     }
   }, [fetchData])
 
-  useEffect(() => {
-    if (!selectedFarmerId) return
-    const matchedFarmer = farmers.find((farmer) => farmer.id === selectedFarmerId)
-    if (!matchedFarmer) return
-    setFarmerName(String(matchedFarmer.name || ''))
-    setFarmerAddress(String(matchedFarmer.address || ''))
-    setFarmerContact(String(matchedFarmer.phone1 || ''))
-    setKrashakAnubandhNumber(String(matchedFarmer.krashakAnubandhNumber || ''))
-    setSelectedMandiType(String(matchedFarmer.mandiTypeId || ''))
-  }, [farmers, selectedFarmerId])
+  // Auto-fill by farmer name is intentionally disabled.
+  // User should control address/contact/mandi/anubandh fields manually in Purchase Entry.
 
   const selectedMandiTypeHammaliRate = useMemo(() => {
     const mandiType = mandiTypes.find((row) => row.id === selectedMandiType)
@@ -436,7 +411,6 @@ export default function PurchaseEntryPage() {
         billNumber,
         billDate,
         farmerName,
-        farmerId: selectedFarmerId || null,
         mandiTypeId: selectedMandiType || null,
         farmerAddress,
         farmerContact,
@@ -511,7 +485,7 @@ export default function PurchaseEntryPage() {
         companyId={companyId}
         fullscreen
         title="Preparing purchase entry"
-        message="Loading farmers, mandi types, products, and purchase charge logic."
+        message="Loading mandi types, products, and purchase charge logic."
       />
     )
   }
@@ -577,47 +551,11 @@ export default function PurchaseEntryPage() {
 
                   {/* Farmer Name */}
                   <div>
-                    <Label htmlFor="existingFarmerSelect">Existing Farmer (Optional)</Label>
-                    <Select
-                      value={selectedFarmerId || '__new__'}
-                      onValueChange={(value) => {
-                        if (value === '__new__') {
-                          setSelectedFarmerId('')
-                          return
-                        }
-                        setSelectedFarmerId(value)
-                      }}
-                    >
-                      <SelectTrigger id="existingFarmerSelect">
-                        <SelectValue placeholder="Select existing farmer" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__new__">New Farmer / Manual Name</SelectItem>
-                        {farmers.map((farmer) => (
-                          <SelectItem key={farmer.id} value={farmer.id}>
-                            {farmer.name} {farmer.phone1 ? `(${farmer.phone1})` : ''}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Farmer Name */}
-                  <div>
                     <Label htmlFor="farmerName">Farmer Name</Label>
                     <Input
                       id="farmerName"
                       value={farmerName}
-                      onChange={(e) => {
-                        const nextName = e.target.value
-                        setFarmerName(nextName)
-                        if (selectedFarmerId) {
-                          const selectedFarmer = farmers.find((farmer) => farmer.id === selectedFarmerId)
-                          if (!selectedFarmer || String(selectedFarmer.name || '') !== nextName) {
-                            setSelectedFarmerId('')
-                          }
-                        }
-                      }}
+                      onChange={(e) => setFarmerName(e.target.value)}
                       placeholder="Enter farmer name"
                       required
                     />

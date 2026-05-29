@@ -15,6 +15,8 @@ export default async function SuperAdminProfilePage() {
       <div className="mx-auto max-w-7xl px-6 py-6 md:px-8">
         <ProfileSettings
           profileEndpoint="/api/super-admin/profile"
+          twoFactorEndpoint="/api/super-admin/profile/2fa"
+          enableTwoFactorControls
           initialUser={initialUser}
           breadcrumbRoot="Super Admin"
           pageTitle="Super Admin Settings"

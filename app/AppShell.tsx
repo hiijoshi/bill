@@ -27,6 +27,10 @@ export default function AppShell({
     )
     const originalFetch = window.fetch
     const abortRejectionHandler = (event: PromiseRejectionEvent) => {
+      if (event.reason instanceof Event) {
+        event.preventDefault()
+        return
+      }
       if (isAbortError(event.reason)) {
         event.preventDefault()
       }

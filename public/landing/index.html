@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MandiCentral - Business Intelligence Redefined</title>
+<meta name="description" content="The most advanced ERP platform for modern businesses. Designed in India, for India.">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --primary: #000;
+    --secondary: #1d1d1f;
+    --accent: #0071e3;
+    --text: #1d1d1f;
+    --text-secondary: #6e6e73;
+    --bg: #fbfbfd;
+    --glass: rgba(255, 255, 255, 0.72);
+}
+
+html {
+    scroll-behavior: smooth;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Navigation */
+nav {
+    position: fixed;
+    top: 0;
+    width: 100%;
+    z-index: 1000;
+    background: rgba(251, 251, 253, 0.8);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 0.5px solid rgba(0, 0, 0, 0.05);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+nav.scrolled {
+    background: rgba(251, 251, 253, 0.95);
+    box-shadow: 0 2px 20px rgba(0, 0, 0, 0.05);
+}
+
+.nav-container {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 max(20px, env(safe-area-inset-right));
+    height: 44px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logo {
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+    color: var(--primary);
+}
+
+.nav-links {
+    display: flex;
+    gap: 32px;
+    align-items: center;
+}
+
+.nav-links a {
+    color: var(--text);
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 400;
+    opacity: 0.8;
+    transition: opacity 0.2s;
+}
+
+.nav-links a:hover {
+    opacity: 1;
+}
+
+.nav-cta {
+    display: flex;
+    gap: 12px;
+}
+
+.btn {
+    padding: 8px 18px;
+    border-radius: 980px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: none;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.btn-primary {
+    background: var(--accent);
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: #0077ed;
+    transform: scale(1.02);
+}
+
+.btn-secondary {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid rgba(0, 113, 227, 0.3);
+}
+
+.btn-secondary:hover {
+    border-color: var(--accent);
+}
+
+/* Hero Section */
+.hero {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 120px 20px 60px;
+    background: linear-gradient(180deg, #fbfbfd 0%, #f5f5f7 100%);
+    position: relative;
+    overflow: hidden;
+}
+
+.hero::before {
+    content: '';
+    position: absolute;
+    width: 800px;
+    height: 800px;
+    background: radial-gradient(circle, rgba(0, 113, 227, 0.08) 0%, transparent 70%);
+    top: -400px;
+    right: -200px;
+    animation: float 20s ease-in-out infinite;
+}
+
+@keyframes float {
+    0%, 100% { transform: translate(0, 0); }
+    50% { transform: translate(-50px, 50px); }
+}
+
+.hero-content {
+    max-width: 980px;
+    text-align: center;
+    position: relative;
+    z-index: 1;
+}
+
+.hero-badge {
+    display: inline-block;
+    padding: 6px 16px;
+    background: rgba(0, 113, 227, 0.08);
+    border-radius: 980px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--accent);
+    margin-bottom: 20px;
+    animation: slideDown 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.hero h1 {
+    font-size: clamp(48px, 8vw, 96px);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    margin-bottom: 24px;
+    color: var(--primary);
+    animation: slideUp 0.8s cubic-bezier(0.4, 0, 0.2, 1) 0.2s backwards;
+}
+
+@keyframes slideUp {
+    from { opacity: 0; transform: translateY(30px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.hero-gradient {
+    background: linear-gradient(90deg, #0071e3 0%, #00a3ff 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.hero p {
+    font-size: clamp(19px, 3vw, 28px);
+    font-weight: 400;
+    color: var(--text-secondary);
+    margin-bottom: 40px;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+    animation: slideUp 0.8s cubic-bezier(0.4, 0, 0.2, 1) 0.4s backwards;
+}
+
+.hero-cta {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    flex-wrap: wrap;
+    animation: slideUp 0.8s cubic-bezier(0.4, 0, 0.2, 1) 0.6s backwards;
+}
+
+.btn-large {
+    padding: 14px 32px;
+    font-size: 17px;
+    font-weight: 500;
+}
+
+/* Dashboard Showcase */
+.dashboard-showcase {
+    padding: 100px 20px;
+    background: var(--bg);
+    position: relative;
+}
+
+.showcase-container {
+    max-width: 1280px;
+    margin: 0 auto;
+}
+
+.dashboard-frame {
+    position: relative;
+    border-radius: 24px;
+    overflow: hidden;
+    box-shadow: 
+        0 40px 80px rgba(0, 0, 0, 0.1),
+        0 20px 40px rgba(0, 0, 0, 0.08),
+        0 0 0 1px rgba(0, 0, 0, 0.05);
+    animation: scaleIn 1s cubic-bezier(0.4, 0, 0.2, 1);
+    background: #fff;
+}
+
+@keyframes scaleIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.dashboard-img {
+    width: 100%;
+    display: block;
+}
+
+/* Features Section */
+.features {
+    padding: 140px 20px;
+    background: #000;
+    color: #f5f5f7;
+}
+
+.section-header {
+    text-align: center;
+    max-width: 800px;
+    margin: 0 auto 80px;
+}
+
+.section-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #86868b;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 12px;
+}
+
+.section-title {
+    font-size: clamp(40px, 6vw, 64px);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    margin-bottom: 20px;
+}
+
+.section-description {
+    font-size: 21px;
+    color: #86868b;
+    font-weight: 400;
+}
+
+.features-grid {
+    max-width: 1280px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 12px;
+}
+
+.feature-card {
+    background: #1d1d1f;
+    border-radius: 24px;
+    padding: 48px 40px;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.feature-card:hover {
+    transform: translateY(-8px);
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+.feature-icon {
+    font-size: 56px;
+    margin-bottom: 24px;
+    display: block;
+}
+
+.feature-card h3 {
+    font-size: 28px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    letter-spacing: -0.01em;
+}
+
+.feature-card p {
+    font-size: 17px;
+    color: #86868b;
+    line-height: 1.5;
+}
+
+/* Video Section */
+.video-section {
+    padding: 140px 20px;
+    background: #f5f5f7;
+}
+
+.video-container {
+    max-width: 1280px;
+    margin: 0 auto;
+    text-align: center;
+}
+
+.video-wrapper {
+    position: relative;
+    margin-top: 60px;
+    border-radius: 24px;
+    overflow: hidden;
+    box-shadow: 0 40px 80px rgba(0, 0, 0, 0.15);
+    background: #000;
+    aspect-ratio: 16/9;
+}
+
+.video-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #1d1d1f 0%, #2d2d2f 100%);
+}
+
+.play-button {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.95);
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.play-button:hover {
+    transform: scale(1.1);
+    background: #fff;
+}
+
+.play-button::after {
+    content: '';
+    width: 0;
+    height: 0;
+    border-left: 20px solid #000;
+    border-top: 12px solid transparent;
+    border-bottom: 12px solid transparent;
+    margin-left: 4px;
+}
+
+/* Stats Section */
+.stats {
+    padding: 100px 20px;
+    background: #fff;
+}
+
+.stats-grid {
+    max-width: 1280px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 60px;
+    text-align: center;
+}
+
+.stat-item h3 {
+    font-size: 64px;
+    font-weight: 700;
+    background: linear-gradient(90deg, #0071e3 0%, #00a3ff 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 8px;
+    letter-spacing: -0.02em;
+}
+
+.stat-item p {
+    font-size: 19px;
+    color: var(--text-secondary);
+}
+
+/* Testimonials */
+.testimonials {
+    padding: 140px 20px;
+    background: #f5f5f7;
+}
+
+.testimonials-grid {
+    max-width: 1280px;
+    margin: 60px auto 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    gap: 24px;
+}
+
+.testimonial {
+    background: #fff;
+    padding: 48px;
+    border-radius: 24px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+    transition: all 0.3s;
+}
+
+.testimonial:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.08);
+}
+
+.testimonial-text {
+    font-size: 19px;
+    line-height: 1.6;
+    color: var(--text);
+    margin-bottom: 24px;
+}
+
+.testimonial-author {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.author-avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #0071e3 0%, #00a3ff 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 600;
+    font-size: 18px;
+}
+
+.author-info h4 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.author-info p {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+/* CTA Section */
+.cta-section {
+    padding: 140px 20px;
+    background: linear-gradient(135deg, #000 0%, #1d1d1f 100%);
+    color: #f5f5f7;
+    text-align: center;
+}
+
+.cta-content {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.cta-section h2 {
+    font-size: clamp(40px, 6vw, 64px);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 24px;
+    line-height: 1.1;
+}
+
+.cta-section p {
+    font-size: 21px;
+    color: #86868b;
+    margin-bottom: 40px;
+}
+
+/* Footer */
+footer {
+    background: #f5f5f7;
+    padding: 60px 20px 40px;
+    border-top: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.footer-content {
+    max-width: 1280px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 40px;
+    margin-bottom: 40px;
+}
+
+.footer-column h4 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 16px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.footer-column a {
+    display: block;
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 14px;
+    margin-bottom: 12px;
+    transition: color 0.2s;
+}
+
+.footer-column a:hover {
+    color: var(--text);
+}
+
+.footer-bottom {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding-top: 40px;
+    border-top: 1px solid rgba(0, 0, 0, 0.05);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+.footer-bottom p {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.footer-social {
+    display: flex;
+    gap: 20px;
+}
+
+.footer-social a {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.05);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: all 0.3s;
+    font-size: 14px;
+}
+
+.footer-social a:hover {
+    background: var(--accent);
+    color: #fff;
+    transform: translateY(-2px);
+}
+
+/* Mobile Menu */
+.mobile-menu-btn {
+    display: none;
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: var(--text);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .nav-links {
+        display: none;
+    }
+    
+    .mobile-menu-btn {
+        display: block;
+    }
+    
+    .hero {
+        padding: 100px 20px 40px;
+    }
+    
+    .hero h1 {
+        font-size: 48px;
+    }
+    
+    .hero p {
+        font-size: 21px;
+    }
+    
+    .section-title {
+        font-size: 40px;
+    }
+    
+    .features-grid,
+    .testimonials-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .stats-grid {
+        gap: 40px;
+    }
+    
+    .footer-bottom {
+        flex-direction: column;
+        text-align: center;
+    }
+}
+
+/* Smooth Scroll Reveal */
+.reveal {
+    opacity: 0;
+    transform: translateY(30px);
+    transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.reveal.active {
+    opacity: 1;
+    transform: translateY(0);
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav id="navbar">
+    <div class="nav-container">
+        <div class="logo">MandiCentral</div>
+        <div class="nav-links">
+            <a href="#features">Features</a>
+            <a href="#product">Product</a>
+            <a href="#testimonials">Customers</a>
+            <a href="#pricing">Pricing</a>
+        </div>
+        <div class="nav-cta">
+            <a href="/login" class="btn btn-secondary">Sign in</a>
+            <a href="/login" class="btn btn-primary">Try for free</a>
+        </div>
+        <button class="mobile-menu-btn">☰</button>
+    </div>
+</nav>
+
+<!-- Hero Section -->
+<section class="hero">
+    <div class="hero-content">
+        <div class="hero-badge">Engineered for Excellence</div>
+        <h1>
+            Business Intelligence.<br>
+            <span class="hero-gradient">Redefined.</span>
+        </h1>
+        <p>The most advanced ERP platform designed for modern Indian businesses. Billing, inventory, ledgers, and analytics — reimagined.</p>
+        <div class="hero-cta">
+            <a href="/login" class="btn btn-primary btn-large">Start free trial</a>
+            <a href="#product" class="btn btn-secondary btn-large">Watch demo</a>
+        </div>
+    </div>
+</section>
+
+<!-- Dashboard Showcase -->
+<section class="dashboard-showcase" id="product">
+    <div class="showcase-container">
+        <div class="dashboard-frame">
+            <svg class="dashboard-img" viewBox="0 0 1400 900" xmlns="http://www.w3.org/2000/svg">
+                <!-- Background -->
+                <rect width="1400" height="900" fill="#fafafa"/>
+                
+                <!-- Sidebar -->
+                <rect width="280" height="900" fill="#ffffff"/>
+                <rect x="1" width="279" height="900" fill="url(#sidebarGradient)"/>
+                <defs>
+                    <linearGradient id="sidebarGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#f8f9fa;stop-opacity:1" />
+                    </linearGradient>
+                    <linearGradient id="blueGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#0071e3;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#00a3ff;stop-opacity:1" />
+                    </linearGradient>
+                    <filter id="shadow">
+                        <feDropShadow dx="0" dy="2" stdDeviation="8" flood-opacity="0.08"/>
+                    </filter>
+                    <filter id="cardShadow">
+                        <feDropShadow dx="0" dy="4" stdDeviation="12" flood-opacity="0.06"/>
+                    </filter>
+                </defs>
+                
+                <!-- Logo & User -->
+                <circle cx="40" cy="35" r="8" fill="url(#blueGradient)"/>
+                <text x="58" y="41" font-family="Inter, sans-serif" font-size="16" font-weight="700" fill="#1d1d1f">MandiCentral</text>
+                
+                <!-- Navigation Items -->
+                <g opacity="0.95">
+                    <rect x="24" y="80" width="232" height="44" rx="12" fill="#0071e3" fill-opacity="0.1"/>
+                    <circle cx="46" cy="102" r="6" fill="#0071e3"/>
+                    <text x="66" y="107" font-family="Inter, sans-serif" font-size="14" font-weight="600" fill="#0071e3">Dashboard</text>
+                </g>
+                
+                <g opacity="0.6">
+                    <circle cx="46" cy="150" r="6" fill="#6e6e73"/>
+                    <text x="66" y="155" font-family="Inter, sans-serif" font-size="14" font-weight="500" fill="#1d1d1f">Billing</text>
+                </g>
+                
+                <g opacity="0.6">
+                    <circle cx="46" cy="198" r="6" fill="#6e6e73"/>
+                    <text x="66" y="203" font-family="Inter, sans-serif" font-size="14" font-weight="500" fill="#1d1d1f">Inventory</text>
+                </g>
+                
+                <g opacity="0.6">
+                    <circle cx="46" cy="246" r="6" fill="#6e6e73"/>
+                    <text x="66" y="251" font-family="Inter, sans-serif" font-size="14" font-weight="500" fill="#1d1d1f">Ledger</text>
+                </g>
+                
+                <g opacity="0.6">
+                    <circle cx="46" cy="294" r="6" fill="#6e6e73"/>
+                    <text x="66" y="299" font-family="Inter, sans-serif" font-size="14" font-weight="500" fill="#1d1d1f">Payments</text>
+                </g>
+                
+                <g opacity="0.6">
+                    <circle cx="46" cy="342" r="6" fill="#6e6e73"/>
+                    <text x="66" y="347" font-family="Inter, sans-serif" font-size="14" font-weight="500" fill="#1d1d1f">Reports</text>
+                </g>
+                
+                <!-- Main Content Area -->
+                <!-- Header -->
+                <text x="320" y="55" font-family="Inter, sans-serif" font-size="28" font-weight="700" fill="#1d1d1f">Overview</text>
+                <text x="320" y="82" font-family="Inter, sans-serif" font-size="15" fill="#6e6e73">Welcome back, here's what's happening today</text>
+                
+                <!-- Stats Cards -->
+                <g filter="url(#cardShadow)">
+                    <rect x="320" y="120" width="250" height="140" rx="16" fill="#ffffff"/>
+                    <rect x="320" y="120" width="250" height="4" rx="2" fill="url(#blueGradient)"/>
+                    <text x="340" y="158" font-family="Inter, sans-serif" font-size="13" font-weight="500" fill="#6e6e73">Total Revenue</text>
+                    <text x="340" y="198" font-family="Inter, sans-serif" font-size="40" font-weight="700" fill="#1d1d1f">₹12.4L</text>
+                    <text x="340" y="228" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#34c759">↑ 23.8%</text>
+                    <text x="390" y="228" font-family="Inter, sans-serif" font-size="13" fill="#6e6e73">vs last month</text>
+                </g>
+                
+                <g filter="url(#cardShadow)">
+                    <rect x="590" y="120" width="250" height="140" rx="16" fill="#ffffff"/>
+                    <rect x="590" y="120" width="250" height="4" rx="2" fill="#ff9500"/>
+                    <text x="610" y="158" font-family="Inter, sans-serif" font-size="13" font-weight="500" fill="#6e6e73">Pending Payments</text>
+                    <text x="610" y="198" font-family="Inter, sans-serif" font-size="40" font-weight="700" fill="#1d1d1f">₹2.8L</text>
+                    <text x="610" y="228" font-family="Inter, sans-serif" font-size="13" fill="#6e6e73">18 invoices</text>
+                </g>
+                
+                <g filter="url(#cardShadow)">
+                    <rect x="860" y="120" width="250" height="140" rx="16" fill="#ffffff"/>
+                    <rect x="860" y="120" width="250" height="4" rx="2" fill="#af52de"/>
+                    <text x="880" y="158" font-family="Inter, sans-serif" font-size="13" font-weight="500" fill="#6e6e73">Active Customers</text>
+                    <text x="880" y="198" font-family="Inter, sans-serif" font-size="40" font-weight="700" fill="#1d1d1f">1,247</text>
+                    <text x="880" y="228" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#34c759">↑ 12</text>
+                    <text x="916" y="228" font-family="Inter, sans-serif" font-size="13" fill="#6e6e73">this week</text>
+                </g>
+                
+                <!-- Chart Card -->
+                <g filter="url(#cardShadow)">
+                    <rect x="320" y="285" width="790" height="340" rx="16" fill="#ffffff"/>
+                    <text x="345" y="320" font-family="Inter, sans-serif" font-size="18" font-weight="600" fill="#1d1d1f">Sales Analytics</text>
+                    <text x="345" y="343" font-family="Inter, sans-serif" font-size="13" fill="#6e6e73">Last 6 months performance</text>
+                    
+                    <!-- Chart Grid -->
+                    <line x1="360" y1="380" x2="1070" y2="380" stroke="#f5f5f7" stroke-width="1"/>
+                    <line x1="360" y1="430" x2="1070" y2="430" stroke="#f5f5f7" stroke-width="1"/>
+                    <line x1="360" y1="480" x2="1070" y2="480" stroke="#f5f5f7" stroke-width="1"/>
+                    <line x1="360" y1="530" x2="1070" y2="530" stroke="#f5f5f7" stroke-width="1"/>
+                    <line x1="360" y1="580" x2="1070" y2="580" stroke="#f5f5f7" stroke-width="1"/>
+                    
+                    <!-- Chart Line -->
+                    <path d="M 360,560 L 480,520 L 600,480 L 720,440 L 840,400 L 960,360 L 1070,340" 
+                          fill="none" stroke="url(#blueGradient)" stroke-width="3" stroke-linecap="round"/>
+                    
+                    <!-- Chart Area Fill -->
+                    <path d="M 360,560 L 480,520 L 600,480 L 720,440 L 840,400 L 960,360 L 1070,340 L 1070,580 L 360,580 Z" 
+                          fill="url(#blueGradient)" opacity="0.1"/>
+                    
+                    <!-- Data Points -->
+                    <circle cx="360" cy="560" r="5" fill="#ffffff" stroke="#0071e3" stroke-width="2"/>
+                    <circle cx="480" cy="520" r="5" fill="#ffffff" stroke="#0071e3" stroke-width="2"/>
+                    <circle cx="600" cy="480" r="5" fill="#ffffff" stroke="#0071e3" stroke-width="2"/>
+                    <circle cx="720" cy="440" r="5" fill="#ffffff" stroke="#0071e3" stroke-width="2"/>
+                    <circle cx="840" cy="400" r="5" fill="#ffffff" stroke="#0071e3" stroke-width="2"/>
+                    <circle cx="960" cy="360" r="5" fill="#ffffff" stroke="#0071e3" stroke-width="2"/>
+                    <circle cx="1070" cy="340" r="5" fill="#ffffff" stroke="#0071e3" stroke-width="2"/>
+                    
+                    <!-- Month Labels -->
+                    <text x="350" y="605" font-family="Inter, sans-serif" font-size="11" fill="#6e6e73" text-anchor="middle">Jan</text>
+                    <text x="480" y="605" font-family="Inter, sans-serif" font-size="11" fill="#6e6e73" text-anchor="middle">Feb</text>
+                    <text x="600" y="605" font-family="Inter, sans-serif" font-size="11" fill="#6e6e73" text-anchor="middle">Mar</text>
+                    <text x="720" y="605" font-family="Inter, sans-serif" font-size="11" fill="#6e6e73" text-anchor="middle">Apr</text>
+                    <text x="840" y="605" font-family="Inter, sans-serif" font-size="11" fill="#6e6e73" text-anchor="middle">May</text>
+                    <text x="960" y="605" font-family="Inter, sans-serif" font-size="11" fill="#6e6e73" text-anchor="middle">Jun</text>
+                </g>
+                
+                <!-- Recent Activity Card -->
+                <g filter="url(#cardShadow)">
+                    <rect x="1130" y="120" width="240" height="505" rx="16" fill="#ffffff"/>
+                    <text x="1150" y="155" font-family="Inter, sans-serif" font-size="16" font-weight="600" fill="#1d1d1f">Recent Activity</text>
+                    
+                    <!-- Activity Items -->
+                    <circle cx="1165" cy="195" r="8" fill="#34c759"/>
+                    <text x="1185" y="198" font-family="Inter, sans-serif" font-size="12" font-weight="500" fill="#1d1d1f">New payment</text>
+                    <text x="1185" y="214" font-family="Inter, sans-serif" font-size="11" fill="#6e6e73">₹45,000 received</text>
+                    
+                    <circle cx="1165" cy="255" r="8" fill="#0071e3"/>
+                    <text x="1185" y="258" font-family="Inter, sans-serif" font-size="12" font-weight="500" fill="#1d1d1f">Invoice created</text>
+                    <text x="1185" y="274" font-family="Inter, sans-serif" font-size="11" fill="#6e6e73">INV-2847 • ₹28,500</text>
+                    
+                    <circle cx="1165" cy="315" r="8" fill="#ff9500"/>
+                    <text x="1185" y="318" font-family="Inter, sans-serif" font-size="12" font-weight="500" fill="#1d1d1f">Stock updated</text>
+                    <text x="1185" y="334" font-family="Inter, sans-serif" font-size="11" fill="#6e6e73">84 items added</text>
+                    
+                    <circle cx="1165" cy="375" r="8" fill="#af52de"/>
+                    <text x="1185" y="378" font-family="Inter, sans-serif" font-size="12" font-weight="500" fill="#1d1d1f">New customer</text>
+                    <text x="1185" y="394" font-family="Inter, sans-serif" font-size="11" fill="#6e6e73">Sharma Traders</text>
+                    
+                    <circle cx="1165" cy="435" r="8" fill="#34c759"/>
+                    <text x="1185" y="438" font-family="Inter, sans-serif" font-size="12" font-weight="500" fill="#1d1d1f">Payment reminder</text>
+                    <text x="1185" y="454" font-family="Inter, sans-serif" font-size="11" fill="#6e6e73">Sent to 12 parties</text>
+                    
+                    <rect x="1150" y="485" width="200" height="36" rx="8" fill="#0071e3"/>
+                    <text x="1250" y="508" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">View All</text>
+                </g>
+                
+                <!-- Top Bar Elements -->
+                <circle cx="1310" cy="35" r="20" fill="#f5f5f7"/>
+                <text x="1310" y="42" font-family="Inter, sans-serif" font-size="16" font-weight="600" fill="#0071e3" text-anchor="middle">RK</text>
+            </svg>
+        </div>
+    </div>
+</section>
+
+<!-- Features Section -->
+<section class="features reveal" id="features">
+    <div class="section-header">
+        <div class="section-label">Capabilities</div>
+        <h2 class="section-title">Everything you need. Nothing you don't.</h2>
+        <p class="section-description">Powerful tools designed to scale with your business ambitions.</p>
+    </div>
+    <div class="features-grid">
+        <div class="feature-card">
+            <span class="feature-icon">⚡</span>
+            <h3>Lightning Billing</h3>
+            <p>Create GST-compliant invoices in seconds. Built-in templates, automated calculations, instant delivery.</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">📊</span>
+            <h3>Smart Analytics</h3>
+            <p>Real-time insights into sales, margins, and cash flow. Make data-driven decisions with confidence.</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">🎯</span>
+            <h3>Precision Inventory</h3>
+            <p>Track every item across multiple locations. Low stock alerts, batch tracking, and automated reordering.</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">💼</span>
+            <h3>Complete Ledger</h3>
+            <p>Comprehensive party management with credit limits, payment history, and automated reconciliation.</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">🔒</span>
+            <h3>Bank-Grade Security</h3>
+            <p>256-bit encryption, automated backups, and role-based access control. Your data is safe with us.</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">📱</span>
+            <h3>Mobile First</h3>
+            <p>Full-featured mobile apps for iOS and Android. Manage your business from anywhere, anytime.</p>
+        </div>
+    </div>
+</section>
+
+<!-- Video Section -->
+<section class="video-section reveal">
+    <div class="video-container">
+        <div class="section-header" style="color: #1d1d1f;">
+            <div class="section-label" style="color: #6e6e73;">Experience</div>
+            <h2 class="section-title">See it in action</h2>
+            <p class="section-description">Discover how MandiCentral transforms business operations.</p>
+        </div>
+        <div class="video-wrapper">
+            <div class="video-placeholder">
+                <button class="play-button" onclick="alert('Demo video will play here')"></button>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Stats Section -->
+<section class="stats reveal">
+    <div class="stats-grid">
+        <div class="stat-item">
+            <h3>15K+</h3>
+            <p>Active Businesses</p>
+        </div>
+        <div class="stat-item">
+            <h3>99.9%</h3>
+            <p>Uptime SLA</p>
+        </div>
+        <div class="stat-item">
+            <h3>5M+</h3>
+            <p>Invoices Generated</p>
+        </div>
+        <div class="stat-item">
+            <h3>₹850Cr+</h3>
+            <p>Transactions Processed</p>
+        </div>
+    </div>
+</section>
+
+<!-- Testimonials -->
+<section class="testimonials reveal" id="testimonials">
+    <div class="section-header">
+        <div class="section-label">Testimonials</div>
+        <h2 class="section-title">Loved by businesses nationwide</h2>
+        <p class="section-description">Join thousands of traders who've transformed their operations.</p>
+    </div>
+    <div class="testimonials-grid">
+        <div class="testimonial">
+            <p class="testimonial-text">"MandiCentral changed how we run our business. The interface is so intuitive, our team was up and running in minutes. The analytics alone have saved us lakhs."</p>
+            <div class="testimonial-author">
+                <div class="author-avatar">RK</div>
+                <div class="author-info">
+                    <h4>Rajesh Kumar</h4>
+                    <p>Grain Merchant, Indore</p>
+                </div>
+            </div>
+        </div>
+        <div class="testimonial">
+            <p class="testimonial-text">"We evaluated 5 different ERPs. MandiCentral was the only one that felt modern and actually understood Indian business workflows. No regrets."</p>
+            <div class="testimonial-author">
+                <div class="author-avatar">PS</div>
+                <div class="author-info">
+                    <h4>Priya Sharma</h4>
+                    <p>Wholesale Distributor, Mumbai</p>
+                </div>
+            </div>
+        </div>
+        <div class="testimonial">
+            <p class="testimonial-text">"The mobile app is incredible. I can track everything on the go — payments, stock, new orders. It's like having my entire office in my pocket."</p>
+            <div class="testimonial-author">
+                <div class="author-avatar">AP</div>
+                <div class="author-info">
+                    <h4>Amit Patel</h4>
+                    <p>Retail Chain Owner, Ahmedabad</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- CTA Section -->
+<section class="cta-section reveal">
+    <div class="cta-content">
+        <h2>Ready to transform your business?</h2>
+        <p>Join 15,000+ businesses already using MandiCentral. No credit card required.</p>
+        <div class="hero-cta">
+            <a href="/login" class="btn btn-primary btn-large">Start free trial</a>
+            <a href="/contact" class="btn btn-secondary btn-large" style="color: #f5f5f7; border-color: rgba(245, 245, 247, 0.3);">Contact sales</a>
+        </div>
+    </div>
+</section>
+
+<!-- Footer -->
+<footer>
+    <div class="footer-content">
+        <div class="footer-column">
+            <h4>Product</h4>
+            <a href="#features">Features</a>
+            <a href="#pricing">Pricing</a>
+            <a href="/download">Download</a>
+            <a href="/updates">What's New</a>
+        </div>
+        <div class="footer-column">
+            <h4>Company</h4>
+            <a href="/about">About Us</a>
+            <a href="/careers">Careers</a>
+            <a href="/press">Press Kit</a>
+            <a href="/contact">Contact</a>
+        </div>
+        <div class="footer-column">
+            <h4>Resources</h4>
+            <a href="/docs">Documentation</a>
+            <a href="/blog">Blog</a>
+            <a href="/guides">Guides</a>
+            <a href="/api">API</a>
+        </div>
+        <div class="footer-column">
+            <h4>Legal</h4>
+            <a href="/privacy">Privacy</a>
+            <a href="/terms">Terms</a>
+            <a href="/security">Security</a>
+            <a href="/compliance">Compliance</a>
+        </div>
+    </div>
+    <div class="footer-bottom">
+        <p>© 2024 MandiCentral. All rights reserved.</p>
+        <div class="footer-social">
+            <a href="#" title="Twitter">𝕏</a>
+            <a href="#" title="LinkedIn">in</a>
+            <a href="#" title="Instagram">📷</a>
+            <a href="#" title="YouTube">▶</a>
+        </div>
+    </div>
+</footer>
+
+<script>
+// Navbar scroll effect
+const navbar = document.getElementById('navbar');
+window.addEventListener('scroll', () => {
+    if (window.scrollY > 50) {
+        navbar.classList.add('scrolled');
+    } else {
+        navbar.classList.remove('scrolled');
+    }
+});
+
+// Scroll reveal animation
+const reveals = document.querySelectorAll('.reveal');
+const revealObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if (entry.isIntersecting) {
+            entry.target.classList.add('active');
+        }
+    });
+}, { threshold: 0.1 });
+
+reveals.forEach(reveal => {
+    revealObserver.observe(reveal);
+});
+
+// Smooth scroll for anchor links
+document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+    anchor.addEventListener('click', function (e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    });
+});
+</script>
+
+</body>
+</html>

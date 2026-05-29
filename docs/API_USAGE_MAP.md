@@ -122,6 +122,195 @@ Generated from `app/api/**/route.ts` and usage scans in `app`, `components`, and
 | `/api/units/import` | POST | `app/api/units/import/route.ts` | `app/master/unit/page.tsx` |
 | `/api/users` | GET, POST, PUT, DELETE | `app/api/users/route.ts` | `app/master/user/page.tsx` |
 
+## API Parameter Index (Auto-Extracted)
+
+Heuristic extraction from route handlers. Verify request payload contracts in the linked `route.ts` files for strict validation rules.
+
+<!-- API_PARAMETER_INDEX_START -->
+| Endpoint | Path Params | Query Params | Body Params |
+|---|---|---|---|
+| `/api/accounting-heads` | - | `all`, `companyId`, `id` | - |
+| `/api/auth/company` | - | - | `companyId` |
+| `/api/auth/financial-year` | - | - | - |
+| `/api/auth/login` | - | - | - |
+| `/api/auth/logout` | - | - | - |
+| `/api/auth/me` | - | - | - |
+| `/api/auth/permissions` | - | `companyId`, `includeMeta` | - |
+| `/api/auth/refresh` | - | - | - |
+| `/api/auth` | - | - | - |
+| `/api/bank-statements/batches/[batchId]/export` | `batchId` | - | - |
+| `/api/bank-statements/batches/[batchId]/file` | `batchId` | - | - |
+| `/api/bank-statements/batches/[batchId]/finalize` | `batchId` | - | - |
+| `/api/bank-statements/batches/[batchId]/match` | `batchId` | - | - |
+| `/api/bank-statements/batches/[batchId]/parse` | `batchId` | - | - |
+| `/api/bank-statements/batches/[batchId]/post` | `batchId` | - | - |
+| `/api/bank-statements/batches/[batchId]/reprocess` | `batchId` | - | - |
+| `/api/bank-statements/batches/[batchId]` | `batchId` | `companyId` | - |
+| `/api/bank-statements/batches` | - | - | - |
+| `/api/bank-statements/lookups` | - | `companyId` | - |
+| `/api/bank-statements/rows/[rowId]/draft` | `rowId` | - | - |
+| `/api/bank-statements/rows/[rowId]/quick-create` | `rowId` | - | - |
+| `/api/bank-statements/rows/[rowId]/review` | `rowId` | - | - |
+| `/api/bank-statements/workspace` | - | `companyId` | - |
+| `/api/banks/import` | - | - | - |
+| `/api/banks` | - | `all`, `companyId`, `id` | - |
+| `/api/companies` | - | `id`, `includeDeleted`, `traderId` | - |
+| `/api/dashboard/stock-workspace` | - | `companyId` | - |
+| `/api/farmers` | - | `all`, `companyId`, `id` | - |
+| `/api/financial-years/[id]/activate` | `id` | - | - |
+| `/api/financial-years/[id]/status` | `id` | - | - |
+| `/api/financial-years` | - | `companyId`, `traderId` | - |
+| `/api/live-updates` | - | `companyIds` | - |
+| `/api/login` | - | - | - |
+| `/api/main-dashboard/overview` | - | `companyId` | - |
+| `/api/mandi-types` | - | `all`, `companyId`, `id` | - |
+| `/api/markas/import` | - | - | - |
+| `/api/markas` | - | `all`, `companyId`, `id` | - |
+| `/api/parties/import` | - | `companyId` | - |
+| `/api/parties` | - | `all`, `companyId`, `id`, `type` | - |
+| `/api/payment-modes/import` | - | - | - |
+| `/api/payment-modes` | - | `all`, `companyId`, `id` | - |
+| `/api/payments/[id]` | `id` | - | - |
+| `/api/payments/[id]/status` | `id` | - | - |
+| `/api/payments/allocate` | - | - | - |
+| `/api/payments/bank-statement/import` | - | - | - |
+| `/api/payments/journal-vouchers` | - | `companyId`, `summary` | - |
+| `/api/payments` | - | `billType`, `companyId`, `includeDeleted`, `view` | - |
+| `/api/payments/workspace` | - | `companyId`, `includePaymentModes` | - |
+| `/api/products/import` | - | - | - |
+| `/api/products` | - | `all`, `id` | - |
+| `/api/profile` | - | - | - |
+| `/api/purchase-bills/cancel` | - | - | - |
+| `/api/purchase-bills/import` | - | `companyId` | - |
+| `/api/purchase-bills` | - | `billId`, `companyId`, `dateFrom`, `dateTo`, `includeCancelled`, `last`, `view` | - |
+| `/api/purchase-bills/template` | - | `companyId` | - |
+| `/api/reports/dashboard` | - | `companyId`, `reportType` | - |
+| `/api/reports/operations` | - | `companyId`, `dateFrom`, `dateTo`, `partyId`, `view` | - |
+| `/api/sales-bills/cancel` | - | - | - |
+| `/api/sales-bills/risk` | - | `companyId`, `excludeBillId`, `partyId`, `pendingSaleAmount`, `referenceDate` | - |
+| `/api/sales-bills` | - | `billId`, `companyId`, `includeCancelled`, `last`, `splitView`, `view` | - |
+| `/api/sales-bills/splits/preview` | - | - | - |
+| `/api/sales-bills/splits` | - | `billId`, `companyId`, `parentBillId` | - |
+| `/api/sales-invoices` | - | `companyId`, `firmId` | - |
+| `/api/sales-item-masters/import` | - | - | - |
+| `/api/sales-item-masters` | - | `companyId`, `id` | - |
+| `/api/sales-items` | - | `companyId`, `id` | - |
+| `/api/security/csrf` | - | - | - |
+| `/api/special-purchase-bills/cancel` | - | - | - |
+| `/api/special-purchase-bills` | - | `billId`, `companyId`, `includeCancelled` | - |
+| `/api/stock-ledger` | - | `companyId`, `includeMeta`, `includeRecent`, `mode`, `productId`, `recentLimit`, `type` | - |
+| `/api/stock/adjustment` | - | - | - |
+| `/api/subscription/actions` | - | - | - |
+| `/api/subscription/backups/[backupId]/download` | `backupId` | - | - |
+| `/api/subscription/current` | - | - | - |
+| `/api/subscription/history` | - | - | - |
+| `/api/super-admin/activity` | - | - | - |
+| `/api/super-admin/auth` | - | - | `password`, `secondSecret`, `token`, `userId` |
+| `/api/super-admin/companies/[id]/lock` | `id` | - | - |
+| `/api/super-admin/companies/[id]` | `id` | `includeDeleted` | - |
+| `/api/super-admin/companies` | - | `includeDeleted`, `traderId` | - |
+| `/api/super-admin/live-updates` | - | - | - |
+| `/api/super-admin/logout` | - | - | - |
+| `/api/super-admin/me` | - | - | - |
+| `/api/super-admin/onboard-trader` | - | - | - |
+| `/api/super-admin/overview` | - | `companyId`, `includeDeleted`, `sections`, `traderId`, `userId` | - |
+| `/api/super-admin/profile` | - | - | - |
+| `/api/super-admin/refresh` | - | - | - |
+| `/api/super-admin` | - | - | - |
+| `/api/super-admin/stats` | - | - | - |
+| `/api/super-admin/subscription-plans/[id]` | `id` | - | - |
+| `/api/super-admin/subscription-plans` | - | `includeInactive` | - |
+| `/api/super-admin/trader-subscriptions/[traderId]/actions` | `traderId` | - | - |
+| `/api/super-admin/trader-subscriptions/[traderId]` | `traderId` | - | - |
+| `/api/super-admin/trader-subscriptions` | - | `expiringWithinDays`, `includeLocked`, `query`, `state` | - |
+| `/api/super-admin/traders/[id]/lock` | `id` | - | - |
+| `/api/super-admin/traders/[id]` | `id` | `includeDeleted` | - |
+| `/api/super-admin/traders` | - | `includeDeleted` | - |
+| `/api/super-admin/users/[id]/companies` | `id` | `companyId` | - |
+| `/api/super-admin/users/[id]/lock` | `id` | - | - |
+| `/api/super-admin/users/[id]/permissions` | `id` | `companyId` | - |
+| `/api/super-admin/users/[id]` | `id` | `includeDeleted` | - |
+| `/api/super-admin/users/permissions/bulk` | - | - | - |
+| `/api/super-admin/users` | - | `companyId`, `includeDeleted`, `traderId` | - |
+| `/api/suppliers/import` | - | - | - |
+| `/api/suppliers` | - | `all`, `companyId`, `id` | - |
+| `/api/traders` | - | - | - |
+| `/api/transports/import` | - | - | - |
+| `/api/transports` | - | `all`, `companyId`, `id` | - |
+| `/api/units/import` | - | - | - |
+| `/api/units` | - | `all`, `companyId`, `id` | - |
+| `/api/users` | - | - | - |
+<!-- API_PARAMETER_INDEX_END -->
+
+## Auth Payload Contracts (Important)
+
+Use these request bodies for integration clients (Flutter/Postman/etc.):
+
+### `POST /api/auth/login` (also mapped from `POST /api/auth`)
+
+- Required body fields:
+  - `userId` (string)
+  - `password` (string)
+- Optional body fields:
+  - `traderId` (string; recommended when user IDs may overlap across traders)
+  - `captchaToken` (string; required only when API returns `requiresCaptcha: true`)
+
+Example:
+
+```json
+{
+  "userId": "operator01",
+  "password": "your-password",
+  "traderId": "TRADER_001"
+}
+```
+
+### `POST /api/super-admin/auth`
+
+- Common required field:
+  - `userId` (string)
+- Optional compatibility field:
+  - `secondSecret` (string; only validated when configured server-side)
+
+Action-specific body:
+
+1. `action: "setup_2fa"`
+   - Required: `userId`, `password`
+   - Response includes `qrCode`, `otpauthUrl`, `requiresTwoFactorSetup: true`
+2. `action: "verify_2fa"`
+   - Required: `userId`, `token`
+   - Enables 2FA after OTP verification
+3. `action: "login"` (default when action omitted)
+   - Required: `userId`, `password`
+   - Also requires `token` when 2FA is enabled
+
+Examples:
+
+```json
+{
+  "action": "setup_2fa",
+  "userId": "SUPERADMIN",
+  "password": "your-password"
+}
+```
+
+```json
+{
+  "action": "verify_2fa",
+  "userId": "SUPERADMIN",
+  "token": "123456"
+}
+```
+
+```json
+{
+  "action": "login",
+  "userId": "SUPERADMIN",
+  "password": "your-password",
+  "token": "123456"
+}
+```
+
 ## Notes
 
 - Endpoints with dynamic params (example: `[id]`, `[batchId]`) can still be consumed by template-string URLs.

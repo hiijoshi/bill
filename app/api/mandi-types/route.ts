@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
-import { ensureCompanyAccess, parseJsonWithSchema } from '@/lib/api-security'
+import { ensureCompanyAccess, forbidden, isSuperAdmin, parseJsonWithSchema, requireAuthContext } from '@/lib/api-security'
 import { cleanString } from '@/lib/field-validation'
 import { ensureMandiSchema } from '@/lib/mandi-schema'
 import { formatMandiTypeUsageMessage, getMandiTypeUsageMap } from '@/lib/mandi-type-utils'
@@ -110,6 +110,10 @@ export async function POST(request: NextRequest) {
   try {
     await ensureMandiSchema(prisma)
 
+    const authResult = requireAuthContext(request)
+    if (!authResult.ok) return authResult.response
+    if (!isSuperAdmin(authResult.auth)) return forbidden('Only Super Admin can create mandi types')
+
     const parsed = await parseJsonWithSchema(request, postSchema)
     if (!parsed.ok) return parsed.response
 
@@ -165,6 +169,10 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     await ensureMandiSchema(prisma)
+
+    const authResult = requireAuthContext(request)
+    if (!authResult.ok) return authResult.response
+    if (!isSuperAdmin(authResult.auth)) return forbidden('Only Super Admin can update mandi types')
 
     const parsed = await parseJsonWithSchema(request, putSchema)
     if (!parsed.ok) return parsed.response
@@ -228,6 +236,10 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     await ensureMandiSchema(prisma)
+
+    const authResult = requireAuthContext(request)
+    if (!authResult.ok) return authResult.response
+    if (!isSuperAdmin(authResult.auth)) return forbidden('Only Super Admin can delete mandi types')
 
     const { searchParams } = new URL(request.url)
     const id = cleanString(searchParams.get('id'))

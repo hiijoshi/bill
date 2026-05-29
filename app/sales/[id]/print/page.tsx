@@ -10,38 +10,26 @@ import SalesPrintClient from './SalesPrintClient'
 
 type PageProps = {
   params: Promise<{ id: string }>
+  searchParams: Promise<{ companyId?: string }>
 }
 
-async function canViewSalesBill(user: {
-  id: string
-  traderId: string
-  role: string | null
-  companyId: string | null
-}, billCompanyId: string, billTraderId: string | null): Promise<boolean> {
-  const role = normalizeAppRole(user.role)
+type SalesPermission = {
+  module: string
+  canRead: boolean
+  canWrite: boolean
+}
 
+function hasSalesBillAccess(
+  role: string,
+  userTraderId: string,
+  billTraderId: string | null,
+  permissions: SalesPermission[]
+): boolean {
   if (role === 'super_admin') {
     return true
   }
 
-  if (role === 'trader_admin') {
-    if (!billTraderId || user.traderId !== billTraderId) return false
-  } else {
-    if (!billTraderId || user.traderId !== billTraderId) return false
-  }
-
-  const permissions = await prisma.userPermission.findMany({
-    where: {
-      userId: user.id,
-      companyId: billCompanyId,
-      module: { in: ['SALES_LIST', 'SALES_ENTRY'] }
-    },
-    select: {
-      module: true,
-      canRead: true,
-      canWrite: true
-    }
-  })
+  if (!billTraderId || userTraderId !== billTraderId) return false
 
   const hasSalesListRead = permissions.some((permission) => {
     if (permission.module !== 'SALES_LIST') return false
@@ -56,10 +44,12 @@ async function canViewSalesBill(user: {
   return hasSalesListRead || hasSalesEntryWrite
 }
 
-export default async function SalesPrintPage({ params }: PageProps) {
+export default async function SalesPrintPage({ params, searchParams }: PageProps) {
   try {
     await ensureSalesItemSchema(prisma)
     const { id } = await params
+    const query = await searchParams
+    const companyIdParam = typeof query.companyId === 'string' && query.companyId.trim() ? query.companyId.trim() : null
 
     const payload = await getSession()
     if (!payload?.userId || !payload?.traderId) {
@@ -103,9 +93,12 @@ export default async function SalesPrintPage({ params }: PageProps) {
       return <div className="p-6 text-red-600">Account is locked or inactive</div>
     }
 
+    const role = normalizeAppRole(user.role)
+
     const bill = await prisma.salesBill.findFirst({
       where: {
-        OR: [{ id }, { billNo: id }]
+        OR: [{ id }, { billNo: id }],
+        ...(companyIdParam ? { companyId: companyIdParam } : {})
       },
       include: {
         parentSalesBill: {
@@ -167,16 +160,23 @@ export default async function SalesPrintPage({ params }: PageProps) {
       return <div className="p-6 text-red-600">Sales bill not found</div>
     }
 
-    const allowed = await canViewSalesBill(
-      {
-        id: user.id,
-        traderId: user.traderId,
-        role: user.role,
-        companyId: user.companyId
-      },
-      bill.companyId,
-      bill.company.traderId
-    )
+    const permissions =
+      role === 'super_admin'
+        ? []
+        : await prisma.userPermission.findMany({
+            where: {
+              userId: user.id,
+              companyId: bill.companyId,
+              module: { in: ['SALES_LIST', 'SALES_ENTRY'] }
+            },
+            select: {
+              module: true,
+              canRead: true,
+              canWrite: true
+            }
+          })
+
+    const allowed = hasSalesBillAccess(role, user.traderId, bill.company.traderId, permissions)
 
     if (!allowed) {
       return <div className="p-6 text-red-600">Insufficient privileges</div>

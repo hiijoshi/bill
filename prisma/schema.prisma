@@ -238,6 +238,8 @@ model User {
   password    String
   name        String?
   role        String? // super_admin/trader_admin/company_admin/company_user
+  twoFactorEnabled Boolean     @default(false)
+  twoFactorSecret  String?
   locked      Boolean          @default(false)
   deletedAt   DateTime?
   // relations

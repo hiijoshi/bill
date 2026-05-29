@@ -20,6 +20,7 @@ const lockFile = path.join(projectRoot, '.next', 'dev', 'lock')
 const cacheDir = path.join(projectRoot, '.next', 'dev', 'cache')
 const nextCacheDir = path.join(projectRoot, '.next', 'cache')
 const nextDir = path.join(projectRoot, '.next')
+const webpackCacheDir = path.join(cacheDir, 'webpack')
 const requestedEngine = (process.env.NEXT_DEV_ENGINE || '').trim().toLowerCase()
 const engine = requestedEngine === 'turbopack' ? 'turbopack' : 'webpack'
 const engineStateFile = path.join(nextDir, '.dev-engine')
@@ -70,7 +71,10 @@ async function hasBrokenRootMainFiles() {
 }
 
 async function removeDuplicateNextArtifacts(dirPath, depth = 0) {
-  if (depth > 3) return
+  // Only scan shallow dev artifacts. Recursive scans over the entire `.next`
+  // tree can become extremely slow (e.g. large `.next/export` directories)
+  // and make `npm run dev` appear stuck.
+  if (depth > 2) return
   let entries = []
   try {
     entries = await fs.readdir(dirPath, { withFileTypes: true })
@@ -78,10 +82,19 @@ async function removeDuplicateNextArtifacts(dirPath, depth = 0) {
     return
   }
 
+  // Hard cap protects against pathological directories with huge entry counts.
+  if (entries.length > 5000) {
+    return
+  }
+
   await Promise.all(
     entries.map(async (entry) => {
       const fullPath = path.join(dirPath, entry.name)
       if (entry.isDirectory()) {
+        // Skip production/export trees that are not part of dev artifact cleanup.
+        if (entry.name === 'export' || entry.name === 'server' || entry.name === 'static' || entry.name === 'build') {
+          return
+        }
         await removeDuplicateNextArtifacts(fullPath, depth + 1)
         return
       }
@@ -111,7 +124,8 @@ async function run() {
     await fs.rm(lockFile, { force: true })
   }
 
-  await removeDuplicateNextArtifacts(nextDir)
+  // Keep duplicate cleanup scoped to `.next/dev` so startup remains fast.
+  await removeDuplicateNextArtifacts(path.join(nextDir, 'dev'))
 
   if (engine === 'turbopack') {
     if (await pathExists(cacheDir)) {
@@ -120,6 +134,12 @@ async function run() {
 
     if (await pathExists(nextCacheDir)) {
       await fs.rm(nextCacheDir, { recursive: true, force: true })
+    }
+  } else {
+    // Webpack persistent cache can keep stale references to deleted pack files
+    // (e.g. ENOENT on *.pack.gz). Reset only the webpack cache directory.
+    if (await pathExists(webpackCacheDir)) {
+      await fs.rm(webpackCacheDir, { recursive: true, force: true })
     }
   }
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Download, RefreshCw, Smartphone } from 'lucide-react'
+import { isAbortError } from '@/lib/http'
 
 type DeferredInstallPrompt = Event & {
   prompt: () => Promise<void>
@@ -39,32 +40,43 @@ export default function PwaClientBoot() {
 
     let reloadedForUpdate = false
 
+    const handleControllerChange = () => {
+      if (reloadedForUpdate) return
+      reloadedForUpdate = true
+      window.location.reload()
+    }
+
     const registerServiceWorker = async () => {
-      const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' })
+      try {
+        const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' })
 
-      if (registration.waiting) {
-        setUpdateReady(registration.waiting)
-      }
+        if (registration.waiting) {
+          setUpdateReady(registration.waiting)
+        }
 
-      registration.addEventListener('updatefound', () => {
-        const installingWorker = registration.installing
-        if (!installingWorker) return
+        registration.addEventListener('updatefound', () => {
+          const installingWorker = registration.installing
+          if (!installingWorker) return
 
-        installingWorker.addEventListener('statechange', () => {
-          if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            setUpdateReady(installingWorker)
-          }
+          installingWorker.addEventListener('statechange', () => {
+            if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              setUpdateReady(installingWorker)
+            }
+          })
         })
-      })
 
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (reloadedForUpdate) return
-        reloadedForUpdate = true
-        window.location.reload()
-      })
+        navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange)
+      } catch (error) {
+        if (isAbortError(error)) return
+        console.warn('[pwa] service worker registration failed', error)
+      }
     }
 
     void registerServiceWorker()
+
+    return () => {
+      navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange)
+    }
   }, [])
 
   useEffect(() => {
@@ -102,6 +114,10 @@ export default function PwaClientBoot() {
     try {
       await installPrompt.prompt()
       await installPrompt.userChoice
+    } catch (error) {
+      if (isAbortError(error)) return
+      if (error instanceof Event) return
+      console.warn('[pwa] install prompt flow failed', error)
     } finally {
       setInstalling(false)
       setInstallPrompt(null)

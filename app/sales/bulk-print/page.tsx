@@ -14,6 +14,12 @@ type PageProps = {
   }>
 }
 
+type SalesPermission = {
+  module: string
+  canRead: boolean
+  canWrite: boolean
+}
+
 function toStringArray(value: string | string[] | undefined): string[] {
   if (Array.isArray(value)) {
     return value.filter(Boolean)
@@ -21,38 +27,19 @@ function toStringArray(value: string | string[] | undefined): string[] {
   return value ? [value] : []
 }
 
-async function canViewSalesBill(
-  user: {
-    id: string
-    traderId: string
-    role: string | null
-    companyId: string | null
-  },
-  billCompanyId: string,
-  billTraderId: string | null
-): Promise<boolean> {
-  const role = normalizeAppRole(user.role)
-
+function hasSalesBillAccess(
+  role: string,
+  userTraderId: string,
+  billTraderId: string | null,
+  permissions: SalesPermission[]
+): boolean {
   if (role === 'super_admin') {
     return true
   }
 
-  if (!billTraderId || user.traderId !== billTraderId) {
+  if (!billTraderId || userTraderId !== billTraderId) {
     return false
   }
-
-  const permissions = await prisma.userPermission.findMany({
-    where: {
-      userId: user.id,
-      companyId: billCompanyId,
-      module: { in: ['SALES_LIST', 'SALES_ENTRY'] }
-    },
-    select: {
-      module: true,
-      canRead: true,
-      canWrite: true
-    }
-  })
 
   const hasSalesListRead = permissions.some((permission) => {
     if (permission.module !== 'SALES_LIST') return false
@@ -65,6 +52,21 @@ async function canViewSalesBill(
   })
 
   return hasSalesListRead || hasSalesEntryWrite
+}
+
+async function loadSalesPermissionsByCompany(userId: string, companyId: string): Promise<SalesPermission[]> {
+  return prisma.userPermission.findMany({
+    where: {
+      userId,
+      companyId,
+      module: { in: ['SALES_LIST', 'SALES_ENTRY'] }
+    },
+    select: {
+      module: true,
+      canRead: true,
+      canWrite: true
+    }
+  })
 }
 
 export default async function SalesBulkPrintPage({ searchParams }: PageProps) {
@@ -118,10 +120,12 @@ export default async function SalesBulkPrintPage({ searchParams }: PageProps) {
   if (user.locked || user.trader?.locked || user.trader?.deletedAt) {
     return <div className="p-6 text-red-600">Account is locked or inactive</div>
   }
+  const role = normalizeAppRole(user.role)
 
   const bills = await prisma.salesBill.findMany({
     where: {
-      id: { in: selectedIds }
+      id: { in: selectedIds },
+      ...(companyId ? { companyId } : {})
     },
     include: {
       parentSalesBill: {
@@ -166,6 +170,7 @@ export default async function SalesBulkPrintPage({ searchParams }: PageProps) {
   const additionalChargesMap = await listSalesAdditionalChargesByBillIds(prisma, bills.map((bill) => bill.id))
   const allowedBills: SalesBillPrintData[] = []
   let skippedCount = 0
+  const permissionsByCompanyId = new Map<string, SalesPermission[]>()
 
   for (const billId of selectedIds) {
     const bill = billMap.get(billId)
@@ -174,16 +179,19 @@ export default async function SalesBulkPrintPage({ searchParams }: PageProps) {
       continue
     }
 
-    const allowed = await canViewSalesBill(
-      {
-        id: user.id,
-        traderId: user.traderId,
-        role: user.role,
-        companyId: user.companyId
-      },
-      bill.companyId,
-      bill.company.traderId
-    )
+    let permissions: SalesPermission[] = []
+    if (role !== 'super_admin') {
+      const cachedPermissions = permissionsByCompanyId.get(bill.companyId)
+      if (cachedPermissions) {
+        permissions = cachedPermissions
+      } else {
+        const loadedPermissions = await loadSalesPermissionsByCompany(user.id, bill.companyId)
+        permissionsByCompanyId.set(bill.companyId, loadedPermissions)
+        permissions = loadedPermissions
+      }
+    }
+
+    const allowed = hasSalesBillAccess(role, user.traderId, bill.company.traderId, permissions)
 
     if (!allowed) {
       skippedCount += 1

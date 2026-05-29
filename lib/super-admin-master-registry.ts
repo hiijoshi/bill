@@ -240,6 +240,24 @@ export const SUPER_ADMIN_MASTER_RESOURCES: MasterResourceDefinition[] = [
     ]
   },
   {
+    key: 'mandi-types',
+    label: 'Mandi Types',
+    endpoint: '/api/mandi-types',
+    helperText: 'Configure mandi type names and default hammali per bag from Super Admin only.',
+    fields: [
+      { key: 'name', label: 'Name', type: 'text', required: true },
+      { key: 'description', label: 'Description', type: 'textarea' },
+      { key: 'defaultHammaliPerBag', label: 'Default Hammali / Bag (₹)', type: 'number', defaultValue: '7' },
+      { key: 'isActive', label: 'Active', type: 'boolean', defaultValue: true }
+    ],
+    columns: [
+      { key: 'name', label: 'Name' },
+      { key: 'description', label: 'Description' },
+      { key: 'defaultHammaliPerBag', label: 'Hammali / Bag' },
+      { key: 'isActive', label: 'Active' }
+    ]
+  },
+  {
     key: 'payment-modes',
     label: 'Payment Modes',
     endpoint: '/api/payment-modes',
